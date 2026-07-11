@@ -25,6 +25,15 @@ class ClassifierTests(unittest.TestCase):
         self.assertIn("具身智能", topics)
         self.assertTrue(any(topic in topics for topic in ["触觉与灵巧操作", "多模态大模型"]))
 
+    def test_agent_keyword_does_not_match_gradient(self):
+        paper = {
+            "title": "Stochastic Gradient Optimization",
+            "abstract": "A general convex optimization method.",
+            "venue": "NeurIPS",
+            "journal_ref": "NeurIPS",
+        }
+        self.assertNotIn("智能体", self.classifier.classify(paper))
+
     def test_quality_rewards_top_venue(self):
         paper = {
             "title": "Embodied model",

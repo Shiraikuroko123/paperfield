@@ -758,13 +758,27 @@ class PaperClassifier:
     def enrich(self, paper: dict[str, Any]) -> None:
         self.venue_catalog.enrich(paper)
 
+    @staticmethod
+    def contains_keyword(text: str, keyword: str) -> bool:
+        normalized_keyword = keyword.lower().strip()
+        if not normalized_keyword:
+            return False
+        if " " in normalized_keyword:
+            return normalized_keyword in text
+        return re.search(rf"(?<![a-z0-9]){re.escape(normalized_keyword)}(?![a-z0-9])", text) is not None
+
     def classify(self, paper: dict[str, Any]) -> list[str]:
+        title = paper.get("title", "").lower()
         haystack = " ".join(
             [paper.get("title", ""), paper.get("abstract", ""), paper.get("venue", ""), paper.get("journal_ref", "")]
         ).lower()
         scores: list[tuple[int, str]] = []
         for topic, keywords in self.topics.items():
-            score = sum(2 if keyword in paper.get("title", "").lower() else 1 for keyword in keywords if keyword in haystack)
+            score = sum(
+                2 if self.contains_keyword(title, keyword) else 1
+                for keyword in keywords
+                if self.contains_keyword(haystack, keyword)
+            )
             if score:
                 scores.append((score, topic))
         scores.sort(reverse=True)
@@ -861,6 +875,12 @@ class PaperClassifier:
 
 
 class PaperSources:
+    ROBOTICS_FOCUSED_VENUES = {
+        "RSS", "CoRL", "ICRA", "IROS", "HRI", "Humanoids", "WAFR",
+        "Science Robotics", "IEEE T-RO", "IJRR", "IEEE RA-L",
+        "IEEE Transactions on Haptics", "Autonomous Robots", "Soft Robotics",
+    }
+
     def __init__(self, config: dict[str, Any], classifier: PaperClassifier) -> None:
         self.config = config
         self.classifier = classifier
@@ -1249,7 +1269,7 @@ class PaperSources:
         )
         payload = self.request_json(f"https://api.crossref.org/works?{params}")
         papers = []
-        robotics_domains = {"具身智能", "机器人", "触觉", "自动驾驶"}
+        robotics_focused = entry["name"] in self.ROBOTICS_FOCUSED_VENUES
         for item in (payload.get("message") or {}).get("items", []):
             container = compact_text(" ".join(item.get("container-title") or []))
             metadata = self.classifier.venue_catalog.describe(container, container, "Crossref targeted")
@@ -1292,7 +1312,7 @@ class PaperSources:
             self.classifier.enrich(paper)
             paper["topics"] = self.classifier.classify(paper)
             if paper["topics"] == ["其他相关"]:
-                if robotics_domains.intersection(entry.get("domains", [])):
+                if robotics_focused:
                     paper["topics"] = ["具身智能"]
                 else:
                     continue
@@ -1339,7 +1359,7 @@ class PaperSources:
         page_paths.sort(reverse=True)
         max_pages = max(1, int(self.config.get("dblp_archive_pages", 8)))
         papers_by_id: dict[str, dict[str, Any]] = {}
-        robotics_domains = {"具身智能", "机器人", "触觉", "自动驾驶"}
+        robotics_focused = entry["name"] in self.ROBOTICS_FOCUSED_VENUES
         for page_path in page_paths[:max_pages]:
             page_text = self.request_text(f"https://dblp.org/{page_path.removesuffix('.html')}.xml")
             page_root = ET.fromstring(page_text)
@@ -1380,7 +1400,7 @@ class PaperSources:
                     self.classifier.enrich(paper)
                     paper["topics"] = self.classifier.classify(paper)
                     if paper["topics"] == ["其他相关"]:
-                        if robotics_domains.intersection(entry.get("domains", [])):
+                        if robotics_focused:
                             paper["topics"] = ["具身智能"]
                         else:
                             continue

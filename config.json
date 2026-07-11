@@ -9,6 +9,9 @@
   "targeted_venues_per_refresh": 8,
   "dblp_archive_pages": 8,
   "dblp_venue_paths": {
+    "NeurIPS": "conf/nips",
+    "ICLR": "conf/iclr",
+    "ICRA": "conf/icra",
     "ECCV": "conf/eccv",
     "AAAI": "conf/aaai",
     "The Web Conference": "conf/www",

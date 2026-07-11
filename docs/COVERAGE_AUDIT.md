@@ -29,6 +29,7 @@ The first implementation treated `venues.json` as both a desired catalog and pro
 - Dedicated Crossref collection for IEEE Transactions on Robotics (`IEEE T-RO`).
 - Targeted Crossref container-title queries for the general catalog.
 - Fixed DBLP XML archives for selected venues that Crossref does not cover reliably.
+- Fixed DBLP archives for NeurIPS, ICLR, and ICRA so starter records cannot be mistaken for substantive coverage.
 - Multiword proceedings-title normalization and canonical venue aliases.
 
 ## Interpretation Limits
