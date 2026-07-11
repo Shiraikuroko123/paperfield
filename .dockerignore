@@ -1,0 +1,13 @@
+.git
+.github
+.env
+.venv
+venv
+data
+__pycache__
+*.pyc
+*.log
+qa-*.png
+.edge-qa-*
+docs
+tests

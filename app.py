@@ -1,0 +1,1747 @@
+from __future__ import annotations
+
+import argparse
+import html
+import http.client
+import json
+import os
+import re
+import sqlite3
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
+from http import HTTPStatus
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parent
+STATIC_DIR = ROOT / "static"
+DATA_DIR = Path(os.environ.get("PAPERFIELD_DATA_DIR", ROOT / "data")).expanduser().resolve()
+DB_PATH = Path(os.environ.get("PAPERFIELD_DB_PATH", DATA_DIR / "papers.db")).expanduser().resolve()
+CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
+VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
+APP_VERSION = "0.3.0"
+USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def iso_date(value: Any) -> str:
+    if not value:
+        return ""
+    if isinstance(value, dict):
+        parts = value.get("date-parts") or []
+        if parts and parts[0]:
+            nums = parts[0]
+            return "-".join(str(item).zfill(2) for item in nums[:3])
+        value = value.get("date-time") or ""
+    text = str(value)
+    match = re.search(r"\d{4}-\d{2}-\d{2}", text)
+    return match.group(0) if match else text[:10]
+
+
+def compact_text(value: str | None) -> str:
+    return re.sub(r"\s+", " ", value or "").strip()
+
+
+def slug_id(value: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9._:-]+", "-", value.strip()).strip("-").lower()
+
+
+class VenueCatalog:
+    TIER_ORDER = ["顶级会议", "顶级期刊", "重要会议", "重要期刊", "预印本", "其他相关"]
+
+    def __init__(self, entries: list[dict[str, Any]]) -> None:
+        self.entries = entries
+        aliases = []
+        for entry in entries:
+            for alias in entry.get("aliases", []):
+                aliases.append((self.normalize(alias), entry))
+        self.aliases = sorted(aliases, key=lambda item: len(item[0]), reverse=True)
+
+    @staticmethod
+    def normalize(value: str | None) -> str:
+        text = html.unescape(value or "").lower()
+        text = re.sub(r"[^a-z0-9]+", " ", text)
+        return re.sub(r"\s+", " ", text).strip()
+
+    @staticmethod
+    def _without_year(value: str) -> str:
+        return re.sub(r"\b(?:19|20)\d{2}\b", "", value).strip()
+
+    def _match(self, value: str) -> dict[str, Any] | None:
+        normalized = self.normalize(value)
+        without_year = self._without_year(normalized)
+        tokens = set(without_year.split())
+        for alias, entry in self.aliases:
+            if " " not in alias and alias in tokens:
+                return entry
+            if without_year == alias or normalized == alias:
+                return entry
+        return None
+
+    def describe(self, venue: str, journal_ref: str = "", source: str = "") -> dict[str, Any]:
+        entry = self._match(venue) or self._match(journal_ref)
+        if entry:
+            return {
+                "canonical_venue": entry["name"],
+                "venue_tier": entry["tier"],
+                "venue_type": entry["kind"],
+                "platform": entry["platform"],
+                "venue_domains": entry.get("domains", []),
+                "publication_status": "正式发表",
+            }
+        source_text = f"{venue} {journal_ref} {source}".lower()
+        if "arxiv" in source_text or self.normalize(venue) == "corr":
+            return {
+                "canonical_venue": "arXiv",
+                "venue_tier": "预印本",
+                "venue_type": "预印本",
+                "platform": "arXiv",
+                "venue_domains": [],
+                "publication_status": "尚未确认录用",
+            }
+        return {
+            "canonical_venue": venue or source or "来源未知",
+            "venue_tier": "其他相关",
+            "venue_type": "其他",
+            "platform": source or "其他来源",
+            "venue_domains": [],
+            "publication_status": "元数据收录",
+        }
+
+    def enrich(self, paper: dict[str, Any]) -> None:
+        metadata = self.describe(paper.get("venue", ""), paper.get("journal_ref", ""), paper.get("source", ""))
+        paper["venue"] = metadata.pop("canonical_venue")
+        paper.update(metadata)
+
+    def platforms(self) -> list[str]:
+        return sorted({entry["platform"] for entry in self.entries})
+
+    def venues(self) -> list[str]:
+        return [entry["name"] for entry in self.entries]
+
+
+class PaperStore:
+    def __init__(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = path
+        self._lock = threading.RLock()
+        self.initialize()
+
+    def connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.path, timeout=30)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def initialize(self) -> None:
+        with self.connect() as db:
+            db.executescript(
+                """
+                PRAGMA journal_mode=WAL;
+                CREATE TABLE IF NOT EXISTS papers (
+                    id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    abstract TEXT NOT NULL DEFAULT '',
+                    authors_json TEXT NOT NULL DEFAULT '[]',
+                    venue TEXT NOT NULL DEFAULT '',
+                    published TEXT NOT NULL DEFAULT '',
+                    updated TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT '',
+                    source_url TEXT NOT NULL DEFAULT '',
+                    pdf_url TEXT NOT NULL DEFAULT '',
+                    doi TEXT NOT NULL DEFAULT '',
+                    journal_ref TEXT NOT NULL DEFAULT '',
+                    topics_json TEXT NOT NULL DEFAULT '[]',
+                    quality_score REAL NOT NULL DEFAULT 0,
+                    citation_count INTEGER NOT NULL DEFAULT 0,
+                    fetched_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS user_state (
+                    paper_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL DEFAULT 'unread',
+                    favorite INTEGER NOT NULL DEFAULT 0,
+                    notes TEXT NOT NULL DEFAULT '',
+                    explanation_json TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(paper_id) REFERENCES papers(id)
+                );
+                CREATE TABLE IF NOT EXISTS sync_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    status TEXT NOT NULL,
+                    inserted_count INTEGER NOT NULL DEFAULT 0,
+                    error_text TEXT NOT NULL DEFAULT ''
+                );
+                CREATE TABLE IF NOT EXISTS github_projects (
+                    full_name TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    owner TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    url TEXT NOT NULL,
+                    homepage TEXT NOT NULL DEFAULT '',
+                    stars INTEGER NOT NULL DEFAULT 0,
+                    forks INTEGER NOT NULL DEFAULT 0,
+                    open_issues INTEGER NOT NULL DEFAULT 0,
+                    language TEXT NOT NULL DEFAULT '',
+                    license TEXT NOT NULL DEFAULT '',
+                    topics_json TEXT NOT NULL DEFAULT '[]',
+                    categories_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT '',
+                    pushed_at TEXT NOT NULL DEFAULT '',
+                    fetched_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS paper_project_links (
+                    paper_id TEXT NOT NULL,
+                    project_full_name TEXT NOT NULL,
+                    score REAL NOT NULL DEFAULT 0,
+                    reason TEXT NOT NULL DEFAULT '',
+                    PRIMARY KEY (paper_id, project_full_name),
+                    FOREIGN KEY(paper_id) REFERENCES papers(id),
+                    FOREIGN KEY(project_full_name) REFERENCES github_projects(full_name)
+                );
+                CREATE INDEX IF NOT EXISTS idx_papers_title_normalized
+                    ON papers(lower(trim(title)));
+                CREATE INDEX IF NOT EXISTS idx_github_projects_pushed_at
+                    ON github_projects(pushed_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_paper_project_links_project
+                    ON paper_project_links(project_full_name);
+                """
+            )
+
+    def count(self) -> int:
+        with self.connect() as db:
+            return int(db.execute("SELECT COUNT(*) FROM papers").fetchone()[0])
+
+    def recalculate_quality(self, classifier: "PaperClassifier") -> None:
+        with self._lock, self.connect() as db:
+            rows = db.execute(
+                "SELECT id, venue, journal_ref, source, published, citation_count, topics_json FROM papers"
+            ).fetchall()
+            updates = []
+            for row in rows:
+                paper = dict(row)
+                paper["topics"] = json.loads(paper.pop("topics_json") or "[]")
+                classifier.enrich(paper)
+                updates.append((classifier.quality(paper), paper["id"]))
+            db.executemany("UPDATE papers SET quality_score = ? WHERE id = ?", updates)
+
+    def upsert(self, paper: dict[str, Any]) -> bool:
+        with self._lock, self.connect() as db:
+            return self._upsert_with_db(db, paper)
+
+    def upsert_many(self, papers: list[dict[str, Any]]) -> int:
+        with self._lock, self.connect() as db:
+            return sum(int(self._upsert_with_db(db, paper)) for paper in papers)
+
+    @staticmethod
+    def _upsert_with_db(db: sqlite3.Connection, paper: dict[str, Any]) -> bool:
+        title_match = db.execute(
+            "SELECT id FROM papers WHERE lower(trim(title)) = lower(trim(?)) LIMIT 1",
+            (paper["title"],),
+        ).fetchone()
+        if title_match and title_match["id"] != paper["id"]:
+            paper = {**paper, "id": title_match["id"]}
+        exists = db.execute("SELECT 1 FROM papers WHERE id = ?", (paper["id"],)).fetchone()
+        db.execute(
+            """
+            INSERT INTO papers (
+                id, title, abstract, authors_json, venue, published, updated,
+                source, source_url, pdf_url, doi, journal_ref, topics_json,
+                quality_score, citation_count, fetched_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                title=excluded.title,
+                abstract=CASE WHEN length(excluded.abstract) > length(papers.abstract) THEN excluded.abstract ELSE papers.abstract END,
+                authors_json=excluded.authors_json,
+                venue=CASE WHEN excluded.venue != '' THEN excluded.venue ELSE papers.venue END,
+                published=CASE WHEN excluded.published != '' THEN excluded.published ELSE papers.published END,
+                updated=CASE WHEN excluded.updated != '' THEN excluded.updated ELSE papers.updated END,
+                source=CASE
+                    WHEN excluded.source IN ('PMLR', 'CVF Open Access', 'DBLP') THEN excluded.source
+                    ELSE papers.source
+                END,
+                source_url=CASE WHEN excluded.source_url != '' THEN excluded.source_url ELSE papers.source_url END,
+                pdf_url=CASE WHEN excluded.pdf_url != '' THEN excluded.pdf_url ELSE papers.pdf_url END,
+                doi=CASE WHEN excluded.doi != '' THEN excluded.doi ELSE papers.doi END,
+                journal_ref=CASE WHEN excluded.journal_ref != '' THEN excluded.journal_ref ELSE papers.journal_ref END,
+                topics_json=excluded.topics_json,
+                quality_score=max(papers.quality_score, excluded.quality_score),
+                citation_count=max(papers.citation_count, excluded.citation_count),
+                fetched_at=excluded.fetched_at
+            """,
+            (
+                paper["id"], paper["title"], paper.get("abstract", ""),
+                json.dumps(paper.get("authors", []), ensure_ascii=False),
+                paper.get("venue", ""), paper.get("published", ""), paper.get("updated", ""),
+                paper.get("source", ""), paper.get("source_url", ""), paper.get("pdf_url", ""),
+                paper.get("doi", ""), paper.get("journal_ref", ""),
+                json.dumps(paper.get("topics", []), ensure_ascii=False),
+                paper.get("quality_score", 0), paper.get("citation_count", 0), utc_now().isoformat(),
+            ),
+        )
+        return exists is None
+
+    def upsert_projects(self, projects: list[dict[str, Any]]) -> int:
+        inserted = 0
+        with self._lock, self.connect() as db:
+            for project in projects:
+                exists = db.execute(
+                    "SELECT 1 FROM github_projects WHERE full_name = ?",
+                    (project["full_name"],),
+                ).fetchone()
+                db.execute(
+                    """
+                    INSERT INTO github_projects (
+                        full_name, name, owner, description, url, homepage, stars, forks,
+                        open_issues, language, license, topics_json, categories_json,
+                        created_at, updated_at, pushed_at, fetched_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(full_name) DO UPDATE SET
+                        name=excluded.name,
+                        owner=excluded.owner,
+                        description=excluded.description,
+                        url=excluded.url,
+                        homepage=excluded.homepage,
+                        stars=excluded.stars,
+                        forks=excluded.forks,
+                        open_issues=excluded.open_issues,
+                        language=excluded.language,
+                        license=excluded.license,
+                        topics_json=excluded.topics_json,
+                        categories_json=excluded.categories_json,
+                        updated_at=excluded.updated_at,
+                        pushed_at=excluded.pushed_at,
+                        fetched_at=excluded.fetched_at
+                    """,
+                    (
+                        project["full_name"], project["name"], project["owner"], project.get("description", ""),
+                        project["url"], project.get("homepage", ""), project.get("stars", 0), project.get("forks", 0),
+                        project.get("open_issues", 0), project.get("language", ""), project.get("license", ""),
+                        json.dumps(project.get("topics", []), ensure_ascii=False),
+                        json.dumps(project.get("categories", []), ensure_ascii=False),
+                        project.get("created_at", ""), project.get("updated_at", ""), project.get("pushed_at", ""),
+                        utc_now().isoformat(),
+                    ),
+                )
+                inserted += int(exists is None)
+        return inserted
+
+    def list_projects(self) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            rows = db.execute(
+                """
+                SELECT g.*, COUNT(l.paper_id) AS linked_paper_count
+                FROM github_projects g
+                LEFT JOIN paper_project_links l ON l.project_full_name = g.full_name
+                GROUP BY g.full_name
+                """
+            ).fetchall()
+        return [self._serialize_project(row) for row in rows]
+
+    def get_project(self, full_name: str) -> dict[str, Any] | None:
+        with self.connect() as db:
+            row = db.execute(
+                """
+                SELECT g.*, COUNT(l.paper_id) AS linked_paper_count
+                FROM github_projects g
+                LEFT JOIN paper_project_links l ON l.project_full_name = g.full_name
+                WHERE g.full_name = ?
+                GROUP BY g.full_name
+                """,
+                (full_name,),
+            ).fetchone()
+        if not row:
+            return None
+        project = self._serialize_project(row)
+        project["papers"] = self.papers_for_project(full_name)
+        return project
+
+    def count_projects(self) -> int:
+        with self.connect() as db:
+            return int(db.execute("SELECT COUNT(*) FROM github_projects").fetchone()[0])
+
+    def link_count(self) -> int:
+        with self.connect() as db:
+            return int(db.execute("SELECT COUNT(*) FROM paper_project_links").fetchone()[0])
+
+    def replace_project_links(self, links: list[tuple[str, str, float, str]]) -> None:
+        with self._lock, self.connect() as db:
+            db.execute("DELETE FROM paper_project_links")
+            db.executemany(
+                "INSERT INTO paper_project_links (paper_id, project_full_name, score, reason) VALUES (?, ?, ?, ?)",
+                links,
+            )
+
+    def projects_for_paper(self, paper_id: str) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            rows = db.execute(
+                """
+                SELECT g.*, l.score, l.reason, 0 AS linked_paper_count
+                FROM paper_project_links l
+                JOIN github_projects g ON g.full_name = l.project_full_name
+                WHERE l.paper_id = ?
+                ORDER BY l.score DESC, g.stars DESC
+                LIMIT 12
+                """,
+                (paper_id,),
+            ).fetchall()
+        return [self._serialize_project(row) for row in rows]
+
+    def papers_for_project(self, full_name: str) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            rows = db.execute(
+                """
+                SELECT p.*, COALESCE(s.status, 'unread') AS status,
+                       COALESCE(s.favorite, 0) AS favorite,
+                       COALESCE(s.notes, '') AS notes,
+                       COALESCE(s.explanation_json, '') AS explanation_json,
+                       CASE WHEN COALESCE(s.explanation_json, '') != '' THEN 1 ELSE 0 END AS has_explanation,
+                       l.score AS project_score,
+                       l.reason AS project_reason
+                FROM paper_project_links l
+                JOIN papers p ON p.id = l.paper_id
+                LEFT JOIN user_state s ON s.paper_id = p.id
+                WHERE l.project_full_name = ?
+                ORDER BY l.score DESC, p.quality_score DESC
+                LIMIT 12
+                """,
+                (full_name,),
+            ).fetchall()
+        return [self._serialize(row) for row in rows]
+
+    def list_papers(self) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            rows = db.execute(
+                """
+                SELECT p.*, COALESCE(s.status, 'unread') AS status,
+                       COALESCE(s.favorite, 0) AS favorite,
+                       COALESCE(s.notes, '') AS notes,
+                       CASE WHEN COALESCE(s.explanation_json, '') != '' THEN 1 ELSE 0 END AS has_explanation
+                FROM papers p
+                LEFT JOIN user_state s ON s.paper_id = p.id
+                """
+            ).fetchall()
+        return [self._serialize(row) for row in rows]
+
+    def get_paper(self, paper_id: str) -> dict[str, Any] | None:
+        with self.connect() as db:
+            row = db.execute(
+                """
+                SELECT p.*, COALESCE(s.status, 'unread') AS status,
+                       COALESCE(s.favorite, 0) AS favorite,
+                       COALESCE(s.notes, '') AS notes,
+                       COALESCE(s.explanation_json, '') AS explanation_json,
+                       CASE WHEN COALESCE(s.explanation_json, '') != '' THEN 1 ELSE 0 END AS has_explanation
+                FROM papers p
+                LEFT JOIN user_state s ON s.paper_id = p.id
+                WHERE p.id = ?
+                """,
+                (paper_id,),
+            ).fetchone()
+        if not row:
+            return None
+        paper = self._serialize(row, include_explanation=True)
+        paper["projects"] = self.projects_for_paper(paper_id)
+        return paper
+
+    def update_state(self, paper_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        current = self.get_paper(paper_id)
+        if not current:
+            return None
+        status = payload.get("status", current.get("status", "unread"))
+        favorite = int(bool(payload.get("favorite", current.get("favorite", False))))
+        notes = str(payload.get("notes", current.get("notes", "")))[:5000]
+        with self.connect() as db:
+            db.execute(
+                """
+                INSERT INTO user_state (paper_id, status, favorite, notes, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(paper_id) DO UPDATE SET
+                    status=excluded.status,
+                    favorite=excluded.favorite,
+                    notes=excluded.notes,
+                    updated_at=excluded.updated_at
+                """,
+                (paper_id, status, favorite, notes, utc_now().isoformat()),
+            )
+        return self.get_paper(paper_id)
+
+    def save_explanation(self, paper_id: str, explanation: dict[str, Any]) -> None:
+        paper = self.get_paper(paper_id)
+        if not paper:
+            return
+        with self.connect() as db:
+            db.execute(
+                """
+                INSERT INTO user_state (paper_id, status, favorite, notes, explanation_json, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(paper_id) DO UPDATE SET
+                    explanation_json=excluded.explanation_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    paper_id, paper.get("status", "unread"), int(bool(paper.get("favorite"))),
+                    paper.get("notes", ""), json.dumps(explanation, ensure_ascii=False), utc_now().isoformat(),
+                ),
+            )
+
+    def begin_sync(self) -> int:
+        with self.connect() as db:
+            cursor = db.execute(
+                "INSERT INTO sync_runs (started_at, status) VALUES (?, 'running')",
+                (utc_now().isoformat(),),
+            )
+            return int(cursor.lastrowid)
+
+    def finish_sync(self, run_id: int, status: str, inserted: int, error: str = "") -> None:
+        with self.connect() as db:
+            db.execute(
+                """
+                UPDATE sync_runs SET finished_at=?, status=?, inserted_count=?, error_text=? WHERE id=?
+                """,
+                (utc_now().isoformat(), status, inserted, error[:4000], run_id),
+            )
+
+    def latest_sync(self) -> dict[str, Any] | None:
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM sync_runs ORDER BY id DESC LIMIT 1").fetchone()
+        return dict(row) if row else None
+
+    @staticmethod
+    def _serialize(row: sqlite3.Row, include_explanation: bool = False) -> dict[str, Any]:
+        result = dict(row)
+        result["authors"] = json.loads(result.pop("authors_json") or "[]")
+        result["topics"] = json.loads(result.pop("topics_json") or "[]")
+        venue_metadata = VENUE_CATALOG.describe(result.get("venue", ""), result.get("journal_ref", ""), result.get("source", ""))
+        result["venue"] = venue_metadata.pop("canonical_venue")
+        result.update(venue_metadata)
+        result["favorite"] = bool(result.get("favorite"))
+        result["has_explanation"] = bool(result.get("has_explanation"))
+        if include_explanation:
+            raw = result.pop("explanation_json", "")
+            result["explanation"] = json.loads(raw) if raw else None
+        else:
+            result.pop("explanation_json", None)
+        return result
+
+    @staticmethod
+    def _serialize_project(row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        result["topics"] = json.loads(result.pop("topics_json") or "[]")
+        result["categories"] = json.loads(result.pop("categories_json") or "[]")
+        result["linked_paper_count"] = int(result.get("linked_paper_count") or 0)
+        return result
+
+
+class PaperClassifier:
+    def __init__(self, config: dict[str, Any], venue_catalog: VenueCatalog) -> None:
+        self.topics: dict[str, list[str]] = config["topics"]
+        self.top_venues = [item.lower() for item in config["top_venues"]]
+        self.venue_catalog = venue_catalog
+
+    def enrich(self, paper: dict[str, Any]) -> None:
+        self.venue_catalog.enrich(paper)
+
+    def classify(self, paper: dict[str, Any]) -> list[str]:
+        haystack = " ".join(
+            [paper.get("title", ""), paper.get("abstract", ""), paper.get("venue", ""), paper.get("journal_ref", "")]
+        ).lower()
+        scores: list[tuple[int, str]] = []
+        for topic, keywords in self.topics.items():
+            score = sum(2 if keyword in paper.get("title", "").lower() else 1 for keyword in keywords if keyword in haystack)
+            if score:
+                scores.append((score, topic))
+        scores.sort(reverse=True)
+        return [topic for _, topic in scores[:3]] or ["其他相关"]
+
+    def quality(self, paper: dict[str, Any]) -> float:
+        venue_text = f"{paper.get('venue', '')} {paper.get('journal_ref', '')}".lower()
+        tier_bonus = {
+            "顶级会议": 36,
+            "顶级期刊": 36,
+            "重要会议": 24,
+            "重要期刊": 24,
+        }.get(paper.get("venue_tier", ""), 0)
+        venue_bonus = max(tier_bonus, 30 if any(venue in venue_text for venue in self.top_venues) else 0)
+        citation_bonus = min(25, (paper.get("citation_count", 0) or 0) ** 0.5 * 2.5)
+        topic_bonus = min(24, len(paper.get("topics", [])) * 8)
+        date_bonus = 0
+        try:
+            published = datetime.fromisoformat(paper.get("published", "")[:10]).replace(tzinfo=timezone.utc)
+            age = max(0, (utc_now() - published).days)
+            date_bonus = max(0, 21 - age * 0.6)
+        except ValueError:
+            pass
+        return round(min(100, venue_bonus + citation_bonus + topic_bonus + date_bonus), 1)
+
+
+class PaperSources:
+    def __init__(self, config: dict[str, Any], classifier: PaperClassifier) -> None:
+        self.config = config
+        self.classifier = classifier
+
+    def request_json(self, url: str) -> Any:
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(request, timeout=25) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as error:
+                if error.code not in {429, 502, 503, 504} or attempt == 2:
+                    raise
+                retry_after = error.headers.get("Retry-After", "")
+                try:
+                    delay = max(float(retry_after), 2 ** (attempt + 1))
+                except ValueError:
+                    delay = 2 ** (attempt + 1)
+                time.sleep(min(delay, 30))
+            except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException):
+                if attempt == 2:
+                    raise
+                time.sleep(2 ** (attempt + 1))
+        raise RuntimeError("论文数据源请求失败")
+
+    def request_text(self, url: str, timeout: int = 45) -> str:
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html,*/*"})
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    return response.read().decode("utf-8", "replace")
+            except urllib.error.HTTPError as error:
+                if error.code not in {429, 502, 503, 504} or attempt == 2:
+                    raise
+                time.sleep(2 ** (attempt + 1))
+            except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException):
+                if attempt == 2:
+                    raise
+                time.sleep(2 ** (attempt + 1))
+        raise RuntimeError("论文网页请求失败")
+
+    def fetch_arxiv(self) -> list[dict[str, Any]]:
+        categories = self.config["arxiv_categories"]
+        query = " OR ".join(f"cat:{category}" for category in categories)
+        params = urllib.parse.urlencode(
+            {
+                "search_query": f"({query})",
+                "start": 0,
+                "max_results": self.config["max_results_per_source"],
+                "sortBy": "submittedDate",
+                "sortOrder": "descending",
+            }
+        )
+        url = f"https://export.arxiv.org/api/query?{params}"
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(request, timeout=35) as response:
+            root = ET.fromstring(response.read())
+        ns = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
+        papers = []
+        for entry in root.findall("atom:entry", ns):
+            entry_url = compact_text(entry.findtext("atom:id", default="", namespaces=ns))
+            arxiv_id = entry_url.rsplit("/", 1)[-1]
+            links = {link.attrib.get("type", ""): link.attrib.get("href", "") for link in entry.findall("atom:link", ns)}
+            authors = [compact_text(node.findtext("atom:name", default="", namespaces=ns)) for node in entry.findall("atom:author", ns)]
+            journal_ref = compact_text(entry.findtext("arxiv:journal_ref", default="", namespaces=ns))
+            paper = {
+                "id": f"arxiv:{arxiv_id}",
+                "title": compact_text(entry.findtext("atom:title", default="", namespaces=ns)),
+                "abstract": compact_text(entry.findtext("atom:summary", default="", namespaces=ns)),
+                "authors": authors,
+                "venue": journal_ref or "arXiv",
+                "published": iso_date(entry.findtext("atom:published", default="", namespaces=ns)),
+                "updated": iso_date(entry.findtext("atom:updated", default="", namespaces=ns)),
+                "source": "arXiv",
+                "source_url": entry_url,
+                "pdf_url": links.get("application/pdf", f"https://arxiv.org/pdf/{arxiv_id}"),
+                "doi": compact_text(entry.findtext("arxiv:doi", default="", namespaces=ns)),
+                "journal_ref": journal_ref,
+                "citation_count": 0,
+            }
+            self.classifier.enrich(paper)
+            paper["topics"] = self.classifier.classify(paper)
+            if paper["topics"] != ["其他相关"]:
+                paper["quality_score"] = self.classifier.quality(paper)
+                papers.append(paper)
+        return papers
+
+    @staticmethod
+    def abstract_from_inverted_index(index: dict[str, list[int]] | None) -> str:
+        if not index:
+            return ""
+        positions: list[tuple[int, str]] = []
+        for word, spots in index.items():
+            positions.extend((position, word) for position in spots)
+        return " ".join(word for _, word in sorted(positions))
+
+    def fetch_openalex(self) -> list[dict[str, Any]]:
+        from_date = (utc_now() - timedelta(days=self.config["days_back"])).date().isoformat()
+        queries = ["embodied intelligence robot learning", "large language model multimodal agent"]
+        papers: list[dict[str, Any]] = []
+        for query in queries:
+            params = urllib.parse.urlencode(
+                {
+                    "search": query,
+                    "filter": f"from_publication_date:{from_date}",
+                    "sort": "publication_date:desc",
+                    "per-page": min(50, self.config["max_results_per_source"]),
+                }
+            )
+            payload = self.request_json(f"https://api.openalex.org/works?{params}")
+            for item in payload.get("results", []):
+                source = ((item.get("primary_location") or {}).get("source") or {})
+                doi = (item.get("doi") or "").replace("https://doi.org/", "")
+                openalex_id = (item.get("id") or "").rsplit("/", 1)[-1]
+                ids = item.get("ids") or {}
+                source_url = item.get("doi") or ids.get("openalex") or ""
+                best_location = item.get("best_oa_location") or item.get("primary_location") or {}
+                paper = {
+                    "id": f"doi:{doi.lower()}" if doi else f"openalex:{openalex_id}",
+                    "title": compact_text(item.get("display_name")),
+                    "abstract": compact_text(self.abstract_from_inverted_index(item.get("abstract_inverted_index"))),
+                    "authors": [
+                        compact_text((authorship.get("author") or {}).get("display_name"))
+                        for authorship in item.get("authorships", [])
+                        if (authorship.get("author") or {}).get("display_name")
+                    ],
+                    "venue": compact_text(source.get("display_name")) or "OpenAlex",
+                    "published": item.get("publication_date") or "",
+                    "updated": item.get("publication_date") or "",
+                    "source": "OpenAlex",
+                    "source_url": source_url,
+                    "pdf_url": best_location.get("pdf_url") or "",
+                    "doi": doi,
+                    "journal_ref": compact_text(source.get("display_name")),
+                    "citation_count": item.get("cited_by_count") or 0,
+                }
+                self.classifier.enrich(paper)
+                paper["topics"] = self.classifier.classify(paper)
+                if paper["topics"] != ["其他相关"]:
+                    paper["quality_score"] = self.classifier.quality(paper)
+                    papers.append(paper)
+        return papers
+
+    def fetch_crossref(self) -> list[dict[str, Any]]:
+        from_date = (utc_now() - timedelta(days=self.config["days_back"])).date().isoformat()
+        queries = ["embodied intelligence robotics", "large language model multimodal"]
+        papers: list[dict[str, Any]] = []
+        for query in queries:
+            params = urllib.parse.urlencode(
+                {
+                    "query": query,
+                    "filter": f"from-pub-date:{from_date}",
+                    "rows": min(40, self.config["max_results_per_source"]),
+                    "sort": "published",
+                    "order": "desc",
+                    "select": "DOI,title,abstract,author,container-title,published,published-online,published-print,created,URL,link,is-referenced-by-count,type",
+                }
+            )
+            payload = self.request_json(f"https://api.crossref.org/works?{params}")
+            for item in (payload.get("message") or {}).get("items", []):
+                doi = compact_text(item.get("DOI"))
+                title = compact_text(" ".join(item.get("title") or []))
+                if not doi or not title:
+                    continue
+                links = item.get("link") or []
+                pdf_url = next((link.get("URL", "") for link in links if "pdf" in link.get("content-type", "").lower()), "")
+                venue = compact_text(" ".join(item.get("container-title") or [])) or "Crossref"
+                authors = [
+                    compact_text(f"{author.get('given', '')} {author.get('family', '')}")
+                    for author in item.get("author", [])
+                ]
+                abstract = re.sub(r"<[^>]+>", " ", item.get("abstract") or "")
+                published_candidates = [
+                    iso_date(item.get(field))
+                    for field in ("published-online", "created", "published-print", "published")
+                ]
+                latest_visible_date = (utc_now() + timedelta(days=1)).date().isoformat()
+                published = next(
+                    (date for date in published_candidates if date and date <= latest_visible_date),
+                    iso_date(item.get("published")),
+                )
+                paper = {
+                    "id": f"doi:{doi.lower()}",
+                    "title": title,
+                    "abstract": compact_text(abstract),
+                    "authors": authors,
+                    "venue": venue,
+                    "published": published,
+                    "updated": published,
+                    "source": "Crossref",
+                    "source_url": item.get("URL") or f"https://doi.org/{doi}",
+                    "pdf_url": pdf_url,
+                    "doi": doi,
+                    "journal_ref": venue,
+                    "citation_count": item.get("is-referenced-by-count") or 0,
+                }
+                self.classifier.enrich(paper)
+                paper["topics"] = self.classifier.classify(paper)
+                if paper["topics"] != ["其他相关"]:
+                    paper["quality_score"] = self.classifier.quality(paper)
+                    papers.append(paper)
+        return papers
+
+    def fetch_dblp(self) -> list[dict[str, Any]]:
+        queries = self.config.get("source_queries") or [
+            "embodied robot learning",
+            "vision language action robot",
+            "dexterous manipulation tactile robot",
+            "large language model reasoning",
+            "multimodal large language model",
+            "language model agent tool use",
+            "retrieval augmented generation",
+            "llm inference serving quantization",
+        ]
+        minimum_year = utc_now().year - 1
+        limit = min(100, self.config["max_results_per_source"])
+        papers_by_id: dict[str, dict[str, Any]] = {}
+        successful_queries = 0
+        last_error: Exception | None = None
+        for query in queries:
+            params = urllib.parse.urlencode({"q": query, "h": limit, "format": "json"})
+            try:
+                payload = self.request_json(f"https://dblp.org/search/publ/api?{params}")
+                successful_queries += 1
+            except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as error:
+                last_error = error
+                continue
+            hits = (((payload.get("result") or {}).get("hits") or {}).get("hit") or [])
+            if isinstance(hits, dict):
+                hits = [hits]
+            for hit in hits:
+                info = hit.get("info") or {}
+                try:
+                    year = int(info.get("year") or 0)
+                except (TypeError, ValueError):
+                    year = 0
+                if year < minimum_year:
+                    continue
+                title = compact_text(html.unescape(info.get("title") or "")).removesuffix(".")
+                venue = compact_text(html.unescape(info.get("venue") or ""))
+                if not title or not venue:
+                    continue
+                author_nodes = (info.get("authors") or {}).get("author") or []
+                if isinstance(author_nodes, (str, dict)):
+                    author_nodes = [author_nodes]
+                authors = []
+                for author in author_nodes:
+                    name = author.get("text", "") if isinstance(author, dict) else str(author)
+                    authors.append(re.sub(r"\s+\d{4}$", "", compact_text(html.unescape(name))))
+                doi = compact_text(info.get("doi"))
+                external_links = info.get("ee") or []
+                if isinstance(external_links, str):
+                    external_links = [external_links]
+                source_url = next((link for link in external_links if isinstance(link, str)), "") or info.get("url", "")
+                pdf_url = next((link for link in external_links if isinstance(link, str) and link.lower().endswith(".pdf")), "")
+                paper = {
+                    "id": f"doi:{doi.lower()}" if doi else f"dblp:{slug_id(info.get('key') or title)}",
+                    "title": title,
+                    "abstract": "",
+                    "authors": authors,
+                    "venue": venue,
+                    "published": f"{year}-01-01",
+                    "updated": f"{year}-01-01",
+                    "source": "DBLP",
+                    "source_url": source_url,
+                    "pdf_url": pdf_url,
+                    "doi": doi,
+                    "journal_ref": venue,
+                    "citation_count": 0,
+                }
+                self.classifier.enrich(paper)
+                if paper["venue_tier"] not in {"顶级会议", "顶级期刊", "重要会议", "重要期刊"}:
+                    continue
+                paper["topics"] = self.classifier.classify(paper)
+                if paper["topics"] == ["其他相关"]:
+                    continue
+                paper["quality_score"] = self.classifier.quality(paper)
+                papers_by_id[paper["id"]] = paper
+            time.sleep(1.0)
+        if not successful_queries and last_error:
+            raise last_error
+        return list(papers_by_id.values())
+
+    def fetch_pmlr(self) -> list[dict[str, Any]]:
+        base_url = "https://proceedings.mlr.press"
+        index = self.request_text(f"{base_url}/")
+        volume_items = re.findall(
+            r'<li><a href="(v\d+)"><b>Volume \d+</b></a>\s*(.*?)</li>',
+            index,
+            flags=re.I | re.S,
+        )
+        minimum_year = utc_now().year - 1
+        selected: list[tuple[str, str, int]] = []
+        for volume, raw_name in volume_items:
+            name = compact_text(re.sub(r"<[^>]+>", " ", html.unescape(raw_name)))
+            year_match = re.search(r"(?:19|20)\d{2}", name)
+            year = int(year_match.group(0)) if year_match else 0
+            if year < minimum_year or "workshop" in name.lower():
+                continue
+            venue = ""
+            for candidate in ("ICML", "CoRL", "AISTATS"):
+                if re.search(rf"\b{candidate}\b", name, flags=re.I):
+                    venue = candidate
+                    break
+            if venue:
+                selected.append((volume, venue, year))
+
+        papers: list[dict[str, Any]] = []
+        for volume, venue, year in selected[:8]:
+            page = self.request_text(f"{base_url}/{volume}/")
+            blocks = re.findall(r'<div class="paper">(.*?)</div>', page, flags=re.I | re.S)
+            for block in blocks:
+                title_match = re.search(r'<p class="title">(.*?)</p>', block, flags=re.I | re.S)
+                authors_match = re.search(r'<span class="authors">(.*?)</span>', block, flags=re.I | re.S)
+                if not title_match:
+                    continue
+                title = compact_text(re.sub(r"<[^>]+>", " ", html.unescape(title_match.group(1))))
+                authors_text = compact_text(re.sub(r"<[^>]+>", " ", html.unescape(authors_match.group(1)))) if authors_match else ""
+                authors = [compact_text(name) for name in authors_text.split(",") if compact_text(name)]
+                links = re.findall(r'href="([^"]+)"', block, flags=re.I)
+                source_url = next((link for link in links if link.endswith(".html")), f"{base_url}/{volume}/")
+                pdf_url = next((link for link in links if link.lower().endswith(".pdf")), "")
+                paper = {
+                    "id": f"pmlr:{volume}:{slug_id(source_url.rsplit('/', 1)[-1].removesuffix('.html'))}",
+                    "title": title,
+                    "abstract": "",
+                    "authors": authors,
+                    "venue": venue,
+                    "published": f"{year}-01-01",
+                    "updated": f"{year}-01-01",
+                    "source": "PMLR",
+                    "source_url": source_url,
+                    "pdf_url": pdf_url,
+                    "doi": "",
+                    "journal_ref": venue,
+                    "citation_count": 0,
+                }
+                self.classifier.enrich(paper)
+                paper["topics"] = self.classifier.classify(paper)
+                if paper["topics"] == ["其他相关"]:
+                    continue
+                paper["quality_score"] = self.classifier.quality(paper)
+                papers.append(paper)
+        return papers
+
+    def fetch_cvf(self) -> list[dict[str, Any]]:
+        base_url = "https://openaccess.thecvf.com"
+        menu = self.request_text(f"{base_url}/menu")
+        event_names = re.findall(r'href="/?((?:CVPR|ICCV|WACV)\d{4})"', menu, flags=re.I)
+        minimum_year = utc_now().year - 1
+        events = []
+        for event in event_names:
+            year_match = re.search(r"\d{4}", event)
+            year = int(year_match.group(0)) if year_match else 0
+            if year >= minimum_year and event.upper() not in events:
+                events.append(event.upper())
+
+        papers: list[dict[str, Any]] = []
+        for event in events[:5]:
+            venue_match = re.match(r"[A-Z]+", event)
+            year_match = re.search(r"\d{4}", event)
+            if not venue_match or not year_match:
+                continue
+            venue = venue_match.group(0)
+            year = int(year_match.group(0))
+            page = self.request_text(f"{base_url}/{event}?day=all", timeout=60)
+            entries = re.findall(
+                r'<dt class="ptitle">.*?<a href="([^"]+)">(.*?)</a></dt>\s*<dd>(.*?)</dd>',
+                page,
+                flags=re.I | re.S,
+            )
+            for relative_url, raw_title, block in entries:
+                title = compact_text(re.sub(r"<[^>]+>", " ", html.unescape(raw_title)))
+                authors = [compact_text(html.unescape(name)) for name in re.findall(r'name="query_author" value="([^"]+)"', block)]
+                source_url = urllib.parse.urljoin(base_url, relative_url)
+                pdf_match = re.search(r'href="([^"]+\.pdf)"', block, flags=re.I)
+                pdf_url = urllib.parse.urljoin(base_url, pdf_match.group(1)) if pdf_match else ""
+                month = 6 if venue == "CVPR" else 10 if venue == "ICCV" else 1
+                paper = {
+                    "id": f"cvf:{slug_id(relative_url.rsplit('/', 1)[-1].removesuffix('.html'))}",
+                    "title": title,
+                    "abstract": "",
+                    "authors": authors,
+                    "venue": venue,
+                    "published": f"{year}-{month:02d}-01",
+                    "updated": f"{year}-{month:02d}-01",
+                    "source": "CVF Open Access",
+                    "source_url": source_url,
+                    "pdf_url": pdf_url,
+                    "doi": "",
+                    "journal_ref": venue,
+                    "citation_count": 0,
+                }
+                self.classifier.enrich(paper)
+                paper["topics"] = self.classifier.classify(paper)
+                if paper["topics"] == ["其他相关"]:
+                    continue
+                paper["quality_score"] = self.classifier.quality(paper)
+                papers.append(paper)
+        return papers
+
+
+class GitHubSource:
+    def __init__(self, config: dict[str, Any]) -> None:
+        self.config = config
+        self.token = os.environ.get("GITHUB_TOKEN", "").strip()
+
+    def request_json(self, url: str) -> Any:
+        headers = {
+            "User-Agent": USER_AGENT,
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        request = urllib.request.Request(url, headers=headers)
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as error:
+                if error.code not in {403, 429, 502, 503, 504} or attempt == 2:
+                    raise
+                reset_at = error.headers.get("X-RateLimit-Reset", "")
+                try:
+                    delay = max(2 ** (attempt + 1), int(reset_at) - int(time.time()) + 1)
+                except ValueError:
+                    delay = 2 ** (attempt + 1)
+                time.sleep(min(delay, 65))
+        raise RuntimeError("GitHub API 请求失败")
+
+    def fetch(self) -> list[dict[str, Any]]:
+        days_back = max(1, int(self.config.get("github_days_back", 30)))
+        since = (utc_now() - timedelta(days=days_back)).date().isoformat()
+        per_query = max(1, min(100, int(self.config.get("github_per_query", 50))))
+        min_stars = max(0, int(self.config.get("github_min_stars", 3)))
+        projects: dict[str, dict[str, Any]] = {}
+        successful_queries = 0
+        last_error: Exception | None = None
+        for item in self.config.get("github_queries", []):
+            category = item["category"]
+            query = f"{item['query']} pushed:>={since} stars:>={min_stars} archived:false fork:false"
+            params = urllib.parse.urlencode(
+                {"q": query, "sort": "updated", "order": "desc", "per_page": per_query}
+            )
+            try:
+                payload = self.request_json(f"https://api.github.com/search/repositories?{params}")
+                successful_queries += 1
+            except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as error:
+                last_error = error
+                continue
+            for repo in payload.get("items", []):
+                full_name = repo.get("full_name") or ""
+                if not full_name:
+                    continue
+                existing = projects.get(full_name)
+                categories = sorted(set((existing or {}).get("categories", [])) | {category})
+                topics = sorted(set((existing or {}).get("topics", [])) | set(repo.get("topics") or []))
+                project = {
+                    "full_name": full_name,
+                    "name": repo.get("name") or full_name.rsplit("/", 1)[-1],
+                    "owner": (repo.get("owner") or {}).get("login") or full_name.split("/", 1)[0],
+                    "description": compact_text(repo.get("description")),
+                    "url": repo.get("html_url") or f"https://github.com/{full_name}",
+                    "homepage": compact_text(repo.get("homepage")),
+                    "stars": repo.get("stargazers_count") or 0,
+                    "forks": repo.get("forks_count") or 0,
+                    "open_issues": repo.get("open_issues_count") or 0,
+                    "language": repo.get("language") or "",
+                    "license": ((repo.get("license") or {}).get("spdx_id") or "").replace("NOASSERTION", ""),
+                    "topics": topics,
+                    "categories": categories,
+                    "created_at": repo.get("created_at") or "",
+                    "updated_at": repo.get("updated_at") or "",
+                    "pushed_at": repo.get("pushed_at") or "",
+                }
+                projects[full_name] = project
+            time.sleep(0.7 if self.token else 7.0)
+        if not successful_queries and last_error:
+            raise last_error
+        return list(projects.values())
+
+
+LINK_STOPWORDS = {
+    "about", "after", "against", "based", "benchmark", "deep", "efficient", "evaluation", "framework",
+    "from", "general", "large", "language", "learning", "method", "model", "models", "multimodal", "network",
+    "robot", "robotic", "robots", "system", "systems", "through", "towards", "using", "vision", "with",
+    "agent", "agents", "embodied", "generation", "reasoning", "reinforcement", "training",
+    "augmented", "capabilities", "code", "context", "data", "image", "implementation", "llm", "llms", "official",
+    "open", "platform", "project", "retrieval", "source", "toolkit", "video", "visual",
+}
+
+
+def link_tokens(value: str) -> set[str]:
+    return {
+        token for token in VenueCatalog.normalize(value).split()
+        if len(token) >= 4 and token not in LINK_STOPWORDS
+    }
+
+
+def paper_project_match(paper: dict[str, Any], project: dict[str, Any]) -> tuple[float, str] | None:
+    title = VenueCatalog.normalize(paper.get("title", ""))
+    project_text = VenueCatalog.normalize(
+        " ".join(
+            [project.get("name", ""), project.get("full_name", ""), project.get("description", ""),
+             project.get("homepage", ""), " ".join(project.get("topics", []))]
+        )
+    )
+    raw_project_text = " ".join(
+        [project.get("description", ""), project.get("homepage", ""), " ".join(project.get("topics", []))]
+    ).lower()
+    identifiers = [paper.get("doi", "")]
+    identifiers.extend(re.findall(r"\b\d{4}\.\d{4,5}\b", " ".join([paper.get("id", ""), paper.get("source_url", ""), paper.get("pdf_url", "")])))
+    for identifier in identifiers:
+        if identifier and identifier.lower() in raw_project_text:
+            return 100.0, f"项目说明包含论文标识 {identifier}"
+    if title and len(title) >= 12 and title in project_text:
+        return 99.0, "项目说明包含完整论文标题"
+    repo_compact = VenueCatalog.normalize(project.get("name", "")).replace(" ", "")
+    title_compact = title.replace(" ", "")
+    if len(repo_compact) >= 5 and repo_compact in title_compact:
+        return 94.0, "仓库名称与论文标题中的方法名一致"
+
+    paper_tokens = link_tokens(title)
+    project_tokens = link_tokens(project_text)
+    project_name_tokens = link_tokens(project.get("name", ""))
+    shared = paper_tokens & project_tokens
+    name_shared = paper_tokens & project_name_tokens
+    if len(shared) >= 4 and name_shared:
+        coverage = len(shared) / max(1, min(len(paper_tokens), len(project_tokens)))
+        if coverage >= 0.6:
+            score = min(92.0, 68.0 + len(shared) * 3.0 + coverage * 18.0)
+            return score, f"仓库名称及说明匹配论文专有词：{'、'.join(sorted(shared)[:5])}"
+
+    return None
+
+
+def rebuild_project_links() -> int:
+    papers = STORE.list_papers()
+    projects = STORE.list_projects()
+    paper_profiles = []
+    for paper in papers:
+        identifiers = {paper.get("doi", "").lower()} if paper.get("doi") else set()
+        identifiers.update(
+            re.findall(
+                r"\b\d{4}\.\d{4,5}\b",
+                " ".join([paper.get("id", ""), paper.get("source_url", ""), paper.get("pdf_url", "")]),
+            )
+        )
+        paper_profiles.append(
+            (paper, set(paper.get("topics", [])), link_tokens(paper.get("title", "")), identifiers)
+        )
+    links: list[tuple[str, str, float, str]] = []
+    for project in projects:
+        candidates = []
+        project_name_normalized = VenueCatalog.normalize(project.get("name", ""))
+        if any(marker in project_name_normalized.split() for marker in {"awesome", "handbook", "roadmap", "survey", "collection"}):
+            continue
+        project_categories = set(project.get("categories", []))
+        project_text = " ".join(
+            [project.get("name", ""), project.get("full_name", ""), project.get("description", ""),
+             project.get("homepage", ""), " ".join(project.get("topics", []))]
+        )
+        project_tokens = link_tokens(project_text)
+        project_name_tokens = link_tokens(project.get("name", ""))
+        project_identifiers = set(re.findall(r"\b\d{4}\.\d{4,5}\b", project_text.lower()))
+        for paper, paper_topics, paper_tokens, paper_identifiers in paper_profiles:
+            if project_categories and not project_categories.intersection(paper_topics):
+                continue
+            shared = paper_tokens & project_tokens
+            if not (
+                paper_identifiers.intersection(project_identifiers)
+                or paper_tokens.intersection(project_name_tokens)
+                or len(shared) >= 4
+            ):
+                continue
+            match = paper_project_match(paper, project)
+            if match and match[0] >= 72:
+                candidates.append((match[0], paper["id"], match[1]))
+        for score, paper_id, reason in sorted(candidates, reverse=True)[:4]:
+            links.append((paper_id, project["full_name"], score, reason))
+    STORE.replace_project_links(links)
+    return len(links)
+
+
+class PaperExplainer:
+    @staticmethod
+    def connection() -> dict[str, str] | None:
+        override_key = os.environ.get("PAPERFIELD_OPENAI_API_KEY", "").strip()
+        if override_key:
+            return {
+                "key": override_key,
+                "base_url": os.environ.get("PAPERFIELD_OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
+                "model": os.environ.get("PAPERFIELD_OPENAI_MODEL", "gpt-5-mini").strip(),
+                "provider": "Paperfield 环境变量",
+            }
+
+        codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+        codex_config = codex_home / "config.toml"
+        codex_auth = codex_home / "auth.json"
+        if codex_config.exists() and codex_auth.exists():
+            try:
+                config_text = codex_config.read_text(encoding="utf-8")
+                provider_match = re.search(r'^model_provider\s*=\s*"([^"]+)"', config_text, flags=re.M)
+                model_match = re.search(r'^model\s*=\s*"([^"]+)"', config_text, flags=re.M)
+                auth = json.loads(codex_auth.read_text(encoding="utf-8"))
+                key = compact_text(auth.get("OPENAI_API_KEY"))
+                if provider_match and model_match and key:
+                    provider_id = provider_match.group(1)
+                    section_match = re.search(
+                        rf'^\[model_providers\.{re.escape(provider_id)}\]\s*(.*?)(?=^\[|\Z)',
+                        config_text,
+                        flags=re.M | re.S,
+                    )
+                    provider_section = section_match.group(1) if section_match else ""
+                    base_match = re.search(r'^base_url\s*=\s*"([^"]+)"', provider_section, flags=re.M)
+                    wire_match = re.search(r'^wire_api\s*=\s*"([^"]+)"', provider_section, flags=re.M)
+                    base_url = base_match.group(1).rstrip("/") if base_match else "https://api.openai.com/v1"
+                    return {
+                        "key": key,
+                        "base_url": base_url,
+                        "model": model_match.group(1),
+                        "provider": f"CC Switch / {provider_id}",
+                        "wire_api": wire_match.group(1) if wire_match else "responses",
+                    }
+            except (OSError, ValueError, json.JSONDecodeError):
+                pass
+
+        key = os.environ.get("OPENAI_API_KEY", "").strip()
+        if key:
+            return {
+                "key": key,
+                "base_url": os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
+                "model": os.environ.get("OPENAI_MODEL", "gpt-5-mini").strip(),
+                "provider": "OpenAI 环境变量",
+                "wire_api": os.environ.get("OPENAI_WIRE_API", "responses").strip(),
+            }
+        return None
+
+    def explain(self, paper: dict[str, Any]) -> dict[str, Any]:
+        connection = self.connection()
+        if connection:
+            try:
+                return self._openai_explain(paper, connection)
+            except Exception as error:
+                fallback = self._fallback(paper)
+                fallback["notice"] = f"AI 服务暂时不可用，已返回摘要导读：{error}"
+                return fallback
+        return self._fallback(paper)
+
+    def _openai_explain(self, paper: dict[str, Any], connection: dict[str, str]) -> dict[str, Any]:
+        model = connection["model"]
+        prompt = f"""你是一名耐心的中文研究导师。请根据论文元数据和摘要生成严谨、详细但易懂的中文讲解。
+不要虚构论文没有提到的实验数字。将推断明确标为推断。返回严格 JSON，不要 Markdown。
+字段必须包括：one_sentence, background, problem, method, experiments, contributions, limitations, prerequisites, fit, glossary。
+其中 glossary 是包含 term 和 explanation 的对象数组，其余字段为中文字符串或中文字符串数组。
+
+标题：{paper['title']}
+作者：{', '.join(paper.get('authors', []))}
+刊物：{paper.get('venue', '')}
+日期：{paper.get('published', '')}
+主题：{', '.join(paper.get('topics', []))}
+摘要：{paper.get('abstract', '')}
+"""
+        wire_api = connection.get("wire_api", "responses").lower()
+        if wire_api in {"chat", "chat_completions", "chat-completions"}:
+            endpoint = "chat/completions"
+            request_payload = {"model": model, "messages": [{"role": "user", "content": prompt}]}
+        else:
+            endpoint = "responses"
+            request_payload = {
+                "model": model,
+                "input": [{"role": "user", "content": [{"type": "input_text", "text": prompt}]}],
+            }
+        body = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            f"{connection['base_url']}/{endpoint}",
+            data=body,
+            headers={"Authorization": f"Bearer {connection['key']}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=90) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if endpoint == "chat/completions":
+            choices = payload.get("choices") or []
+            output_text = ((choices[0].get("message") or {}).get("content") or "") if choices else ""
+        else:
+            output_text = payload.get("output_text") or ""
+            if not output_text:
+                pieces = []
+                for output in payload.get("output", []):
+                    for content in output.get("content", []):
+                        if content.get("type") in {"output_text", "text"}:
+                            pieces.append(content.get("text", ""))
+                output_text = "".join(pieces)
+        match = re.search(r"\{.*\}", output_text, flags=re.S)
+        if not match:
+            raise ValueError("模型没有返回可解析的 JSON")
+        explanation = json.loads(match.group(0))
+        explanation["mode"] = "ai"
+        explanation["provider"] = connection["provider"]
+        explanation["model"] = model
+        explanation["wire_api"] = wire_api
+        explanation["generated_at"] = utc_now().isoformat()
+        return explanation
+
+    def _fallback(self, paper: dict[str, Any]) -> dict[str, Any]:
+        abstract = compact_text(paper.get("abstract"))
+        sentences = [item.strip() for item in re.split(r"(?<=[.!?])\s+", abstract) if item.strip()]
+        topics = paper.get("topics", [])
+        topic_text = "、".join(topics) if topics else "相关研究"
+        first = sentences[0] if sentences else "公开元数据暂未提供摘要。"
+        method = " ".join(sentences[1:3]) if len(sentences) > 1 else first
+        results = " ".join(sentences[-2:]) if len(sentences) > 2 else "需要阅读论文实验部分确认数据集、基线和指标。"
+        return {
+            "mode": "abstract",
+            "generated_at": utc_now().isoformat(),
+            "one_sentence": f"这是一篇与{topic_text}相关的工作，核心线索是：{first}",
+            "background": f"论文被系统归入{topic_text}。当前导读只依据标题、刊物和公开摘要生成，不替代全文阅读。",
+            "problem": first,
+            "method": method,
+            "experiments": results,
+            "contributions": ["提出或验证了摘要中描述的核心方法。", "为相关主题提供了可继续追踪的研究线索。"],
+            "limitations": ["未调用大模型时无法可靠翻译和解释全文细节。", "需要核对正文中的实验设置、消融实验和失败案例。"],
+            "prerequisites": ["先理解标题中的主要任务和输入输出。", "阅读方法总览图、主结果表和结论。"],
+            "fit": "如果你对这篇论文的任务场景、方法类型和实验方式都感兴趣，可以将其加入精读列表。",
+            "glossary": [{"term": topic, "explanation": f"系统根据关键词识别出的研究主题：{topic}"} for topic in topics[:4]],
+        }
+
+
+def load_config() -> dict[str, Any]:
+    return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+
+
+CONFIG = load_config()
+VENUE_CATALOG = VenueCatalog(json.loads(VENUES_PATH.read_text(encoding="utf-8")))
+STORE = PaperStore(DB_PATH)
+CLASSIFIER = PaperClassifier(CONFIG, VENUE_CATALOG)
+SOURCES = PaperSources(CONFIG, CLASSIFIER)
+GITHUB_SOURCE = GitHubSource(CONFIG)
+EXPLAINER = PaperExplainer()
+REFRESH_STATE: dict[str, Any] = {"running": False, "message": "", "lock": threading.Lock()}
+
+
+def seed_if_empty() -> None:
+    if STORE.count():
+        return
+    seeds = [
+        {
+            "id": "arxiv:2505.22566",
+            "title": "Universal Visuo-Tactile Video Understanding for Embodied Interaction",
+            "abstract": "Tactile perception is essential for embodied agents to understand physical attributes of objects that cannot be determined through visual inspection alone. The work presents VTV-LLM, a multimodal large language model for universal visuo-tactile video understanding, together with a 150K-frame dataset covering multiple tactile sensors and physical attributes.",
+            "authors": ["Yifan Xie", "Mingyang Li", "Shoujie Li", "Wenbo Ding"],
+            "venue": "NeurIPS 2025",
+            "published": "2025-05-28",
+            "updated": "2025-05-28",
+            "source": "starter",
+            "source_url": "https://arxiv.org/abs/2505.22566",
+            "pdf_url": "https://arxiv.org/pdf/2505.22566",
+            "doi": "",
+            "journal_ref": "NeurIPS 2025",
+            "citation_count": 0,
+        },
+        {
+            "id": "starter:omnicvr",
+            "title": "OmniCVR: A Benchmark for Omni-Composed Video Retrieval with Vision, Audio, and Text",
+            "abstract": "The work introduces a large-scale benchmark for composed video retrieval where source video, audio, and modification text must be reasoned over jointly. It also proposes an audio-aware extension of VLM2Vec and studies the limitations of current multimodal retrieval systems.",
+            "authors": ["Junyang Ji", "Shengjun Zhang", "Wenming Yang"],
+            "venue": "ICLR 2026",
+            "published": "2026-01-20",
+            "updated": "2026-01-20",
+            "source": "starter",
+            "source_url": "https://openreview.net/forum?id=KxxR7emO5K",
+            "pdf_url": "https://openreview.net/pdf?id=KxxR7emO5K",
+            "doi": "",
+            "journal_ref": "ICLR 2026",
+            "citation_count": 0,
+        },
+        {
+            "id": "starter:sap-slam",
+            "title": "SAP-SLAM: Semantic-Assisted Perception SLAM with 3D Gaussian Splatting",
+            "abstract": "SAP-SLAM combines dense SLAM, semantic features from pretrained visual models, and 3D Gaussian Splatting to build high-fidelity semantic maps. Semantic consistency guides Gaussian densification and pruning in difficult regions.",
+            "authors": ["Yuheng Yang", "Yudong Lin", "Wenming Yang", "Guijin Wang", "Qingmin Liao"],
+            "venue": "ICRA 2025",
+            "published": "2025-05-19",
+            "updated": "2025-05-19",
+            "source": "starter",
+            "source_url": "https://ieeexplore.ieee.org/document/11127553",
+            "pdf_url": "",
+            "doi": "",
+            "journal_ref": "ICRA 2025",
+            "citation_count": 0,
+        },
+        {
+            "id": "starter:h-drunkwalk",
+            "title": "H-DrunkWalk: Collaborative and Adaptive Navigation for Heterogeneous MAV Swarm",
+            "abstract": "The paper studies infrastructure-free navigation for heterogeneous micro-aerial vehicle swarms. A small number of advanced MAVs collaborate with lower-cost basic MAVs to reduce localization error and improve navigation success.",
+            "authors": ["Xinlei Chen", "Carlos Ruiz", "Sihan Zeng", "Pei Zhang"],
+            "venue": "ACM TOSN",
+            "published": "2020-04-01",
+            "updated": "2020-04-01",
+            "source": "starter",
+            "source_url": "https://dl.acm.org/doi/10.1145/3382094",
+            "pdf_url": "",
+            "doi": "10.1145/3382094",
+            "journal_ref": "ACM Transactions on Sensor Networks",
+            "citation_count": 0,
+        },
+    ]
+    for paper in seeds:
+        CLASSIFIER.enrich(paper)
+        paper["topics"] = CLASSIFIER.classify(paper)
+        paper["quality_score"] = CLASSIFIER.quality(paper)
+        STORE.upsert(paper)
+
+
+def refresh_all() -> dict[str, Any]:
+    with REFRESH_STATE["lock"]:
+        if REFRESH_STATE["running"]:
+            return {"running": True, "message": "更新任务正在运行"}
+        REFRESH_STATE["running"] = True
+        REFRESH_STATE["message"] = "正在连接论文数据源"
+    run_id = STORE.begin_sync()
+    inserted = 0
+    errors = []
+    source_results = {}
+    try:
+        source_fetchers = [
+            ("arXiv", SOURCES.fetch_arxiv),
+            ("OpenAlex", SOURCES.fetch_openalex),
+            ("Crossref", SOURCES.fetch_crossref),
+            ("PMLR", SOURCES.fetch_pmlr),
+            ("CVF Open Access", SOURCES.fetch_cvf),
+        ]
+        if os.environ.get("PAPERFIELD_ENABLE_DBLP", "").strip() == "1":
+            source_fetchers.append(("DBLP", SOURCES.fetch_dblp))
+        for name, fetcher in source_fetchers:
+            REFRESH_STATE["message"] = f"正在更新 {name}"
+            try:
+                papers = fetcher()
+                source_results[name] = len(papers)
+                inserted += STORE.upsert_many(papers)
+            except Exception as error:
+                errors.append(f"{name}: {error}")
+                source_results[name] = 0
+        STORE.recalculate_quality(CLASSIFIER)
+        REFRESH_STATE["message"] = "正在更新 GitHub 项目"
+        try:
+            projects = GITHUB_SOURCE.fetch()
+            inserted += STORE.upsert_projects(projects)
+            source_results["GitHub"] = len(projects)
+        except Exception as error:
+            errors.append(f"GitHub: {error}")
+            source_results["GitHub"] = 0
+        REFRESH_STATE["message"] = "正在关联论文与代码项目"
+        source_results["论文项目关联"] = rebuild_project_links()
+        status = "partial" if errors else "success"
+        STORE.finish_sync(run_id, status, inserted, "\n".join(errors))
+        return {"running": False, "inserted": inserted, "sources": source_results, "errors": errors}
+    except Exception as error:
+        STORE.finish_sync(run_id, "error", inserted, str(error))
+        return {"running": False, "inserted": inserted, "sources": source_results, "errors": [str(error)]}
+    finally:
+        REFRESH_STATE["running"] = False
+        REFRESH_STATE["message"] = ""
+
+
+def refresh_in_background() -> bool:
+    with REFRESH_STATE["lock"]:
+        if REFRESH_STATE["running"]:
+            return False
+    threading.Thread(target=refresh_all, daemon=True, name="paper-refresh").start()
+    return True
+
+
+def scheduler_loop() -> None:
+    interval = max(1, int(CONFIG.get("refresh_hours", 24))) * 3600
+    while True:
+        latest = STORE.latest_sync()
+        due = latest is None
+        if latest and latest.get("finished_at"):
+            try:
+                due = (utc_now() - datetime.fromisoformat(latest["finished_at"])).total_seconds() >= interval
+            except ValueError:
+                due = True
+        if due:
+            refresh_in_background()
+        time.sleep(300)
+
+
+def filter_papers(papers: list[dict[str, Any]], params: dict[str, list[str]]) -> list[dict[str, Any]]:
+    get = lambda name, default="": (params.get(name) or [default])[0].strip()
+    query = get("q").lower()
+    topic = get("topic")
+    venue = get("venue")
+    author = get("author").lower()
+    source = get("source")
+    tier = get("tier")
+    platform = get("platform")
+    venue_type = get("venue_type")
+    top_only = get("top")
+    status = get("status")
+    favorite = get("favorite")
+    date_from = get("date_from")
+    sort = get("sort", "quality")
+    latest_visible_date = (utc_now() + timedelta(days=1)).date().isoformat()
+    result = []
+    for paper in papers:
+        text = " ".join([paper["title"], paper["abstract"], " ".join(paper["authors"]), paper["venue"]]).lower()
+        if query and query not in text:
+            continue
+        if topic and topic not in paper["topics"]:
+            continue
+        if venue and venue != paper["venue"]:
+            continue
+        if author and not any(author in item.lower() for item in paper["authors"]):
+            continue
+        if source and source != paper["source"]:
+            continue
+        if tier and tier != paper["venue_tier"]:
+            continue
+        if platform and platform != paper["platform"]:
+            continue
+        if venue_type and venue_type != paper["venue_type"]:
+            continue
+        if top_only == "1" and paper["venue_tier"] not in {"顶级会议", "顶级期刊", "重要会议", "重要期刊"}:
+            continue
+        if status and status != paper["status"]:
+            continue
+        if favorite == "1" and not paper["favorite"]:
+            continue
+        if paper["published"] and paper["published"] > latest_visible_date:
+            continue
+        if date_from and paper["published"] and paper["published"] < date_from:
+            continue
+        result.append(paper)
+    if sort == "date":
+        result.sort(key=lambda item: (item["published"], item["quality_score"]), reverse=True)
+    elif sort == "citations":
+        result.sort(key=lambda item: (item["citation_count"], item["quality_score"]), reverse=True)
+    else:
+        result.sort(key=lambda item: (item["quality_score"], item["published"]), reverse=True)
+    return result
+
+
+def filter_projects(projects: list[dict[str, Any]], params: dict[str, list[str]]) -> list[dict[str, Any]]:
+    get = lambda name, default="": (params.get(name) or [default])[0].strip()
+    query = get("q").lower()
+    topic = get("topic")
+    language = get("language")
+    date_from = get("date_from")
+    sort = get("sort", "updated")
+    result = []
+    for project in projects:
+        text = " ".join(
+            [project["full_name"], project["description"], " ".join(project["topics"]), " ".join(project["categories"])]
+        ).lower()
+        if query and query not in text:
+            continue
+        if topic and topic not in project["categories"]:
+            continue
+        if language and language != project["language"]:
+            continue
+        if date_from and project["pushed_at"] and project["pushed_at"][:10] < date_from:
+            continue
+        result.append(project)
+    if sort == "stars":
+        result.sort(key=lambda item: (item["stars"], item["pushed_at"]), reverse=True)
+    elif sort == "links":
+        result.sort(key=lambda item: (item["linked_paper_count"], item["stars"]), reverse=True)
+    else:
+        result.sort(key=lambda item: (item["pushed_at"], item["stars"]), reverse=True)
+    return result
+
+
+class AppHandler(SimpleHTTPRequestHandler):
+    server_version = f"Paperfield/{APP_VERSION}"
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
+
+    def log_message(self, format: str, *args: Any) -> None:
+        print(f"[{self.log_date_time_string()}] {format % args}")
+
+    def send_json(self, payload: Any, status: int = 200) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def read_json(self) -> dict[str, Any]:
+        length = int(self.headers.get("Content-Length", "0"))
+        if length <= 0:
+            return {}
+        return json.loads(self.rfile.read(length).decode("utf-8"))
+
+    def do_GET(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        if not parsed.path.startswith("/api/"):
+            if parsed.path not in {"/", "/index.html"} and not (STATIC_DIR / parsed.path.lstrip("/")).exists():
+                self.path = "/index.html"
+            return super().do_GET()
+        params = urllib.parse.parse_qs(parsed.query)
+        if parsed.path == "/api/health":
+            self.send_json(
+                {
+                    "status": "ok",
+                    "version": APP_VERSION,
+                    "papers": STORE.count(),
+                    "projects": STORE.count_projects(),
+                }
+            )
+            return
+        if parsed.path == "/api/papers":
+            papers = filter_papers(STORE.list_papers(), params)
+            limit = max(1, min(500, int((params.get("limit") or ["100"])[0])))
+            offset = max(0, int((params.get("offset") or ["0"])[0]))
+            self.send_json(
+                {
+                    "items": papers[offset:offset + limit],
+                    "total": len(papers),
+                    "offset": offset,
+                    "limit": limit,
+                    "has_more": offset + limit < len(papers),
+                }
+            )
+            return
+        if parsed.path == "/api/projects":
+            projects = filter_projects(STORE.list_projects(), params)
+            limit = max(1, min(500, int((params.get("limit") or ["100"])[0])))
+            offset = max(0, int((params.get("offset") or ["0"])[0]))
+            self.send_json(
+                {
+                    "items": projects[offset:offset + limit],
+                    "total": len(projects),
+                    "offset": offset,
+                    "limit": limit,
+                    "has_more": offset + limit < len(projects),
+                }
+            )
+            return
+        if parsed.path.startswith("/api/projects/"):
+            full_name = urllib.parse.unquote(parsed.path.removeprefix("/api/projects/"))
+            project = STORE.get_project(full_name)
+            self.send_json(project or {"error": "项目不存在"}, 200 if project else 404)
+            return
+        if parsed.path.startswith("/api/papers/"):
+            paper_id = urllib.parse.unquote(parsed.path.removeprefix("/api/papers/"))
+            paper = STORE.get_paper(paper_id)
+            self.send_json(paper or {"error": "论文不存在"}, 200 if paper else 404)
+            return
+        if parsed.path == "/api/options":
+            papers = filter_papers(STORE.list_papers(), {})
+            projects = STORE.list_projects()
+            self.send_json(
+                {
+                    "topics": sorted({topic for paper in papers for topic in paper["topics"]}),
+                    "venues": sorted({paper["venue"] for paper in papers if paper["venue"]} | set(VENUE_CATALOG.venues())),
+                    "sources": sorted({paper["source"] for paper in papers if paper["source"]}),
+                    "authors": sorted({author for paper in papers for author in paper["authors"]}),
+                    "tiers": VenueCatalog.TIER_ORDER,
+                    "platforms": sorted({paper["platform"] for paper in papers if paper["platform"]} | set(VENUE_CATALOG.platforms())),
+                    "venue_types": ["会议", "期刊", "综述期刊", "预印本", "其他"],
+                    "project_languages": sorted({project["language"] for project in projects if project["language"]}),
+                    "project_categories": sorted({category for project in projects for category in project["categories"]}),
+                }
+            )
+            return
+        if parsed.path == "/api/venues":
+            self.send_json({"items": VENUE_CATALOG.entries, "total": len(VENUE_CATALOG.entries)})
+            return
+        if parsed.path == "/api/stats":
+            papers = filter_papers(STORE.list_papers(), {})
+            projects = STORE.list_projects()
+            today = utc_now().date().isoformat()
+            topic_counts: dict[str, int] = {}
+            for paper in papers:
+                for topic in paper["topics"]:
+                    topic_counts[topic] = topic_counts.get(topic, 0) + 1
+            ai_connection = EXPLAINER.connection()
+            self.send_json(
+                {
+                    "total": len(papers),
+                    "today": sum(1 for paper in papers if paper["published"] == today),
+                    "unread": sum(1 for paper in papers if paper["status"] == "unread"),
+                    "favorites": sum(1 for paper in papers if paper["favorite"]),
+                    "top_venue_count": sum(
+                        1 for paper in papers
+                        if paper["venue_tier"] in {"顶级会议", "顶级期刊", "重要会议", "重要期刊"}
+                    ),
+                    "project_total": len(projects),
+                    "project_updated_today": sum(1 for project in projects if project["pushed_at"][:10] == today),
+                    "project_link_count": STORE.link_count(),
+                    "topic_counts": topic_counts,
+                    "latest_sync": STORE.latest_sync(),
+                    "refresh": {"running": REFRESH_STATE["running"], "message": REFRESH_STATE["message"]},
+                    "ai_enabled": bool(ai_connection),
+                    "ai_provider": ai_connection["provider"] if ai_connection else "",
+                    "ai_model": ai_connection["model"] if ai_connection else "",
+                    "ai_wire_api": ai_connection.get("wire_api", "responses") if ai_connection else "",
+                }
+            )
+            return
+        self.send_json({"error": "接口不存在"}, 404)
+
+    def do_POST(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/refresh":
+            started = refresh_in_background()
+            self.send_json({"started": started, "message": "更新已开始" if started else "更新任务正在运行"}, 202)
+            return
+        match = re.fullmatch(r"/api/papers/(.+)/(state|explain)", parsed.path)
+        if match:
+            paper_id = urllib.parse.unquote(match.group(1))
+            action = match.group(2)
+            paper = STORE.get_paper(paper_id)
+            if not paper:
+                self.send_json({"error": "论文不存在"}, 404)
+                return
+            if action == "state":
+                updated = STORE.update_state(paper_id, self.read_json())
+                self.send_json(updated)
+                return
+            explanation = EXPLAINER.explain(paper)
+            STORE.save_explanation(paper_id, explanation)
+            self.send_json(explanation)
+            return
+        self.send_json({"error": "接口不存在"}, 404)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Paperfield local research client")
+    parser.add_argument("--host", default=os.environ.get("PAPERFIELD_HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PAPERFIELD_PORT", "8765")))
+    parser.add_argument("--refresh", action="store_true", help="refresh data and exit")
+    args = parser.parse_args()
+    seed_if_empty()
+    STORE.recalculate_quality(CLASSIFIER)
+    if args.refresh:
+        print(json.dumps(refresh_all(), ensure_ascii=False, indent=2))
+        return
+    if os.environ.get("PAPERFIELD_AUTO_REFRESH", "1").strip() != "0":
+        threading.Thread(target=scheduler_loop, daemon=True, name="refresh-scheduler").start()
+    server = ThreadingHTTPServer((args.host, args.port), AppHandler)
+    print(f"Paperfield is running at http://{args.host}:{args.port}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()

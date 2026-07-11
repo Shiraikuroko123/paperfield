@@ -1,0 +1,16 @@
+data/
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+qa-*.png
+.edge-qa-*/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

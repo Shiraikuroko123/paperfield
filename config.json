@@ -1,0 +1,42 @@
+{
+  "refresh_hours": 24,
+  "days_back": 90,
+  "max_results_per_source": 100,
+  "source_queries": [
+    "embodied robot learning",
+    "vision language action robot",
+    "dexterous manipulation tactile robot",
+    "large language model reasoning",
+    "multimodal large language model",
+    "language model agent tool use",
+    "retrieval augmented generation",
+    "llm inference serving quantization"
+  ],
+  "github_days_back": 30,
+  "github_per_query": 50,
+  "github_min_stars": 3,
+  "github_queries": [
+    {"category": "具身智能", "query": "topic:embodied-ai"},
+    {"category": "具身智能", "query": "\"vision-language-action\" in:name,description"},
+    {"category": "触觉与灵巧操作", "query": "\"robot learning\" in:name,description"},
+    {"category": "大语言模型", "query": "topic:large-language-model"},
+    {"category": "多模态大模型", "query": "\"multimodal llm\" in:name,description"},
+    {"category": "智能体", "query": "topic:ai-agents"},
+    {"category": "检索与知识增强", "query": "topic:retrieval-augmented-generation"},
+    {"category": "模型效率", "query": "topic:llm-inference"}
+  ],
+  "topics": {
+    "具身智能": ["embodied", "robot learning", "robot manipulation", "vision-language-action", "vla", "world model", "humanoid"],
+    "触觉与灵巧操作": ["tactile", "haptic", "dexterous", "grasping", "visuotactile", "force sensing"],
+    "多模态大模型": ["multimodal large language model", "mllm", "vision-language model", "vlm", "video-language"],
+    "大语言模型": ["large language model", "llm", "language model", "reasoning model", "foundation model"],
+    "智能体": ["agent", "multi-agent", "tool use", "computer use", "planning"],
+    "检索与知识增强": ["retrieval augmented", "rag", "knowledge graph", "long context", "memory"],
+    "模型效率": ["quantization", "distillation", "pruning", "inference acceleration", "edge ai", "efficient fine-tuning", "lora"]
+  },
+  "top_venues": [
+    "NeurIPS", "ICML", "ICLR", "CVPR", "ICCV", "ECCV", "ACL", "EMNLP", "NAACL",
+    "RSS", "CoRL", "ICRA", "IROS", "RA-L", "T-RO", "IJRR", "TPAMI", "JMLR", "TMLR"
+  ],
+  "arxiv_categories": ["cs.AI", "cs.CL", "cs.CV", "cs.RO", "cs.LG"]
+}

@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="每日具身智能与大模型论文研究工作台">
+  <title>Paperfield</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="app-rail" aria-label="主要导航">
+      <div class="brand-block">
+        <div class="brand-mark" aria-hidden="true">P</div>
+        <div>
+          <strong>Paperfield</strong>
+          <span>研究工作台</span>
+        </div>
+      </div>
+
+      <nav class="rail-nav" id="railNav">
+        <button class="rail-link is-active" data-view="all">
+          <span>今日视野</span><b id="navAllCount">0</b>
+        </button>
+        <button class="rail-link" data-view="top">
+          <span>顶会顶刊</span><b id="navTopCount">0</b>
+        </button>
+        <button class="rail-link" data-view="projects">
+          <span>GitHub 项目</span><b id="navProjectCount">0</b>
+        </button>
+        <button class="rail-link" data-topic="具身智能">
+          <span>具身智能</span><b id="navEmbodiedCount">0</b>
+        </button>
+        <button class="rail-link" data-topic="大语言模型">
+          <span>大语言模型</span><b id="navLlmCount">0</b>
+        </button>
+        <button class="rail-link" data-topic="多模态大模型">
+          <span>多模态</span><b id="navMultimodalCount">0</b>
+        </button>
+        <button class="rail-link" data-view="favorites">
+          <span>收藏</span><b id="navFavoriteCount">0</b>
+        </button>
+      </nav>
+
+      <div class="rail-foot">
+        <div class="sync-indicator">
+          <span class="sync-dot" id="syncDot"></span>
+          <div><strong id="syncTitle">等待更新</strong><small id="syncTime">尚未同步</small></div>
+        </div>
+        <p>数据来自公开学术元数据，AI 讲解与原摘要分开展示。</p>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="workspace-header">
+        <div class="mobile-brand">Paperfield</div>
+        <label class="search-box">
+          <span class="sr-only">搜索论文、作者或刊物</span>
+          <input id="searchInput" type="search" placeholder="搜索论文、作者或刊物" autocomplete="off">
+          <kbd>/</kbd>
+        </label>
+        <button class="button button-primary" id="refreshButton" type="button">更新论文</button>
+      </header>
+
+      <section class="overview" aria-labelledby="overviewTitle">
+        <div class="overview-copy">
+          <p id="overviewDate"></p>
+          <h1 id="overviewTitle">今天值得读什么</h1>
+          <span id="overviewMessage">从公开论文源中筛出与你方向最接近的工作。</span>
+        </div>
+        <dl class="overview-stats">
+          <div><dt id="statTotalLabel">收录论文</dt><dd id="statTotal">0</dd></div>
+          <div><dt id="statUnreadLabel">未读</dt><dd id="statUnread">0</dd></div>
+          <div><dt id="statFavoriteLabel">已收藏</dt><dd id="statFavorite">0</dd></div>
+        </dl>
+      </section>
+
+      <section class="filter-strip" aria-label="论文筛选">
+        <label>主题<select id="topicFilter"><option value="">全部主题</option></select></label>
+        <label class="paper-only-filter">平台层级<select id="tierFilter"><option value="">全部层级</option></select></label>
+        <label class="paper-only-filter">发布平台<select id="platformFilter"><option value="">全部平台</option></select></label>
+        <label class="paper-only-filter">刊物<select id="venueFilter"><option value="">全部刊物</option></select></label>
+        <label class="paper-only-filter">作者<input id="authorFilter" list="authorOptions" placeholder="输入作者名"><datalist id="authorOptions"></datalist></label>
+        <label class="paper-only-filter">数据源<select id="sourceFilter"><option value="">全部数据源</option></select></label>
+        <label class="project-only-filter" hidden>语言<select id="projectLanguageFilter"><option value="">全部语言</option></select></label>
+        <label>起始日期<input id="dateFilter" type="date"></label>
+        <label class="paper-only-filter">排序<select id="sortFilter"><option value="quality">推荐优先</option><option value="date">最新发表</option><option value="citations">引用优先</option></select></label>
+        <label class="project-only-filter" hidden>项目排序<select id="projectSortFilter"><option value="updated">最近更新</option><option value="stars">Stars 优先</option><option value="links">论文关联优先</option></select></label>
+        <button class="text-button" id="clearFilters" type="button">清除筛选</button>
+      </section>
+
+      <div class="content-grid">
+        <section class="paper-stream" aria-labelledby="streamTitle">
+          <div class="stream-head">
+            <div><h2 id="streamTitle">论文流</h2><span id="resultCount">正在载入</span></div>
+            <div class="status-tabs" role="group" aria-label="阅读状态">
+              <button class="is-active" data-status="">全部</button>
+              <button data-status="unread">未读</button>
+              <button data-status="reading">在读</button>
+              <button data-status="read">已读</button>
+            </div>
+          </div>
+          <div class="paper-list" id="paperList" aria-live="polite"></div>
+          <div class="load-more" id="loadMoreWrap" hidden>
+            <button class="button button-secondary" id="loadMoreButton" type="button">加载更多论文</button>
+          </div>
+          <div class="empty-state" id="emptyState" hidden>
+            <strong>当前筛选没有论文</strong>
+            <p>清除部分条件，或点击“更新论文”拉取最新公开元数据。</p>
+            <button class="button button-secondary" id="emptyClear" type="button">恢复全部论文</button>
+          </div>
+        </section>
+
+        <aside class="reading-pane" id="readingPane" aria-label="论文详情">
+          <div class="reading-empty" id="readingEmpty">
+            <span class="reading-monogram">Pf</span>
+            <h2>选择一篇论文开始阅读</h2>
+            <p>这里会显示摘要、作者、刊物、来源链接和中文讲解。使用 J / K 可以切换论文。</p>
+          </div>
+          <article id="paperDetail" hidden></article>
+        </aside>
+      </div>
+    </main>
+  </div>
+
+  <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

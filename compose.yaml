@@ -1,0 +1,20 @@
+services:
+  paperfield:
+    build: .
+    ports:
+      - "8765:8765"
+    environment:
+      PAPERFIELD_HOST: 0.0.0.0
+      PAPERFIELD_PORT: 8765
+      PAPERFIELD_DATA_DIR: /data
+      PAPERFIELD_AUTO_REFRESH: 1
+      PAPERFIELD_OPENAI_API_KEY: ${PAPERFIELD_OPENAI_API_KEY:-}
+      PAPERFIELD_OPENAI_BASE_URL: ${PAPERFIELD_OPENAI_BASE_URL:-https://api.openai.com/v1}
+      PAPERFIELD_OPENAI_MODEL: ${PAPERFIELD_OPENAI_MODEL:-gpt-5-mini}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    volumes:
+      - paperfield-data:/data
+    restart: unless-stopped
+
+volumes:
+  paperfield-data:
