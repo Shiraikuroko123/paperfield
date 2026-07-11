@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.1
+
+- Added a local interactive R2 configuration script with hidden Secret Access Key input.
+- Made the reader's R2 connection and immediate archive actions visible and unambiguous.
+- Added staged full-text analysis feedback and bounded S3 connection timeouts.
+
 ## 0.8.0
 
 - Added persistent local/cloud/hybrid PDF targets, a configurable PDF folder, and a configurable cache limit.

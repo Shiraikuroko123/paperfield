@@ -154,6 +154,23 @@ class FeedTests(unittest.TestCase):
             self.assertEqual(inventory["object_count"], 1)
             self.assertEqual(inventory["total_bytes"], len(b"%PDF-test"))
 
+    def test_cloud_status_reports_missing_configuration_without_credentials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = APP.PaperStore(root / "papers.db")
+            cloud = APP.S3ObjectStorage(store)
+            cloud.endpoint = None
+            cloud.bucket = ""
+            cloud.access_key = ""
+            cloud.secret_key = ""
+            settings = APP.RuntimeSettings()
+            status = cloud.status(settings)
+            self.assertFalse(status["configured"])
+            self.assertEqual(
+                status["missing_configuration"],
+                ["S3 endpoint", "bucket", "Access Key ID", "Secret Access Key"],
+            )
+
     def test_project_workspace_groups_files_and_sanitizes_readme(self):
         files = ["README.md", "src/model.py", "scripts/train.py", "configs/base.yaml", "tests/test_model.py"]
         with tempfile.TemporaryDirectory() as directory:

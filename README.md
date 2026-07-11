@@ -103,6 +103,8 @@ Paperfield supports private S3-compatible storage for long-term PDF copies. File
 
 Configuration and current price comparison: [`docs/CLOUD_STORAGE.md`](docs/CLOUD_STORAGE.md)
 
+On Windows, run `powershell -ExecutionPolicy Bypass -File .\scripts\configure-r2.ps1` to create the ignored local `.env` without echoing the Secret Access Key.
+
 ## GitHub project workflow
 
 这个仓库已包含：

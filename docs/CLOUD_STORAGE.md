@@ -55,6 +55,12 @@ For AWS S3, leave `PAPERFIELD_S3_ENDPOINT` blank and set the real AWS region. Fo
 
 After restarting Paperfield, open **存储与用量** in the left rail. Set the billing-cycle start day to the day shown by the Cloudflare dashboard, choose the local PDF directory and cache limit, and use **重新清点** to establish the first bucket inventory. Paperfield counts its own `PutObject`, `GetObject`, and `ListObjectsV2` requests exactly; Cloudflare dashboard requests or other clients are outside that counter. The capacity estimate uses the latest bucket scan, while Cloudflare bills average GB-month usage.
 
+Windows users can configure the file interactively without displaying the secret:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\configure-r2.ps1
+```
+
 ## Recommended Choice
 
 Start with local storage while building the reading habit. When cached PDFs approach 10-20 GB, use Cloudflare R2 if simple downloads and predictable egress matter most, or Backblaze B2 if minimum storage price matters most. Supabase becomes attractive later when Paperfield also needs authentication, shared user data, and a hosted database.

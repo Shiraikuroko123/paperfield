@@ -811,15 +811,36 @@ function setPdfStatus(title, detail = "") {
   el("pdfUnavailable").hidden = true;
 }
 
+function updateReaderStorageAction() {
+  const button = el("readerCloudButton");
+  const asset = state.readerAsset;
+  button.hidden = false;
+  if (!state.storage?.configured) {
+    button.disabled = false;
+    button.textContent = "R2 未连接";
+    return;
+  }
+  if (!asset) {
+    button.disabled = true;
+    button.textContent = "转存云端";
+    return;
+  }
+  const selectedMode = el("readerStorageMode").value;
+  if (asset.cloud_available && selectedMode === asset.storage_mode) {
+    button.disabled = true;
+    button.textContent = "保存位置已应用";
+    return;
+  }
+  button.disabled = !asset.local_cached && !asset.cloud_available;
+  button.textContent = asset.cloud_available ? "应用保存位置" : "立即转存云端";
+}
+
 function renderReaderAsset(paper, asset, reloadPdf = true) {
   state.readerAsset = asset;
   el("translationPage").max = Math.max(1, asset.page_count || 1);
   el("translationPageCount").textContent = `/ ${asset.page_count || 0}`;
-  const cloudButton = el("readerCloudButton");
-  cloudButton.hidden = !state.storage?.configured;
-  cloudButton.disabled = !asset.local_cached && !asset.cloud_available;
-  cloudButton.textContent = asset.cloud_available ? "更新存储位置" : "保存到云端";
   el("readerStorageMode").value = asset.storage_mode || el("readerStorageMode").value;
+  updateReaderStorageAction();
   if (asset.pdf_available) {
     el("pdfStatus").hidden = true;
     el("pdfUnavailable").hidden = true;
@@ -888,12 +909,21 @@ async function importReaderPdf(file) {
 
 async function archiveReaderPdf() {
   const paper = state.readerPaper;
-  if (!paper || !state.storage?.configured) return;
+  if (!paper) return;
+  if (!state.storage?.configured) {
+    if (!el("storageDialog").open) el("storageDialog").showModal();
+    toast("请先完成 Cloudflare R2 配置");
+    return;
+  }
   const button = el("readerCloudButton");
   button.disabled = true;
   button.textContent = "正在上传";
   try {
-    const mode = el("readerStorageMode").value;
+    let mode = el("readerStorageMode").value;
+    if (!state.readerAsset?.cloud_available && mode === "local") {
+      mode = "hybrid";
+      el("readerStorageMode").value = mode;
+    }
     const asset = mode === "local"
       ? await api(`/api/papers/${encodeURIComponent(paper.id)}/resolve`, { method: "POST", body: JSON.stringify({ storage: mode }) })
       : await api(`/api/papers/${encodeURIComponent(paper.id)}/archive`, {
@@ -905,7 +935,7 @@ async function archiveReaderPdf() {
   } catch (error) {
     toast(error.message, true);
     button.disabled = false;
-    button.textContent = "保存到云端";
+    button.textContent = "立即转存云端";
   }
 }
 
@@ -924,7 +954,7 @@ const formatStorageBytes = (bytes = 0) => {
 function renderStorageStatus(payload) {
   state.storage = payload;
   const settings = payload.settings || {};
-  el("readerCloudButton").hidden = !state.storage.configured;
+  updateReaderStorageAction();
   el("readerStorageMode").querySelectorAll("option").forEach((option) => {
     option.disabled = !payload.configured && option.value !== "local";
   });
@@ -940,7 +970,7 @@ function renderStorageStatus(payload) {
   const usage = payload.usage || {};
   el("cloudUsageMeta").textContent = payload.configured
     ? `${payload.provider} · ${payload.bucket} · ${usage.period_start || ""} 至 ${usage.period_end || ""} · ${usage.object_count || 0} 个对象`
-    : "尚未配置对象存储，云端选项暂不可用";
+    : `尚未配置对象存储${payload.missing_configuration?.length ? ` · 缺少 ${payload.missing_configuration.join("、")}` : ""}`;
   const meters = [
     ["存储容量", usage.storage_percent || 0, `${formatStorageBytes(usage.storage_bytes || 0)} / 10 GB`],
     ["A 类操作", usage.class_a_percent || 0, `${Number(usage.class_a || 0).toLocaleString()} / 1,000,000`],
@@ -1012,7 +1042,7 @@ async function openReader(paperId) {
     const institutionNames = paper.notable_institutions?.slice(0, 2).map((item) => item.name).join(" · ");
     el("readerMeta").textContent = `${paper.authors.join(" · ") || "作者信息缺失"} · ${paper.venue || paper.source} · ${formatDate(paper.published)}${institutionNames ? ` · ${institutionNames}` : ""}`;
     el("readerSourceLink").href = paper.source_url || paper.pdf_url || "#";
-    el("readerCloudButton").hidden = !state.storage?.configured;
+    updateReaderStorageAction();
     renderReaderScore(paper);
     el("readerExplanation").innerHTML = paper.explanation
       ? explanationMarkup(paper.explanation)
@@ -1030,7 +1060,14 @@ async function generateReaderExplanation() {
   const paper = state.readerPaper;
   if (!paper) return;
   const container = el("readerExplanation");
-  container.innerHTML = `<div class="explain-head"><h3>全文精读</h3><span class="explain-mode">正在读取并分析</span></div><div class="skeleton-line"></div><div class="skeleton-line"></div><div class="skeleton-line"></div>`;
+  const stages = ["1/3 读取 PDF 全文", "2/3 整理方法与实验", "3/3 等待模型生成中文精读"];
+  container.innerHTML = `<div class="explain-head"><h3>全文精读</h3><span class="explain-mode" id="readerAnalysisStage">${stages[0]}</span></div><div class="skeleton-line"></div><div class="skeleton-line"></div><div class="skeleton-line"></div>`;
+  let stageIndex = 0;
+  const stageTimer = window.setInterval(() => {
+    stageIndex = Math.min(stages.length - 1, stageIndex + 1);
+    const stage = el("readerAnalysisStage");
+    if (stage) stage.textContent = stages[stageIndex];
+  }, 6000);
   try {
     const explanation = await api(`/api/papers/${encodeURIComponent(paper.id)}/explain`, { method: "POST", body: "{}" });
     paper.explanation = explanation;
@@ -1040,6 +1077,8 @@ async function generateReaderExplanation() {
   } catch (error) {
     container.innerHTML = `<div class="reader-explain-empty"><strong>精读生成失败</strong><p>${escapeHtml(error.message)}</p><button class="button button-secondary" type="button" data-reader-explain>重试</button></div>`;
     container.querySelector("[data-reader-explain]").addEventListener("click", generateReaderExplanation);
+  } finally {
+    window.clearInterval(stageTimer);
   }
 }
 
@@ -1310,6 +1349,7 @@ function bindEvents() {
   el("pdfUnavailableImportButton").addEventListener("click", () => el("readerPdfInput").click());
   el("readerPdfInput").addEventListener("change", () => importReaderPdf(el("readerPdfInput").files?.[0]));
   el("readerCloudButton").addEventListener("click", archiveReaderPdf);
+  el("readerStorageMode").addEventListener("change", updateReaderStorageAction);
   el("projectReaderClose").addEventListener("click", () => el("projectReaderDialog").close());
   document.querySelectorAll("[data-project-tab]").forEach((button) => button.addEventListener("click", () => setProjectTab(button.dataset.projectTab)));
   el("projectRefreshSource").addEventListener("click", () => state.projectWorkspace && openProjectReader(state.projectWorkspace.project.full_name, true));

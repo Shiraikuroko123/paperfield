@@ -44,7 +44,7 @@ SETTINGS_PATH = Path(os.environ.get("PAPERFIELD_SETTINGS_PATH", DATA_DIR / "sett
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
 INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", ROOT / "institutions.json")).expanduser().resolve()
-APP_VERSION = "0.8.0"
+APP_VERSION = "0.8.1"
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
 
@@ -2751,9 +2751,13 @@ class S3ObjectStorage:
         if self._client_value is None:
             try:
                 import boto3
+                from botocore.config import Config
             except ImportError as error:
                 raise RuntimeError("云端存储依赖未安装，请重新安装 requirements.txt") from error
-            options: dict[str, Any] = {"region_name": self.region}
+            options: dict[str, Any] = {
+                "region_name": self.region,
+                "config": Config(connect_timeout=5, read_timeout=20, retries={"max_attempts": 2, "mode": "standard"}),
+            }
             if self.endpoint:
                 options["endpoint_url"] = self.endpoint
             if self.access_key and self.secret_key:
@@ -2848,6 +2852,16 @@ class S3ObjectStorage:
         class_b_cost = max(0, class_b - 10_000_000) / 1_000_000 * 0.36
         return {
             "configured": self.configured,
+            "missing_configuration": [
+                label
+                for label, present in (
+                    ("S3 endpoint", bool(self.endpoint)),
+                    ("bucket", bool(self.bucket)),
+                    ("Access Key ID", bool(self.access_key)),
+                    ("Secret Access Key", bool(self.secret_key)),
+                )
+                if not present
+            ],
             "provider": self.provider if self.configured else "",
             "bucket": self.bucket if self.configured else "",
             "settings": values,
