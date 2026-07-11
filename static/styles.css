@@ -378,6 +378,8 @@ a { color: var(--primary); text-underline-offset: 3px; }
 .reader-header-actions { display: flex; align-items: center; gap: 8px; }
 .reader-header-actions a { padding: 7px 8px; color: var(--primary); font-size: 11px; text-decoration: none; }
 .reader-header-actions .button { min-height: 34px; font-size: 11px; }
+.reading-backup-status { color: var(--muted); font-size: 9px; white-space: nowrap; }
+.reading-backup-status.is-saved { color: var(--primary-hover); }
 .reader-storage-target { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; }
 .reader-storage-target select { min-height: 34px; border: 1px solid var(--line); border-radius: var(--radius-control); padding: 5px 24px 5px 7px; background: var(--bg); color: var(--ink); font-size: 11px; }
 .reader-grid { min-height: 0; display: grid; grid-template-columns: minmax(520px, 3fr) minmax(390px, 2fr); }
@@ -436,26 +438,52 @@ a { color: var(--primary); text-underline-offset: 3px; }
 .project-reader-grid { min-height: 0; display: grid; grid-template-columns: minmax(560px, 3fr) minmax(390px, 2fr); }
 .project-source-workspace { min-width: 0; min-height: 0; display: grid; grid-template-columns: 230px minmax(0, 1fr); background: oklch(0.19 0.012 145); border-right: 1px solid var(--line); }
 .project-file-browser { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 8px; padding: 12px 10px; border-right: 1px solid oklch(0.34 0.012 145); background: oklch(0.23 0.014 145); color: oklch(0.9 0.01 145); }
-.project-file-browser label { font-size: 11px; font-weight: 700; }
+.project-file-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.project-file-heading > strong { font-size: 11px; }
+.project-file-modes { display: flex; padding: 2px; border: 1px solid oklch(0.4 0.012 145); border-radius: var(--radius-control); background: oklch(0.2 0.012 145); }
+.project-file-modes button { width: auto; padding: 3px 7px; color: oklch(0.68 0.012 145); text-align: center; }
+.project-file-modes button.is-active { background: oklch(0.36 0.04 140); color: white; }
 .project-file-browser input { width: 100%; min-width: 0; border: 1px solid oklch(0.4 0.012 145); border-radius: var(--radius-control); padding: 6px 8px; background: oklch(0.27 0.012 145); color: oklch(0.94 0.008 145); font-size: 11px; }
 .project-file-browser nav { min-height: 0; overflow: auto; font-size: 11px; }
-.project-file-browser details { margin-left: 9px; }
-.project-file-browser summary { padding: 4px 3px; cursor: pointer; color: oklch(0.83 0.016 145); }
-.project-file-browser button { width: 100%; overflow: hidden; padding: 4px 5px; border: 0; border-radius: 4px; background: transparent; color: oklch(0.8 0.012 145); text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; font: inherit; }
+.project-file-browser summary { cursor: pointer; color: oklch(0.83 0.016 145); }
+.project-file-browser button { width: 100%; overflow: hidden; border: 0; border-radius: 4px; background: transparent; color: oklch(0.8 0.012 145); text-align: left; cursor: pointer; font: inherit; }
 .project-file-browser button:hover, .project-file-browser button.is-active { background: oklch(0.34 0.035 140); color: white; }
 .project-file-browser .project-file-group { margin: 0 0 4px; border-bottom: 1px solid oklch(0.34 0.012 145); }
 .project-file-browser .project-file-group > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 4px; color: oklch(0.94 0.008 145); font-weight: 700; }
 .project-file-browser .project-file-group > summary b { color: oklch(0.68 0.015 145); font-size: 9px; font-variant-numeric: tabular-nums; }
-.project-file-browser .project-file-group > button, .project-file-browser .project-file-group > details { margin-left: 7px; width: calc(100% - 7px); }
+.project-file-item { display: grid; gap: 2px; padding: 6px 7px; margin-bottom: 1px; }
+.project-file-item strong, .project-file-item span, .project-file-item em { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-file-item strong { color: inherit; font-size: 10.5px; font-weight: 600; }
+.project-file-item span { color: oklch(0.64 0.012 145); font-size: 8.5px; }
+.project-file-item em { color: oklch(0.72 0.025 140); font-size: 8.5px; font-style: normal; }
+.project-file-item:hover span, .project-file-item.is-active span, .project-file-item:hover em, .project-file-item.is-active em { color: oklch(0.84 0.02 140); }
+.project-guide-section { padding-bottom: 6px; margin-bottom: 5px; border-bottom: 1px solid oklch(0.34 0.012 145); }
+.project-guide-section header { display: flex; align-items: center; justify-content: space-between; padding: 7px 4px 5px; }
+.project-guide-section header strong { color: oklch(0.94 0.008 145); font-size: 10.5px; }
+.project-guide-section header span { color: oklch(0.64 0.012 145); font-size: 9px; }
+.project-file-empty { padding: 18px 6px; color: oklch(0.68 0.012 145); font-size: 10px; line-height: 1.5; }
 .project-code-pane { min-width: 0; min-height: 0; display: grid; grid-template-rows: 38px minmax(0, 1fr); color: oklch(0.9 0.008 145); }
-.project-code-toolbar { display: flex; align-items: center; min-width: 0; padding: 0 13px; border-bottom: 1px solid oklch(0.34 0.012 145); background: oklch(0.22 0.012 145); }
-.project-code-toolbar span { overflow: hidden; color: oklch(0.76 0.015 145); font-family: Consolas, "Cascadia Code", monospace; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.project-code-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 0 8px 0 13px; border-bottom: 1px solid oklch(0.34 0.012 145); background: oklch(0.22 0.012 145); }
+#projectCurrentPath { min-width: 0; overflow: hidden; color: oklch(0.76 0.015 145); font-family: Consolas, "Cascadia Code", monospace; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.project-code-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 5px; }
+.project-code-actions span { color: oklch(0.64 0.012 145); font-size: 8.5px; white-space: nowrap; }
+.project-code-actions button { width: auto; padding: 4px 6px; border: 0; border-radius: 4px; background: transparent; color: oklch(0.72 0.012 145); cursor: pointer; font-size: 9px; }
+.project-code-actions button:hover, .project-code-actions button.is-active { background: oklch(0.34 0.035 140); color: white; }
 .project-code-pane pre { min-width: 0; min-height: 0; margin: 0; overflow: auto; padding: 15px 17px 36px; tab-size: 2; }
-.project-code-pane code { color: oklch(0.9 0.008 145); font-family: Consolas, "Cascadia Code", monospace; font-size: 11px; line-height: 1.62; white-space: pre; }
+.project-code-pane code { display: block; counter-reset: project-line; color: oklch(0.9 0.008 145); font-family: Consolas, "Cascadia Code", monospace; font-size: 11px; line-height: 1.62; white-space: pre; }
+.project-code-line { display: block; min-width: max-content; counter-increment: project-line; }
+.project-code-line::before { content: counter(project-line); display: inline-block; width: 4ch; margin-right: 14px; color: oklch(0.52 0.01 145); text-align: right; user-select: none; }
+.project-code-pane code.is-wrapped { white-space: pre-wrap; overflow-wrap: anywhere; }
+.project-code-pane code.is-wrapped .project-code-line { min-width: 0; padding-left: 5.5ch; text-indent: -5.5ch; }
 .project-insight-pane { min-width: 0; min-height: 0; display: grid; grid-template-rows: 48px minmax(0, 1fr); }
 .project-reader-panel { min-height: 0; overflow: auto; padding: 18px 20px 34px; }
 .project-reader-panel[hidden] { display: none; }
+.project-document-panel { padding: 0; }
+.project-document-toolbar { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 38px; padding: 0 20px; border-bottom: 1px solid var(--line); background: var(--bg); }
+.project-document-toolbar span { min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.project-document-toolbar button { flex: 0 0 auto; font-size: 9px; }
 .project-readme { max-width: 78ch; color: var(--ink-soft); font-size: 12px; line-height: 1.72; overflow-wrap: anywhere; }
+.project-document-panel .project-readme { padding: 18px 20px 34px; }
 .project-readme > :first-child { margin-top: 0; }
 .project-readme h1, .project-readme h2, .project-readme h3, .project-readme h4 { margin: 1.7em 0 0.6em; color: var(--ink); line-height: 1.35; }
 .project-readme h1 { padding-bottom: 8px; border-bottom: 1px solid var(--line); font-size: 20px; }
@@ -569,6 +597,10 @@ a { color: var(--primary); text-underline-offset: 3px; }
   .connector-result { align-items: flex-start; flex-direction: column; }
   .project-source-workspace { grid-template-columns: 140px minmax(0, 1fr); }
   .project-file-browser { padding: 9px 7px; }
+  .project-file-heading { align-items: stretch; flex-direction: column; }
+  .project-file-heading > strong { white-space: nowrap; }
+  .project-file-modes { width: 100%; }
+  .project-file-modes button { flex: 1; min-height: 30px; white-space: nowrap; }
   .project-code-pane pre { padding: 12px; }
   .storage-dialog { width: 100vw; max-height: 100dvh; border-radius: 0; }
   .storage-dialog-body { max-height: calc(100dvh - 68px); }

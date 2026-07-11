@@ -12,6 +12,7 @@ import posixpath
 import re
 import shutil
 import sqlite3
+import textwrap
 import threading
 import time
 import urllib.error
@@ -44,7 +45,7 @@ SETTINGS_PATH = Path(os.environ.get("PAPERFIELD_SETTINGS_PATH", DATA_DIR / "sett
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
 INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", ROOT / "institutions.json")).expanduser().resolve()
-APP_VERSION = "0.8.1"
+APP_VERSION = "0.9.0"
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
 
@@ -599,15 +600,58 @@ class PaperStore:
             )
 
     def project_chat_history(self, full_name: str, limit: int = 12) -> list[dict[str, Any]]:
+        limit_clause = " LIMIT ?" if limit > 0 else ""
+        parameters: tuple[Any, ...] = (full_name, limit) if limit > 0 else (full_name,)
+        with self.connect() as db:
+            rows = db.execute(
+                f"""
+                SELECT role, content, created_at FROM project_chat_messages
+                WHERE project_full_name = ? ORDER BY id DESC{limit_clause}
+                """,
+                parameters,
+            ).fetchall()
+        return [dict(row) for row in reversed(rows)]
+
+    def has_local_project_reading(self, full_name: str) -> bool:
+        with self.connect() as db:
+            asset = db.execute(
+                "SELECT explanation_json FROM project_assets WHERE project_full_name = ?", (full_name,),
+            ).fetchone()
+            chat = db.execute(
+                "SELECT 1 FROM project_chat_messages WHERE project_full_name = ? LIMIT 1", (full_name,),
+            ).fetchone()
+        return bool((asset and asset["explanation_json"]) or chat)
+
+    def restore_project_reading(self, full_name: str, payload: dict[str, Any]) -> None:
+        explanation = payload.get("explanation") if isinstance(payload.get("explanation"), dict) else None
+        messages = payload.get("chat") if isinstance(payload.get("chat"), list) else []
+        if explanation:
+            self.save_project_explanation(full_name, explanation)
+        with self.connect() as db:
+            db.execute("DELETE FROM project_chat_messages WHERE project_full_name = ?", (full_name,))
+            db.executemany(
+                "INSERT INTO project_chat_messages (project_full_name, role, content, created_at) VALUES (?, ?, ?, ?)",
+                [
+                    (
+                        full_name,
+                        str(item.get("role", "")),
+                        str(item.get("content", ""))[:30000],
+                        str(item.get("created_at", "")) or utc_now().isoformat(),
+                    )
+                    for item in messages
+                    if item.get("role") in {"user", "assistant"} and item.get("content")
+                ],
+            )
+
+    def project_ids_with_reading(self) -> list[str]:
         with self.connect() as db:
             rows = db.execute(
                 """
-                SELECT role, content, created_at FROM project_chat_messages
-                WHERE project_full_name = ? ORDER BY id DESC LIMIT ?
-                """,
-                (full_name, limit),
+                SELECT project_full_name FROM project_assets WHERE explanation_json != ''
+                UNION SELECT DISTINCT project_full_name FROM project_chat_messages
+                """
             ).fetchall()
-        return [dict(row) for row in reversed(rows)]
+        return [str(row[0]) for row in rows]
 
     def count_projects(self) -> int:
         with self.connect() as db:
@@ -876,6 +920,10 @@ class PaperStore:
                 (key, max(0, size_bytes), utc_now().isoformat()),
             )
 
+    def has_cloud_object(self, key: str) -> bool:
+        with self.connect() as db:
+            return bool(db.execute("SELECT 1 FROM cloud_objects WHERE object_key = ? LIMIT 1", (key,)).fetchone())
+
     def save_cloud_inventory(self, objects: list[tuple[str, int]], error_text: str = "") -> dict[str, Any]:
         now = utc_now().isoformat()
         with self.connect() as db:
@@ -937,15 +985,74 @@ class PaperStore:
             )
 
     def chat_history(self, paper_id: str, limit: int = 12) -> list[dict[str, Any]]:
+        limit_clause = " LIMIT ?" if limit > 0 else ""
+        parameters: tuple[Any, ...] = (paper_id, limit) if limit > 0 else (paper_id,)
+        with self.connect() as db:
+            rows = db.execute(
+                f"""
+                SELECT role, content, created_at FROM paper_chat_messages
+                WHERE paper_id = ? ORDER BY id DESC{limit_clause}
+                """,
+                parameters,
+            ).fetchall()
+        return [dict(row) for row in reversed(rows)]
+
+    def has_local_paper_reading(self, paper_id: str) -> bool:
+        with self.connect() as db:
+            state = db.execute("SELECT 1 FROM user_state WHERE paper_id = ? LIMIT 1", (paper_id,)).fetchone()
+            chat = db.execute("SELECT 1 FROM paper_chat_messages WHERE paper_id = ? LIMIT 1", (paper_id,)).fetchone()
+        return bool(state or chat)
+
+    def restore_paper_reading(self, paper_id: str, payload: dict[str, Any]) -> None:
+        state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
+        explanation = state.get("explanation") if isinstance(state.get("explanation"), dict) else None
+        messages = payload.get("chat") if isinstance(payload.get("chat"), list) else []
+        with self.connect() as db:
+            db.execute(
+                """
+                INSERT INTO user_state (paper_id, status, favorite, notes, explanation_json, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(paper_id) DO UPDATE SET
+                    status=excluded.status,
+                    favorite=excluded.favorite,
+                    notes=excluded.notes,
+                    explanation_json=excluded.explanation_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    paper_id,
+                    str(state.get("status", "unread")),
+                    int(bool(state.get("favorite"))),
+                    str(state.get("notes", ""))[:5000],
+                    json.dumps(explanation, ensure_ascii=False) if explanation else "",
+                    str(payload.get("updated_at", "")) or utc_now().isoformat(),
+                ),
+            )
+            db.execute("DELETE FROM paper_chat_messages WHERE paper_id = ?", (paper_id,))
+            db.executemany(
+                "INSERT INTO paper_chat_messages (paper_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+                [
+                    (
+                        paper_id,
+                        str(item.get("role", "")),
+                        str(item.get("content", ""))[:20000],
+                        str(item.get("created_at", "")) or utc_now().isoformat(),
+                    )
+                    for item in messages
+                    if item.get("role") in {"user", "assistant"} and item.get("content")
+                ],
+            )
+
+    def paper_ids_with_reading(self) -> list[str]:
         with self.connect() as db:
             rows = db.execute(
                 """
-                SELECT role, content, created_at FROM paper_chat_messages
-                WHERE paper_id = ? ORDER BY id DESC LIMIT ?
-                """,
-                (paper_id, limit),
+                SELECT paper_id FROM user_state
+                WHERE explanation_json != '' OR status != 'unread' OR favorite != 0 OR notes != ''
+                UNION SELECT DISTINCT paper_id FROM paper_chat_messages
+                """
             ).fetchall()
-        return [dict(row) for row in reversed(rows)]
+        return [str(row[0]) for row in rows]
 
     def begin_sync(self) -> int:
         with self.connect() as db:
@@ -2141,6 +2248,16 @@ class ProjectAssetService:
         ".git", ".github", "node_modules", "vendor", "dist", "build", "target", "__pycache__",
         ".venv", "venv", "datasets", "data", "checkpoints", "weights", "outputs", "logs",
     }
+    LANGUAGE_LABELS = {
+        ".py": "Python", ".pyi": "Python", ".js": "JavaScript", ".mjs": "JavaScript", ".cjs": "JavaScript",
+        ".ts": "TypeScript", ".tsx": "TSX", ".jsx": "JSX", ".java": "Java", ".kt": "Kotlin",
+        ".c": "C", ".cc": "C++", ".cpp": "C++", ".h": "C/C++ Header", ".hpp": "C++ Header",
+        ".go": "Go", ".rs": "Rust", ".rb": "Ruby", ".php": "PHP", ".swift": "Swift",
+        ".sh": "Shell", ".ps1": "PowerShell", ".bat": "Batch", ".yaml": "YAML", ".yml": "YAML",
+        ".json": "JSON", ".toml": "TOML", ".ini": "INI", ".cfg": "Config", ".md": "Markdown",
+        ".rst": "reStructuredText", ".txt": "Text", ".html": "HTML", ".css": "CSS", ".scss": "SCSS",
+        ".sql": "SQL", ".proto": "Protocol Buffers", ".ipynb": "Notebook",
+    }
 
     def __init__(self, store: PaperStore) -> None:
         self.store = store
@@ -2305,6 +2422,111 @@ class ProjectAssetService:
             grouped.setdefault(key, {"key": key, "label": label, "files": []})["files"].append(path)
         return [grouped[key] for key in order if key in grouped]
 
+    @classmethod
+    def _language(cls, path: str) -> str:
+        name = Path(path).name.lower()
+        if name == "dockerfile":
+            return "Dockerfile"
+        if name == "makefile":
+            return "Makefile"
+        return cls.LANGUAGE_LABELS.get(Path(path).suffix.lower(), "Text")
+
+    def file_entries(self, files: list[str]) -> list[dict[str, Any]]:
+        entries = []
+        for path in files:
+            key, label = self._file_group(path)
+            pure = Path(path)
+            directory = pure.parent.as_posix()
+            entries.append(
+                {
+                    "path": path,
+                    "name": pure.name,
+                    "directory": "" if directory == "." else directory,
+                    "group_key": key,
+                    "group_label": label,
+                    "language": self._language(path),
+                }
+            )
+        return entries
+
+    @classmethod
+    def _reading_route(cls, path: str) -> tuple[str, str, int] | None:
+        lower = path.lower()
+        name = Path(path).name.lower()
+        depth = len(Path(path).parts)
+        group_key, _ = cls._file_group(path)
+        root_manifest = name in {
+            "requirements.txt", "pyproject.toml", "setup.py", "setup.cfg", "package.json",
+            "environment.yml", "dockerfile", "compose.yaml", "docker-compose.yml", "makefile",
+        }
+        if depth == 1 and name.startswith("readme"):
+            return "start", "项目总览与官方阅读入口", 100
+        if depth <= 2 and root_manifest:
+            return "start", "安装、依赖或启动方式", 94 - depth
+        if re.search(r"(^|/)(main|app|server|cli|run)\.(py|js|ts|tsx|go|rs|java)$", lower):
+            return "start", "程序入口，先理解输入与启动流程", 92 - depth
+        if any(marker in lower for marker in ("infer", "inference", "demo", "serve", "predict")):
+            return "flow", "推理、演示或服务入口", 88 - min(depth, 6)
+        if any(marker in lower for marker in ("train", "training", "finetune", "eval", "benchmark")):
+            return "flow", "训练或评测链路", 86 - min(depth, 6)
+        if group_key == "source" and any(marker in lower for marker in ("model", "agent", "policy", "network", "core", "module")):
+            return "core", "核心模型或任务逻辑", 82 - min(depth, 8)
+        if group_key == "source":
+            return "core", "主要源码实现", 70 - min(depth, 8)
+        if group_key == "config":
+            return "setup", "实验配置与依赖声明", 74 - min(depth, 8)
+        if group_key == "docs" or name.startswith("readme"):
+            return "docs", "补充文档或使用示例", 66 - min(depth, 8)
+        return None
+
+    def reading_sections(self, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        definitions = [
+            ("start", "从这里开始", 7),
+            ("flow", "运行链路", 7),
+            ("core", "核心实现", 10),
+            ("setup", "配置与依赖", 6),
+            ("docs", "补充文档", 6),
+        ]
+        candidates: dict[str, list[dict[str, Any]]] = {key: [] for key, _, _ in definitions}
+        for entry in entries:
+            route = self._reading_route(entry["path"])
+            if not route:
+                continue
+            section, reason, score = route
+            candidates[section].append({**entry, "reason": reason, "priority": score})
+        sections = []
+        for key, label, maximum in definitions:
+            items = sorted(
+                candidates[key],
+                key=lambda item: (-item["priority"], len(Path(item["path"]).parts), item["path"].lower()),
+            )[:maximum]
+            if items:
+                sections.append({"key": key, "label": label, "items": items})
+        return sections
+
+    @staticmethod
+    def _unwrap_markdown_divs(value: str) -> str:
+        output: list[str] = []
+        buffered: list[str] = []
+        depth = 0
+        for line in value.splitlines():
+            if re.fullmatch(r"\s*<div\b[^>]*>\s*", line, flags=re.IGNORECASE):
+                depth += 1
+                continue
+            if depth and re.fullmatch(r"\s*</div>\s*", line, flags=re.IGNORECASE):
+                depth -= 1
+                if depth == 0:
+                    output.extend(textwrap.dedent("\n".join(buffered)).splitlines())
+                    buffered = []
+                continue
+            if depth:
+                buffered.append(line.lstrip())
+            else:
+                output.append(line)
+        if buffered:
+            output.extend(buffered)
+        return "\n".join(output)
+
     @staticmethod
     def _readme_html(markdown_text: str, full_name: str, branch: str, readme_relative: str) -> str:
         if not markdown_text:
@@ -2317,6 +2539,7 @@ class ProjectAssetService:
         markdown_text = re.sub(
             r"<(script|style)\b[^>]*>.*?</\1\s*>", "", markdown_text, flags=re.IGNORECASE | re.DOTALL,
         )
+        markdown_text = ProjectAssetService._unwrap_markdown_divs(markdown_text)
         rendered = markdown.markdown(markdown_text, extensions=["fenced_code", "tables", "sane_lists"])
         allowed_tags = {
             "a", "blockquote", "br", "code", "del", "details", "em", "h1", "h2", "h3", "h4", "h5", "h6",
@@ -2340,7 +2563,21 @@ class ProjectAssetService:
         if not target.is_relative_to(root.resolve()) or not target.is_file():
             return None
         content = target.read_text(encoding="utf-8", errors="replace")[:limit]
-        return {"path": target.relative_to(root).as_posix(), "content": content, "truncated": target.stat().st_size > limit}
+        path = target.relative_to(root).as_posix()
+        payload = {
+            "path": path,
+            "content": content,
+            "truncated": target.stat().st_size > limit,
+            "language": self._language(path),
+            "line_count": content.count("\n") + (1 if content else 0),
+            "size_bytes": target.stat().st_size,
+        }
+        if target.suffix.lower() == ".md":
+            project = self.store.get_project(full_name) or {}
+            payload["rendered_html"] = self._readme_html(
+                content, full_name, project.get("default_branch", ""), path,
+            )
+        return payload
 
     def workspace(self, project: dict[str, Any], asset: dict[str, Any] | None = None) -> dict[str, Any]:
         value = asset or self.store.get_project_asset(project["full_name"]) or {}
@@ -2353,16 +2590,19 @@ class ProjectAssetService:
         root = self._root(project["full_name"], value)
         if root and readme_path and readme_path.exists():
             readme_relative = readme_path.relative_to(root).as_posix()
+        entries = self.file_entries(files)
         return {
             "project": project,
             "ready": bool(files),
             "files": files,
             "file_groups": self.file_groups(files),
+            "file_entries": entries,
+            "reading_sections": self.reading_sections(entries),
             "readme": readme,
             "readme_html": self._readme_html(
                 readme, project["full_name"], project.get("default_branch", ""), readme_relative,
             ),
-            "readme_path": readme_path.name if readme_path else "",
+            "readme_path": readme_relative or (readme_path.name if readme_path else ""),
             "file_count": len(files),
             "source_chars": int(value.get("source_chars", 0) or 0),
             "checked_at": value.get("checked_at", ""),
@@ -2773,6 +3013,17 @@ class S3ObjectStorage:
         self.store.record_cloud_operation("class_a", size)
         self.store.save_cloud_object(key, size)
 
+    def upload_bytes(self, content: bytes, key: str, content_type: str = "application/json") -> None:
+        self.client().put_object(Bucket=self.bucket, Key=key, Body=content, ContentType=content_type)
+        self.store.record_cloud_operation("class_a", len(content))
+        self.store.save_cloud_object(key, len(content))
+
+    def download_bytes(self, key: str) -> bytes:
+        response = self.client().get_object(Bucket=self.bucket, Key=key)
+        content = response["Body"].read()
+        self.store.record_cloud_operation("class_b", len(content))
+        return content
+
     def download(self, key: str, target: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_suffix(target.suffix + ".cloudpart")
@@ -2881,6 +3132,153 @@ class S3ObjectStorage:
                 "estimate_notice": "操作数仅统计 Paperfield 发起的请求；容量来自每日桶清点，费用按当前容量估算。",
             },
         }
+
+
+class ReadingArchiveService:
+    def __init__(self, store: PaperStore, cloud: S3ObjectStorage) -> None:
+        self.store = store
+        self.cloud = cloud
+        self._locks: dict[str, threading.Lock] = {}
+        self._pending: dict[str, int] = {}
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _key(kind: str, identifier: str) -> str:
+        digest = hashlib.sha256(identifier.encode("utf-8")).hexdigest()[:24]
+        return f"{kind}/{digest}/reading-state.json"
+
+    def _item_lock(self, key: str) -> threading.Lock:
+        with self._lock:
+            return self._locks.setdefault(key, threading.Lock())
+
+    def backup_paper(self, paper_id: str) -> bool:
+        if not self.cloud.configured:
+            return False
+        key = self._key("papers", paper_id)
+        with self._item_lock(key):
+            paper = self.store.get_paper(paper_id)
+            if not paper:
+                return False
+            payload = {
+                "schema_version": 1,
+                "kind": "paper-reading",
+                "paper_id": paper_id,
+                "updated_at": utc_now().isoformat(),
+                "state": {
+                    "status": paper.get("status", "unread"),
+                    "favorite": bool(paper.get("favorite")),
+                    "notes": paper.get("notes", ""),
+                    "explanation": paper.get("explanation"),
+                },
+                "chat": self.store.chat_history(paper_id, 0),
+            }
+            content = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            self.cloud.upload_bytes(content, key)
+            return True
+
+    def paper_backup_available(self, paper_id: str) -> bool:
+        return self.cloud.configured and self.store.has_cloud_object(self._key("papers", paper_id))
+
+    def paper_backup_pending(self, paper_id: str) -> bool:
+        with self._lock:
+            return self._pending.get(self._key("papers", paper_id), 0) > 0
+
+    def restore_paper_if_needed(self, paper_id: str) -> bool:
+        if not self.cloud.configured or self.store.has_local_paper_reading(paper_id):
+            return False
+        key = self._key("papers", paper_id)
+        if not self.store.has_cloud_object(key):
+            return False
+        payload = json.loads(self.cloud.download_bytes(key).decode("utf-8"))
+        if payload.get("paper_id") != paper_id:
+            raise ValueError("云端论文阅读档案标识不匹配")
+        self.store.restore_paper_reading(paper_id, payload)
+        return True
+
+    def backup_project(self, full_name: str) -> bool:
+        if not self.cloud.configured:
+            return False
+        key = self._key("projects", full_name)
+        with self._item_lock(key):
+            asset = self.store.get_project_asset(full_name) or {}
+            payload = {
+                "schema_version": 1,
+                "kind": "project-reading",
+                "project_full_name": full_name,
+                "updated_at": utc_now().isoformat(),
+                "explanation": asset.get("explanation"),
+                "chat": self.store.project_chat_history(full_name, 0),
+            }
+            content = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            self.cloud.upload_bytes(content, key)
+            return True
+
+    def project_backup_available(self, full_name: str) -> bool:
+        return self.cloud.configured and self.store.has_cloud_object(self._key("projects", full_name))
+
+    def project_backup_pending(self, full_name: str) -> bool:
+        with self._lock:
+            return self._pending.get(self._key("projects", full_name), 0) > 0
+
+    def restore_project_if_needed(self, full_name: str) -> bool:
+        if not self.cloud.configured or self.store.has_local_project_reading(full_name):
+            return False
+        key = self._key("projects", full_name)
+        if not self.store.has_cloud_object(key):
+            return False
+        payload = json.loads(self.cloud.download_bytes(key).decode("utf-8"))
+        if payload.get("project_full_name") != full_name:
+            raise ValueError("云端项目阅读档案标识不匹配")
+        self.store.restore_project_reading(full_name, payload)
+        return True
+
+    def backup_paper_async(self, paper_id: str) -> None:
+        self._backup_async("paper", paper_id)
+
+    def backup_project_async(self, full_name: str) -> None:
+        self._backup_async("project", full_name)
+
+    def _backup_async(self, kind: str, identifier: str) -> None:
+        if not self.cloud.configured:
+            return
+        key = self._key("papers" if kind == "paper" else "projects", identifier)
+        with self._lock:
+            self._pending[key] = self._pending.get(key, 0) + 1
+
+        def run() -> None:
+            try:
+                if kind == "paper":
+                    self.backup_paper(identifier)
+                else:
+                    self.backup_project(identifier)
+            except Exception as error:
+                print(f"Cloud reading backup failed for {kind} {identifier}: {error}")
+            finally:
+                with self._lock:
+                    remaining = self._pending.get(key, 1) - 1
+                    if remaining > 0:
+                        self._pending[key] = remaining
+                    else:
+                        self._pending.pop(key, None)
+
+        threading.Thread(target=run, name=f"reading-backup-{kind}", daemon=True).start()
+
+    def backup_existing_async(self) -> None:
+        if not self.cloud.configured:
+            return
+
+        def run() -> None:
+            try:
+                for paper_id in self.store.paper_ids_with_reading():
+                    if not self.paper_backup_available(paper_id):
+                        self.backup_paper(paper_id)
+                for full_name in self.store.project_ids_with_reading():
+                    if not self.project_backup_available(full_name):
+                        self.backup_project(full_name)
+            except Exception as error:
+                print(f"Cloud reading backfill failed: {error}")
+
+        threading.Thread(target=run, name="reading-backup-backfill", daemon=True).start()
 
 
 class PaperAssetService:
@@ -3727,6 +4125,7 @@ PROJECT_ASSETS = ProjectAssetService(STORE)
 PROJECT_EXPLAINER = ProjectExplainer(STORE, PROJECT_ASSETS, EXPLAINER)
 SETTINGS = RuntimeSettings(SETTINGS_PATH)
 CLOUD = S3ObjectStorage(STORE)
+READING_ARCHIVE = ReadingArchiveService(STORE, CLOUD)
 ASSETS = PaperAssetService(STORE, CLOUD, SETTINGS)
 TRANSLATOR = TranslationService()
 REFRESH_STATE: dict[str, Any] = {"running": False, "message": "", "lock": threading.Lock()}
@@ -4003,7 +4402,7 @@ def rotate_daily_candidates(
     rotation_pool = ranked[:max(limit, limit * 7)]
     block_count = max(1, len(rotation_pool) // limit)
     topic_offset = int(hashlib.sha256(topic.encode("utf-8")).hexdigest()[:8], 16)
-    block_index = (day.toordinal() + topic_offset) % block_count
+    block_index = (day.toordinal() // 7 + topic_offset) % block_count
     rotated = rotation_pool[block_index * limit:(block_index + 1) * limit]
     rotated_ids = {entry[1]["id"] for entry in rotated}
     return [*rotated, *(entry for entry in ranked if entry[1]["id"] not in rotated_ids)]
@@ -4018,7 +4417,8 @@ def daily_recommendations(topic: str = "", per_topic: int | None = None) -> dict
     groups = []
     items = []
     seen: set[str] = set()
-    rotation_date = utc_now().date()
+    today = utc_now().date()
+    rotation_week_start = today - timedelta(days=today.weekday())
     for current_topic in topics:
         candidates = [paper for paper in papers if current_topic in paper.get("topics", [])]
         recent = [paper for paper in candidates if not paper.get("published") or paper["published"] >= cutoff]
@@ -4042,9 +4442,9 @@ def daily_recommendations(topic: str = "", per_topic: int | None = None) -> dict
             ranked.append((score["total"], paper, score, asset))
         ranked.sort(key=lambda item: (item[0], item[1].get("published", "")), reverse=True)
         available = [entry for entry in ranked if entry[1]["id"] not in seen]
-        ranked_for_today = rotate_daily_candidates(available, limit, current_topic, rotation_date)
+        ranked_for_week = rotate_daily_candidates(available, limit, current_topic, rotation_week_start)
         selected = []
-        for _, paper, score, asset in ranked_for_today:
+        for _, paper, score, asset in ranked_for_week:
             if paper["id"] in seen:
                 continue
             item = {
@@ -4068,8 +4468,9 @@ def daily_recommendations(topic: str = "", per_topic: int | None = None) -> dict
         "total": len(items),
         "per_topic": limit,
         "window_days": window_days,
-        "rotation_date": rotation_date.isoformat(),
-        "rotation_policy": "同日稳定、按日轮换七组高分候选",
+        "rotation_week_start": rotation_week_start.isoformat(),
+        "rotation_week_end": (rotation_week_start + timedelta(days=6)).isoformat(),
+        "rotation_policy": "同一自然周稳定、每周轮换七组高分候选",
         "weights": CONFIG.get("recommendation_weights", {}),
         "generated_at": utc_now().isoformat(),
     }
@@ -4428,8 +4829,15 @@ class AppHandler(SimpleHTTPRequestHandler):
             if not project:
                 self.send_json({"error": "项目不存在"}, 404)
                 return
+            try:
+                READING_ARCHIVE.restore_project_if_needed(full_name)
+            except Exception as error:
+                print(f"Cloud project reading restore failed for {full_name}: {error}")
             if action == "workspace":
-                self.send_json(PROJECT_ASSETS.workspace(project))
+                workspace = PROJECT_ASSETS.workspace(project)
+                workspace["reading_backup_available"] = READING_ARCHIVE.project_backup_available(full_name)
+                workspace["reading_backup_pending"] = READING_ARCHIVE.project_backup_pending(full_name)
+                self.send_json(workspace)
                 return
             if action == "source":
                 relative_path = (params.get("path") or [""])[0]
@@ -4451,6 +4859,12 @@ class AppHandler(SimpleHTTPRequestHandler):
             if not paper:
                 self.send_json({"error": "论文不存在"}, 404)
                 return
+            if action == "chat":
+                try:
+                    if READING_ARCHIVE.restore_paper_if_needed(paper_id):
+                        paper = STORE.get_paper(paper_id) or paper
+                except Exception as error:
+                    print(f"Cloud paper reading restore failed for {paper_id}: {error}")
             if action == "asset":
                 self.send_json(ASSETS.public_asset(paper_id))
                 return
@@ -4486,7 +4900,14 @@ class AppHandler(SimpleHTTPRequestHandler):
             paper_id = urllib.parse.unquote(parsed.path.removeprefix("/api/papers/"))
             paper = STORE.get_paper(paper_id)
             if paper:
+                try:
+                    if READING_ARCHIVE.restore_paper_if_needed(paper_id):
+                        paper = STORE.get_paper(paper_id) or paper
+                except Exception as error:
+                    print(f"Cloud paper reading restore failed for {paper_id}: {error}")
                 paper["asset"] = ASSETS.public_asset(paper_id)
+                paper["reading_backup_available"] = READING_ARCHIVE.paper_backup_available(paper_id)
+                paper["reading_backup_pending"] = READING_ARCHIVE.paper_backup_pending(paper_id)
             self.send_json(paper or {"error": "论文不存在"}, 200 if paper else 404)
             return
         if parsed.path == "/api/options":
@@ -4604,14 +5025,22 @@ class AppHandler(SimpleHTTPRequestHandler):
             if not project:
                 self.send_json({"error": "项目不存在"}, 404)
                 return
+            try:
+                READING_ARCHIVE.restore_project_if_needed(full_name)
+            except Exception as error:
+                print(f"Cloud project reading restore failed for {full_name}: {error}")
             if action == "workspace":
                 payload = self.read_json()
-                self.send_json(PROJECT_ASSETS.prepare(project, bool(payload.get("force"))))
+                workspace = PROJECT_ASSETS.prepare(project, bool(payload.get("force")))
+                workspace["reading_backup_available"] = READING_ARCHIVE.project_backup_available(full_name)
+                workspace["reading_backup_pending"] = READING_ARCHIVE.project_backup_pending(full_name)
+                self.send_json(workspace)
                 return
             if action == "explain":
                 try:
                     explanation = PROJECT_EXPLAINER.explain(project)
                     STORE.save_project_explanation(full_name, explanation)
+                    READING_ARCHIVE.backup_project_async(full_name)
                     self.send_json(explanation)
                 except Exception as error:
                     self.send_json({"error": str(error)}, 503)
@@ -4622,7 +5051,9 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json({"error": "请输入关于项目代码的问题"}, 400)
                 return
             try:
-                self.send_json(PROJECT_EXPLAINER.ask(project, question, compact_text(str(payload.get("selected_path", "")))))
+                answer = PROJECT_EXPLAINER.ask(project, question, compact_text(str(payload.get("selected_path", ""))))
+                READING_ARCHIVE.backup_project_async(full_name)
+                self.send_json(answer)
             except Exception as error:
                 self.send_json({"error": str(error)}, 503)
             return
@@ -4634,8 +5065,14 @@ class AppHandler(SimpleHTTPRequestHandler):
             if not paper:
                 self.send_json({"error": "论文不存在"}, 404)
                 return
+            try:
+                if READING_ARCHIVE.restore_paper_if_needed(paper_id):
+                    paper = STORE.get_paper(paper_id) or paper
+            except Exception as error:
+                print(f"Cloud paper reading restore failed for {paper_id}: {error}")
             if action == "state":
                 updated = STORE.update_state(paper_id, self.read_json())
+                READING_ARCHIVE.backup_paper_async(paper_id)
                 self.send_json(updated)
                 return
             if action == "import":
@@ -4684,6 +5121,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                     return
                 STORE.add_chat_message(paper_id, "user", question)
                 STORE.add_chat_message(paper_id, "assistant", answer["answer"])
+                READING_ARCHIVE.backup_paper_async(paper_id)
                 self.send_json(answer)
                 return
             try:
@@ -4700,6 +5138,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json({"error": str(error)}, 503)
                 return
             STORE.save_explanation(paper_id, explanation)
+            READING_ARCHIVE.backup_paper_async(paper_id)
             self.send_json(explanation)
             return
         self.send_json({"error": "接口不存在"}, 404)
@@ -4718,6 +5157,7 @@ def main() -> None:
         return
     if os.environ.get("PAPERFIELD_AUTO_REFRESH", "1").strip() != "0":
         threading.Thread(target=scheduler_loop, daemon=True, name="refresh-scheduler").start()
+    READING_ARCHIVE.backup_existing_async()
     server = ThreadingHTTPServer((args.host, args.port), AppHandler)
     print(f"Paperfield is running at http://{args.host}:{args.port}")
     try:

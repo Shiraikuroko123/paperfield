@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.0
+
+- Replaced repeated repository trees with a curated reading route and a separate flat all-files view.
+- Added file reasons, language and line metadata, stable line numbers, wrapping, and copy controls.
+- Rendered any selected Markdown file in the document pane with a one-click return to the root README.
+- Renamed the default paper list to weekly picks and kept each natural week's selection stable.
+- Added automatic R2 backup and restore for paper/project explanations, reading state, notes, and complete chats.
+
 ## 0.8.1
 
 - Added a local interactive R2 configuration script with hidden Secret Access Key input.

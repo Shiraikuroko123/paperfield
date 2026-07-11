@@ -87,14 +87,14 @@ class ExplanationTests(unittest.TestCase):
 
 
 class FeedTests(unittest.TestCase):
-    def test_daily_candidate_rotation_is_stable_today_and_changes_tomorrow(self):
+    def test_weekly_candidate_rotation_is_stable_and_changes_next_week(self):
         ranked = [(100 - index, {"id": f"paper-{index}"}, {}, None) for index in range(35)]
-        today = date(2026, 7, 11)
-        first = APP.rotate_daily_candidates(ranked, 5, "具身智能", today)[:5]
-        repeated = APP.rotate_daily_candidates(ranked, 5, "具身智能", today)[:5]
-        tomorrow = APP.rotate_daily_candidates(ranked, 5, "具身智能", today + timedelta(days=1))[:5]
+        this_week = date(2026, 7, 6)
+        first = APP.rotate_daily_candidates(ranked, 5, "具身智能", this_week)[:5]
+        repeated = APP.rotate_daily_candidates(ranked, 5, "具身智能", this_week)[:5]
+        next_week = APP.rotate_daily_candidates(ranked, 5, "具身智能", this_week + timedelta(days=7))[:5]
         self.assertEqual([item[1]["id"] for item in first], [item[1]["id"] for item in repeated])
-        self.assertTrue({item[1]["id"] for item in first}.isdisjoint({item[1]["id"] for item in tomorrow}))
+        self.assertTrue({item[1]["id"] for item in first}.isdisjoint({item[1]["id"] for item in next_week}))
 
     def test_runtime_settings_persist_pdf_directory_cache_and_billing_day(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -171,20 +171,73 @@ class FeedTests(unittest.TestCase):
                 ["S3 endpoint", "bucket", "Access Key ID", "Secret Access Key"],
             )
 
+    def test_reading_archive_backs_up_and_restores_explanation_and_chat(self):
+        class FakeCloud:
+            configured = True
+
+            def __init__(self, store):
+                self.store = store
+                self.objects = {}
+
+            def upload_bytes(self, content, key, content_type="application/json"):
+                self.objects[key] = content
+                self.store.save_cloud_object(key, len(content))
+
+            def download_bytes(self, key):
+                return self.objects[key]
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = APP.PaperStore(Path(directory) / "papers.db")
+            store.upsert(
+                {
+                    "id": "paper", "title": "Paper", "abstract": "Abstract", "authors": ["Author"],
+                    "institutions": [], "venue": "CoRL", "published": "2026-01-01", "updated": "2026-01-01",
+                    "source": "test", "source_url": "https://example.com", "pdf_url": "", "doi": "",
+                    "journal_ref": "", "topics": ["具身智能"], "quality_score": 80, "citation_count": 0,
+                }
+            )
+            store.update_state("paper", {"status": "read", "favorite": True, "notes": "important"})
+            store.save_explanation("paper", {"mode": "fulltext", "one_sentence": "explained"})
+            store.add_chat_message("paper", "user", "question")
+            store.add_chat_message("paper", "assistant", "answer")
+            archive = APP.ReadingArchiveService(store, FakeCloud(store))
+            self.assertTrue(archive.backup_paper("paper"))
+
+            db = store.connect()
+            try:
+                db.execute("DELETE FROM user_state WHERE paper_id = ?", ("paper",))
+                db.execute("DELETE FROM paper_chat_messages WHERE paper_id = ?", ("paper",))
+                db.commit()
+            finally:
+                db.close()
+            self.assertTrue(archive.restore_paper_if_needed("paper"))
+            restored = store.get_paper("paper")
+            self.assertEqual(restored["status"], "read")
+            self.assertEqual(restored["explanation"]["one_sentence"], "explained")
+            self.assertEqual([item["content"] for item in store.chat_history("paper")], ["question", "answer"])
+
     def test_project_workspace_groups_files_and_sanitizes_readme(self):
         files = ["README.md", "src/model.py", "scripts/train.py", "configs/base.yaml", "tests/test_model.py"]
         with tempfile.TemporaryDirectory() as directory:
             service = APP.ProjectAssetService(APP.PaperStore(Path(directory) / "papers.db"))
             groups = {item["label"]: item["files"] for item in service.file_groups(files)}
+            entries = service.file_entries(files)
+            sections = {item["label"]: [entry["path"] for entry in item["items"]] for item in service.reading_sections(entries)}
             rendered = service._readme_html(
-                "# Project\n<script>alert(1)</script>\n[Guide](docs/guide.md)",
+                "# Project\n<script>alert(1)</script>\n[Guide](docs/guide.md)\n<div align=\"center\">\n    <a href=\"https://example.com\">Author</a>\n    ![](assets/demo.png)\n</div>",
                 "owner/project", "main", "README.md",
             )
             self.assertIn("README.md", groups["开始阅读"])
             self.assertIn("scripts/train.py", groups["训练与推理"])
+            self.assertIn("README.md", sections["从这里开始"])
+            self.assertIn("scripts/train.py", sections["运行链路"])
+            self.assertEqual(next(item for item in entries if item["path"] == "src/model.py")["language"], "Python")
             self.assertNotIn("<script", rendered)
             self.assertNotIn("alert(1)", rendered)
             self.assertIn("github.com/owner/project/blob/main/docs/guide.md", rendered)
+            self.assertIn("raw.githubusercontent.com/owner/project/main/assets/demo.png", rendered)
+            self.assertIn('<a href="https://example.com">Author</a>', rendered)
+            self.assertNotIn("&lt;a href", rendered)
 
     def test_daily_project_recommendations_are_capped_at_four(self):
         now = APP.utc_now().isoformat()
@@ -230,7 +283,10 @@ class FeedTests(unittest.TestCase):
                     {"local_repo_path": str(root), "file_count": 1, "source_chars": 13},
                 )
 
-                self.assertEqual(assets.file("owner/project", "main.py")["content"], "print('safe')")
+                source = assets.file("owner/project", "main.py")
+                self.assertEqual(source["content"], "print('safe')")
+                self.assertEqual(source["language"], "Python")
+                self.assertEqual(source["line_count"], 1)
                 self.assertIsNone(assets.file("owner/project", "../secret.txt"))
             finally:
                 APP.PROJECT_REPO_DIR = original_repo_dir

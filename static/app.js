@@ -16,6 +16,9 @@ const state = {
   storage: null,
   projectWorkspace: null,
   projectSelectedPath: "",
+  projectFileMode: "guide",
+  projectCurrentContent: "",
+  projectCodeWrapped: false,
 };
 
 const el = (id) => document.getElementById(id);
@@ -154,12 +157,12 @@ function applyViewMode() {
   document.querySelectorAll(".project-only-filter").forEach((item) => { item.hidden = !projectMode || projectRecommendedMode; });
   el("dateFilter").closest("label").hidden = recommendedMode || projectRecommendedMode;
   document.querySelector(".score-guide").hidden = projectMode;
-  el("streamTitle").textContent = projectRecommendedMode ? "每日项目" : projectMode ? "GitHub 项目" : recommendedMode ? "每日精选" : "论文流";
+  el("streamTitle").textContent = projectRecommendedMode ? "每日项目" : projectMode ? "GitHub 项目" : recommendedMode ? "每周精选" : "论文流";
   el("loadMoreButton").textContent = projectMode ? "加载更多项目" : "加载更多论文";
   document.querySelector(".stream-head .status-tabs").hidden = projectMode || recommendedMode;
-  el("overviewTitle").textContent = projectRecommendedMode ? "今天值得研究的项目" : projectMode ? "今天有哪些项目在更新" : recommendedMode ? "今天先读这几篇" : "今天值得读什么";
+  el("overviewTitle").textContent = projectRecommendedMode ? "今天值得研究的项目" : projectMode ? "今天有哪些项目在更新" : recommendedMode ? "本周先读这几篇" : "今天值得读什么";
   el("overviewMessage").textContent = projectRecommendedMode ? "从活跃仓库中按方向、社区采用、论文关联和完整度筛选。" : projectMode ? "跟踪具身智能与大模型开源仓库，并连接对应论文。" : recommendedMode ? "从完整候选池中按领域、刊物、时效、全文证据与复现线索二次筛选。" : "浏览全部公开论文元数据与来源。";
-  el("statTotalLabel").textContent = projectRecommendedMode ? "今日项目" : projectMode ? "GitHub 项目" : recommendedMode ? "今日精选" : "收录论文";
+  el("statTotalLabel").textContent = projectRecommendedMode ? "今日项目" : projectMode ? "GitHub 项目" : recommendedMode ? "本周精选" : "收录论文";
   el("statUnreadLabel").textContent = projectRecommendedMode ? "候选项目" : projectMode ? "今日更新" : recommendedMode ? "候选池" : "未读";
   el("statFavoriteLabel").textContent = projectMode ? "论文关联" : "已收藏";
   if (state.stats) {
@@ -329,6 +332,42 @@ function setProjectTab(tab) {
   });
 }
 
+function renderReadingBackupStatus(id, available, pending = false) {
+  const status = el(id);
+  status.textContent = pending ? "正在备份历史" : available ? "云端历史已备份" : "本地历史";
+  status.classList.toggle("is-saved", Boolean(available));
+}
+
+async function monitorPaperReadingBackup(paperId) {
+  renderReadingBackupStatus("readerBackupStatus", false, true);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+    try {
+      const paper = await api(`/api/papers/${encodeURIComponent(paperId)}`);
+      if (paper.reading_backup_available && !paper.reading_backup_pending) {
+        renderReadingBackupStatus("readerBackupStatus", true);
+        return;
+      }
+    } catch (error) { break; }
+  }
+  renderReadingBackupStatus("readerBackupStatus", false);
+}
+
+async function monitorProjectReadingBackup(fullName) {
+  renderReadingBackupStatus("projectBackupStatus", false, true);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+    try {
+      const workspace = await api(`/api/projects/${encodeURIComponent(fullName)}/workspace`);
+      if (workspace.reading_backup_available && !workspace.reading_backup_pending) {
+        renderReadingBackupStatus("projectBackupStatus", true);
+        return;
+      }
+    } catch (error) { break; }
+  }
+  renderReadingBackupStatus("projectBackupStatus", false);
+}
+
 function projectExplanationMarkup(explanation) {
   const block = (title, value) => {
     const content = Array.isArray(value)
@@ -345,34 +384,71 @@ function projectExplanationMarkup(explanation) {
     </div>`;
 }
 
-function projectTreeMarkup(paths) {
-  const root = {};
-  paths.forEach((path) => {
-    let node = root;
-    const parts = path.split("/");
-    parts.forEach((part, index) => {
-      if (index === parts.length - 1) {
-        node.__files = node.__files || [];
-        node.__files.push({ name: part, path });
-      } else {
-        node[part] = node[part] || {};
-        node = node[part];
-      }
-    });
-  });
-  const renderNode = (node) => {
-    const directories = Object.keys(node).filter((key) => key !== "__files").sort();
-    const files = (node.__files || []).sort((a, b) => a.name.localeCompare(b.name));
-    return `${directories.map((name) => `<details><summary>${escapeHtml(name)}</summary>${renderNode(node[name])}</details>`).join("")}${files.map((file) => `<button type="button" title="${escapeHtml(file.path)}" data-project-file="${escapeHtml(file.path)}">${escapeHtml(file.name)}</button>`).join("")}`;
-  };
-  return renderNode(root);
+function projectFileItemMarkup(item, showReason = false) {
+  return `<button class="project-file-item" type="button" title="${escapeHtml(item.path)}" data-project-file="${escapeHtml(item.path)}">
+    <strong>${escapeHtml(item.name)}</strong>
+    <span>${escapeHtml(item.directory || "仓库根目录")}</span>
+    ${showReason && item.reason ? `<em>${escapeHtml(item.reason)}</em>` : ""}
+  </button>`;
 }
 
-function renderProjectTree(paths, groups = []) {
-  el("projectFileTree").innerHTML = groups.length
-    ? groups.map((group, index) => `<details class="project-file-group" ${index < 2 ? "open" : ""}><summary><span>${escapeHtml(group.label)}</span><b>${group.files.length}</b></summary>${projectTreeMarkup(group.files)}</details>`).join("")
-    : projectTreeMarkup(paths);
+function renderProjectFiles(mode = state.projectFileMode) {
+  const workspace = state.projectWorkspace;
+  if (!workspace) return;
+  state.projectFileMode = mode;
+  document.querySelectorAll("[data-project-file-mode]").forEach((button) => button.classList.toggle("is-active", button.dataset.projectFileMode === mode));
+  if (mode === "guide") {
+    el("projectFileTree").innerHTML = (workspace.reading_sections || []).map((section) => `
+      <section class="project-guide-section">
+        <header><strong>${escapeHtml(section.label)}</strong><span>${section.items.length}</span></header>
+        ${section.items.map((item) => projectFileItemMarkup(item, true)).join("")}
+      </section>`).join("") || `<p class="project-file-empty">没有识别到明确入口，请切换到全部文件。</p>`;
+  } else {
+    const groups = new Map();
+    (workspace.file_entries || []).forEach((item) => {
+      if (!groups.has(item.group_key)) groups.set(item.group_key, { label: item.group_label, items: [] });
+      groups.get(item.group_key).items.push(item);
+    });
+    el("projectFileTree").innerHTML = [...groups.values()].map((group, index) => `
+      <details class="project-file-group" ${index < 2 ? "open" : ""}>
+        <summary><span>${escapeHtml(group.label)}</span><b>${group.items.length}</b></summary>
+        ${group.items.map((item) => projectFileItemMarkup(item)).join("")}
+      </details>`).join("");
+  }
   el("projectFileTree").querySelectorAll("[data-project-file]").forEach((button) => button.addEventListener("click", () => loadProjectFile(button.dataset.projectFile)));
+  el("projectFileTree").querySelector(`[data-project-file="${CSS.escape(state.projectSelectedPath)}"]`)?.classList.add("is-active");
+  filterProjectFiles();
+}
+
+function filterProjectFiles() {
+  const query = el("projectFileSearch").value.trim().toLowerCase();
+  el("projectFileTree").querySelectorAll("[data-project-file]").forEach((button) => {
+    button.hidden = Boolean(query) && !button.dataset.projectFile.toLowerCase().includes(query);
+  });
+  el("projectFileTree").querySelectorAll(".project-file-group, .project-guide-section").forEach((group) => {
+    group.hidden = Boolean(query) && ![...group.querySelectorAll("[data-project-file]")].some((button) => !button.hidden);
+  });
+}
+
+function renderProjectCode(content) {
+  const code = el("projectCodeContent");
+  code.innerHTML = "";
+  const fragment = document.createDocumentFragment();
+  (content || "文件为空").split("\n").forEach((line) => {
+    const row = document.createElement("span");
+    row.className = "project-code-line";
+    row.textContent = line || " ";
+    fragment.append(row);
+  });
+  code.append(fragment);
+}
+
+function restoreProjectReadme() {
+  const workspace = state.projectWorkspace;
+  if (!workspace) return;
+  el("projectDocumentPath").textContent = workspace.readme_path || "README";
+  el("projectRootReadme").hidden = true;
+  el("projectReadmeContent").innerHTML = workspace.readme_html || "<p>仓库没有找到 README。</p>";
 }
 
 async function loadProjectFile(path) {
@@ -381,10 +457,19 @@ async function loadProjectFile(path) {
   state.projectSelectedPath = path;
   el("projectCurrentPath").textContent = path;
   el("projectCodeContent").textContent = "正在读取文件";
+  el("projectCodeMeta").textContent = "";
   document.querySelectorAll("[data-project-file]").forEach((button) => button.classList.toggle("is-active", button.dataset.projectFile === path));
   try {
     const payload = await api(`/api/projects/${encodeURIComponent(workspace.project.full_name)}/source?path=${encodeURIComponent(path)}`);
-    el("projectCodeContent").textContent = payload.content || "文件为空";
+    state.projectCurrentContent = payload.content || "";
+    renderProjectCode(payload.content || "");
+    el("projectCodeMeta").textContent = `${payload.language} · ${Number(payload.line_count || 0).toLocaleString()} 行${payload.truncated ? " · 已截断" : ""}`;
+    if (payload.rendered_html) {
+      el("projectDocumentPath").textContent = payload.path;
+      el("projectRootReadme").hidden = payload.path === workspace.readme_path;
+      el("projectReadmeContent").innerHTML = payload.rendered_html;
+      setProjectTab("readme");
+    }
   } catch (error) {
     el("projectCodeContent").textContent = error.message;
   }
@@ -425,14 +510,17 @@ function renderProjectWorkspace(workspace) {
   el("projectReaderTitle").textContent = project.full_name;
   el("projectReaderMeta").textContent = `${project.language || "语言未标注"} · ${project.stars} Stars · ${workspace.file_count} 个源码文件 · ${project.linked_paper_count} 篇关联论文${project.size_kb ? ` · 仓库约 ${Math.max(1, Math.round(project.size_kb / 1024))} MB` : ""}`;
   el("projectGithubLink").href = project.url;
-  el("projectReadmeContent").innerHTML = workspace.readme_html || "<p>仓库没有找到 README。</p>";
+  renderReadingBackupStatus("projectBackupStatus", workspace.reading_backup_available, workspace.reading_backup_pending);
+  restoreProjectReadme();
   if (!workspace.ready) {
     el("projectFileTree").innerHTML = "";
     el("projectCurrentPath").textContent = "源码不可用";
     el("projectCodeContent").textContent = workspace.error || "仓库中没有可安全显示的文本源码。";
   } else {
-    renderProjectTree(workspace.files, workspace.file_groups);
-    const preferred = workspace.files.find((path) => /(^|\/)(main|app|server|model|train)\.(py|js|ts|tsx|go|rs)$/i.test(path))
+    renderProjectFiles("guide");
+    const routeItems = (workspace.reading_sections || []).flatMap((section) => section.items);
+    const preferred = routeItems.find((item) => (item.group_key === "source" || item.group_key === "runtime") && item.path.split("/").length <= 2)?.path
+      || workspace.readme_path
       || workspace.files.find((path) => !/\.(md|rst|txt)$/i.test(path))
       || workspace.files[0];
     loadProjectFile(preferred);
@@ -448,13 +536,23 @@ async function openProjectReader(fullName, force = false) {
   state.selectedProject = fullName;
   state.projectWorkspace = null;
   state.projectSelectedPath = "";
+  state.projectFileMode = "guide";
+  state.projectCurrentContent = "";
+  state.projectCodeWrapped = false;
   setProjectTab("readme");
   el("projectReaderTitle").textContent = fullName;
   el("projectReaderMeta").textContent = "正在缓存公开仓库源码";
+  renderReadingBackupStatus("projectBackupStatus", false);
   el("projectFileTree").innerHTML = "";
+  el("projectFileSearch").value = "";
   el("projectCurrentPath").textContent = "正在读取仓库";
+  el("projectCodeMeta").textContent = "";
+  el("projectCodeContent").classList.remove("is-wrapped");
+  el("projectCodeWrap").classList.remove("is-active");
   el("projectCodeContent").textContent = "下载并校验公开源码压缩包";
   el("projectReadmeContent").textContent = "正在读取 README";
+  el("projectDocumentPath").textContent = "README";
+  el("projectRootReadme").hidden = true;
   el("projectExplanation").innerHTML = "";
   renderProjectChatHistory([]);
   if (!dialog.open) dialog.showModal();
@@ -484,6 +582,7 @@ async function generateProjectExplanation() {
     workspace.explanation = explanation;
     el("projectExplanation").innerHTML = projectExplanationMarkup(explanation);
     el("projectExplanation").querySelector("[data-project-explain]")?.addEventListener("click", generateProjectExplanation);
+    monitorProjectReadingBackup(workspace.project.full_name);
   } catch (error) {
     el("projectExplanation").innerHTML = `<div class="reader-explain-empty"><strong>代码讲解失败</strong><p>${escapeHtml(error.message)}</p><button class="button button-secondary" type="button" data-project-explain>重试</button></div>`;
     el("projectExplanation").querySelector("[data-project-explain]").addEventListener("click", generateProjectExplanation);
@@ -547,7 +646,7 @@ function renderPapers() {
       currentGroup = paper.recommendation_topic;
       const group = document.createElement("div");
       group.className = "recommendation-group";
-      group.innerHTML = `<strong>${escapeHtml(currentGroup)}</strong><span>今日优先阅读</span>`;
+      group.innerHTML = `<strong>${escapeHtml(currentGroup)}</strong><span>本周优先阅读</span>`;
       list.append(group);
     }
     const row = document.createElement("article");
@@ -1029,6 +1128,7 @@ async function openReader(paperId) {
   setPdfStatus("正在载入论文", "读取元数据与本地缓存状态");
   el("readerTitle").textContent = "论文阅读工作台";
   el("readerMeta").textContent = "";
+  renderReadingBackupStatus("readerBackupStatus", false);
   el("readerExplanation").innerHTML = `<div class="skeleton-line"></div><div class="skeleton-line"></div><div class="skeleton-line"></div>`;
   el("readerScore").innerHTML = "";
   el("translationSource").textContent = "";
@@ -1042,6 +1142,7 @@ async function openReader(paperId) {
     const institutionNames = paper.notable_institutions?.slice(0, 2).map((item) => item.name).join(" · ");
     el("readerMeta").textContent = `${paper.authors.join(" · ") || "作者信息缺失"} · ${paper.venue || paper.source} · ${formatDate(paper.published)}${institutionNames ? ` · ${institutionNames}` : ""}`;
     el("readerSourceLink").href = paper.source_url || paper.pdf_url || "#";
+    renderReadingBackupStatus("readerBackupStatus", paper.reading_backup_available, paper.reading_backup_pending);
     updateReaderStorageAction();
     renderReaderScore(paper);
     el("readerExplanation").innerHTML = paper.explanation
@@ -1074,6 +1175,7 @@ async function generateReaderExplanation() {
     container.innerHTML = explanationMarkup(explanation);
     container.querySelector("[data-explain]")?.addEventListener("click", generateReaderExplanation);
     toast(explanation.reading_basis === "fulltext" ? "全文精读已生成" : "仅找到摘要，已生成摘要讲解");
+    monitorPaperReadingBackup(paper.id);
   } catch (error) {
     container.innerHTML = `<div class="reader-explain-empty"><strong>精读生成失败</strong><p>${escapeHtml(error.message)}</p><button class="button button-secondary" type="button" data-reader-explain>重试</button></div>`;
     container.querySelector("[data-reader-explain]").addEventListener("click", generateReaderExplanation);
@@ -1352,16 +1454,26 @@ function bindEvents() {
   el("readerStorageMode").addEventListener("change", updateReaderStorageAction);
   el("projectReaderClose").addEventListener("click", () => el("projectReaderDialog").close());
   document.querySelectorAll("[data-project-tab]").forEach((button) => button.addEventListener("click", () => setProjectTab(button.dataset.projectTab)));
+  document.querySelectorAll("[data-project-file-mode]").forEach((button) => button.addEventListener("click", () => renderProjectFiles(button.dataset.projectFileMode)));
   el("projectRefreshSource").addEventListener("click", () => state.projectWorkspace && openProjectReader(state.projectWorkspace.project.full_name, true));
   el("projectFileSearch").addEventListener("input", () => {
-    const query = el("projectFileSearch").value.trim().toLowerCase();
-    el("projectFileTree").querySelectorAll("[data-project-file]").forEach((button) => {
-      button.hidden = Boolean(query) && !button.dataset.projectFile.toLowerCase().includes(query);
-    });
-    if (query) el("projectFileTree").querySelectorAll("details").forEach((item) => { item.open = true; });
-    el("projectFileTree").querySelectorAll(".project-file-group").forEach((group) => {
-      group.hidden = Boolean(query) && ![...group.querySelectorAll("[data-project-file]")].some((button) => !button.hidden);
-    });
+    if (el("projectFileSearch").value.trim() && state.projectFileMode !== "all") renderProjectFiles("all");
+    filterProjectFiles();
+  });
+  el("projectRootReadme").addEventListener("click", restoreProjectReadme);
+  el("projectCodeWrap").addEventListener("click", () => {
+    state.projectCodeWrapped = !state.projectCodeWrapped;
+    el("projectCodeContent").classList.toggle("is-wrapped", state.projectCodeWrapped);
+    el("projectCodeWrap").classList.toggle("is-active", state.projectCodeWrapped);
+  });
+  el("projectCodeCopy").addEventListener("click", async () => {
+    if (!state.projectCurrentContent) return;
+    try {
+      await navigator.clipboard.writeText(state.projectCurrentContent);
+      toast("代码已复制");
+    } catch (error) {
+      toast("浏览器不允许访问剪贴板", true);
+    }
   });
   el("projectChatForm").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1377,6 +1489,7 @@ function bindEvents() {
         body: JSON.stringify({ question, selected_path: state.projectSelectedPath }),
       });
       await loadProjectChatHistory(workspace.project.full_name);
+      monitorProjectReadingBackup(workspace.project.full_name);
     } catch (error) {
       toast(error.message, true);
     } finally {
@@ -1402,6 +1515,7 @@ function bindEvents() {
     try {
       await api(`/api/papers/${encodeURIComponent(paper.id)}/chat`, { method: "POST", body: JSON.stringify({ question }) });
       await loadChatHistory(paper.id);
+      monitorPaperReadingBackup(paper.id);
     } catch (error) {
       toast(error.message, true);
       await loadChatHistory(paper.id);
