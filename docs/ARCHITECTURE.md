@@ -21,6 +21,7 @@ This model is appropriate for a personal workstation. It is intentionally not ex
 
 - `config.json`: collection policy and topic queries.
 - `venues.json`: publication-domain knowledge.
+- `institutions.json`: representative institution aliases and research strengths used for informational badges.
 - `PaperStore`: persistence boundary.
 - `PaperSources` and `GitHubSource`: external-source adapters.
 - `PaperExplainer`: AI-provider adapter.

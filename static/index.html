@@ -84,12 +84,14 @@
         <label class="paper-only-filter">发布平台<select id="platformFilter"><option value="">全部平台</option></select></label>
         <label class="paper-only-filter">刊物<select id="venueFilter"><option value="">全部刊物</option></select></label>
         <label class="paper-only-filter">作者<input id="authorFilter" list="authorOptions" placeholder="输入作者名"><datalist id="authorOptions"></datalist></label>
+        <label class="paper-only-filter">代表机构<select id="institutionFilter"><option value="">全部机构</option></select></label>
         <label class="paper-only-filter">数据源<select id="sourceFilter"><option value="">全部数据源</option></select></label>
         <label class="project-only-filter" hidden>语言<select id="projectLanguageFilter"><option value="">全部语言</option></select></label>
         <label>起始日期<input id="dateFilter" type="date"></label>
         <label class="paper-only-filter">排序<select id="sortFilter"><option value="quality">推荐优先</option><option value="date">最新发表</option><option value="citations">引用优先</option></select></label>
         <label class="project-only-filter" hidden>项目排序<select id="projectSortFilter"><option value="updated">最近更新</option><option value="stars">Stars 优先</option><option value="links">论文关联优先</option></select></label>
         <button class="text-button" id="clearFilters" type="button">清除筛选</button>
+        <output class="coverage-summary paper-only-filter" id="coverageSummary" aria-live="polite"></output>
       </section>
 
       <div class="content-grid">

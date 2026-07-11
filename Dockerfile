@@ -12,7 +12,7 @@ RUN useradd --create-home --uid 10001 paperfield \
     && mkdir -p /data \
     && chown -R paperfield:paperfield /data /app
 
-COPY --chown=paperfield:paperfield app.py config.json venues.json ./
+COPY --chown=paperfield:paperfield app.py config.json venues.json institutions.json ./
 COPY --chown=paperfield:paperfield requirements.txt ./
 COPY --chown=paperfield:paperfield static ./static
 

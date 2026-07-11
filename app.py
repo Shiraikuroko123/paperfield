@@ -31,7 +31,8 @@ PDF_DIR = Path(os.environ.get("PAPERFIELD_PDF_DIR", DATA_DIR / "pdfs")).expandus
 FULLTEXT_DIR = Path(os.environ.get("PAPERFIELD_FULLTEXT_DIR", DATA_DIR / "fulltext")).expanduser().resolve()
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
-APP_VERSION = "0.4.0"
+INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", ROOT / "institutions.json")).expanduser().resolve()
+APP_VERSION = "0.5.0"
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
 
@@ -56,6 +57,16 @@ def iso_date(value: Any) -> str:
 
 def compact_text(value: str | None) -> str:
     return re.sub(r"\s+", " ", value or "").strip()
+
+
+def venue_sync_error_status(error: Exception | str) -> str:
+    message = str(error).lower()
+    challenge_markers = (
+        "challengerequirederror",
+        "browser challenge verification",
+        "requires browser challenge",
+    )
+    return "blocked" if any(marker in message for marker in challenge_markers) else "error"
 
 
 def slug_id(value: str) -> str:
@@ -91,6 +102,8 @@ class VenueCatalog:
             if " " not in alias and alias in tokens:
                 return entry
             if without_year == alias or normalized == alias:
+                return entry
+            if " " in alias and f" {alias} " in f" {without_year} ":
                 return entry
         return None
 
@@ -136,6 +149,44 @@ class VenueCatalog:
         return [entry["name"] for entry in self.entries]
 
 
+class InstitutionCatalog:
+    def __init__(self, entries: list[dict[str, Any]]) -> None:
+        self.entries = entries
+        aliases = []
+        for entry in entries:
+            for alias in entry.get("aliases", []):
+                aliases.append((self.normalize(alias), entry))
+        self.aliases = sorted(aliases, key=lambda item: len(item[0]), reverse=True)
+
+    @staticmethod
+    def normalize(value: str | None) -> str:
+        text = html.unescape(value or "").lower()
+        text = re.sub(r"[^\w\u4e00-\u9fff]+", " ", text, flags=re.UNICODE)
+        return re.sub(r"\s+", " ", text).strip()
+
+    def match(self, affiliations: list[str]) -> list[dict[str, Any]]:
+        matched = []
+        seen = set()
+        normalized_affiliations = [self.normalize(value) for value in affiliations if compact_text(value)]
+        for affiliation in normalized_affiliations:
+            for alias, entry in self.aliases:
+                if alias and f" {alias} " in f" {affiliation} " and entry["id"] not in seen:
+                    matched.append(
+                        {
+                            "id": entry["id"],
+                            "name": entry["name"],
+                            "parent": entry.get("parent", ""),
+                            "type": entry.get("type", ""),
+                            "region": entry.get("region", ""),
+                            "strengths": entry.get("strengths", []),
+                            "url": entry.get("url", ""),
+                        }
+                    )
+                    seen.add(entry["id"])
+                    break
+        return matched[:6]
+
+
 class PaperStore:
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -158,6 +209,7 @@ class PaperStore:
                     title TEXT NOT NULL,
                     abstract TEXT NOT NULL DEFAULT '',
                     authors_json TEXT NOT NULL DEFAULT '[]',
+                    institutions_json TEXT NOT NULL DEFAULT '[]',
                     venue TEXT NOT NULL DEFAULT '',
                     published TEXT NOT NULL DEFAULT '',
                     updated TEXT NOT NULL DEFAULT '',
@@ -238,6 +290,13 @@ class PaperStore:
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(paper_id) REFERENCES papers(id)
                 );
+                CREATE TABLE IF NOT EXISTS venue_sync_state (
+                    venue TEXT PRIMARY KEY,
+                    last_sync TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT '',
+                    item_count INTEGER NOT NULL DEFAULT 0,
+                    error_text TEXT NOT NULL DEFAULT ''
+                );
                 CREATE INDEX IF NOT EXISTS idx_papers_title_normalized
                     ON papers(lower(trim(title)));
                 CREATE INDEX IF NOT EXISTS idx_github_projects_pushed_at
@@ -248,6 +307,9 @@ class PaperStore:
                     ON paper_chat_messages(paper_id, id);
                 """
             )
+            paper_columns = {row["name"] for row in db.execute("PRAGMA table_info(papers)").fetchall()}
+            if "institutions_json" not in paper_columns:
+                db.execute("ALTER TABLE papers ADD COLUMN institutions_json TEXT NOT NULL DEFAULT '[]'")
 
     def count(self) -> int:
         with self.connect() as db:
@@ -286,19 +348,20 @@ class PaperStore:
         db.execute(
             """
             INSERT INTO papers (
-                id, title, abstract, authors_json, venue, published, updated,
+                id, title, abstract, authors_json, institutions_json, venue, published, updated,
                 source, source_url, pdf_url, doi, journal_ref, topics_json,
                 quality_score, citation_count, fetched_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 title=excluded.title,
                 abstract=CASE WHEN length(excluded.abstract) > length(papers.abstract) THEN excluded.abstract ELSE papers.abstract END,
                 authors_json=excluded.authors_json,
+                institutions_json=CASE WHEN excluded.institutions_json != '[]' THEN excluded.institutions_json ELSE papers.institutions_json END,
                 venue=CASE WHEN excluded.venue != '' THEN excluded.venue ELSE papers.venue END,
                 published=CASE WHEN excluded.published != '' THEN excluded.published ELSE papers.published END,
                 updated=CASE WHEN excluded.updated != '' THEN excluded.updated ELSE papers.updated END,
                 source=CASE
-                    WHEN excluded.source IN ('PMLR', 'CVF Open Access', 'DBLP') THEN excluded.source
+                    WHEN excluded.source IN ('PMLR', 'CVF Open Access', 'DBLP', 'DBLP archive', 'Crossref targeted', 'Crossref / ACM MM', 'Crossref / IEEE T-RO') THEN excluded.source
                     ELSE papers.source
                 END,
                 source_url=CASE WHEN excluded.source_url != '' THEN excluded.source_url ELSE papers.source_url END,
@@ -313,6 +376,7 @@ class PaperStore:
             (
                 paper["id"], paper["title"], paper.get("abstract", ""),
                 json.dumps(paper.get("authors", []), ensure_ascii=False),
+                json.dumps(paper.get("institutions", []), ensure_ascii=False),
                 paper.get("venue", ""), paper.get("published", ""), paper.get("updated", ""),
                 paper.get("source", ""), paper.get("source_url", ""), paper.get("pdf_url", ""),
                 paper.get("doi", ""), paper.get("journal_ref", ""),
@@ -636,10 +700,32 @@ class PaperStore:
             row = db.execute("SELECT * FROM sync_runs ORDER BY id DESC LIMIT 1").fetchone()
         return dict(row) if row else None
 
+    def venue_sync_states(self) -> dict[str, dict[str, Any]]:
+        with self.connect() as db:
+            rows = db.execute("SELECT * FROM venue_sync_state").fetchall()
+        return {row["venue"]: dict(row) for row in rows}
+
+    def save_venue_sync(self, venue: str, status: str, item_count: int, error: str = "") -> None:
+        with self.connect() as db:
+            db.execute(
+                """
+                INSERT INTO venue_sync_state (venue, last_sync, status, item_count, error_text)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(venue) DO UPDATE SET
+                    last_sync=excluded.last_sync,
+                    status=excluded.status,
+                    item_count=excluded.item_count,
+                    error_text=excluded.error_text
+                """,
+                (venue, utc_now().isoformat(), status, item_count, error[:1000]),
+            )
+
     @staticmethod
     def _serialize(row: sqlite3.Row, include_explanation: bool = False) -> dict[str, Any]:
         result = dict(row)
         result["authors"] = json.loads(result.pop("authors_json") or "[]")
+        result["institutions"] = json.loads(result.pop("institutions_json", "[]") or "[]")
+        result["notable_institutions"] = INSTITUTION_CATALOG.match(result["institutions"])
         result["topics"] = json.loads(result.pop("topics_json") or "[]")
         venue_metadata = VENUE_CATALOG.describe(result.get("venue", ""), result.get("journal_ref", ""), result.get("source", ""))
         result["venue"] = venue_metadata.pop("canonical_venue")
@@ -816,6 +902,32 @@ class PaperSources:
                 time.sleep(2 ** (attempt + 1))
         raise RuntimeError("论文网页请求失败")
 
+    @staticmethod
+    def crossref_institutions(item: dict[str, Any]) -> list[str]:
+        values = []
+        for author in item.get("author", []):
+            for affiliation in author.get("affiliation", []) or []:
+                name = compact_text(affiliation.get("name"))
+                if name and name not in values:
+                    values.append(name)
+        return values
+
+    @staticmethod
+    def is_non_research_title(title: str) -> bool:
+        normalized = compact_text(title).lower()
+        patterns = (
+            "information for authors",
+            "society information",
+            "table of contents",
+            "front cover",
+            "back cover",
+            "list of reviewers",
+            "reviewer acknowledgement",
+            "correction to:",
+            "erratum to:",
+        )
+        return any(pattern in normalized for pattern in patterns)
+
     def fetch_arxiv(self) -> list[dict[str, Any]]:
         categories = self.config["arxiv_categories"]
         query = " OR ".join(f"cat:{category}" for category in categories)
@@ -901,6 +1013,12 @@ class PaperSources:
                         for authorship in item.get("authorships", [])
                         if (authorship.get("author") or {}).get("display_name")
                     ],
+                    "institutions": list(dict.fromkeys(
+                        compact_text(institution.get("display_name"))
+                        for authorship in item.get("authorships", [])
+                        for institution in authorship.get("institutions", [])
+                        if compact_text(institution.get("display_name"))
+                    )),
                     "venue": compact_text(source.get("display_name")) or "OpenAlex",
                     "published": item.get("publication_date") or "",
                     "updated": item.get("publication_date") or "",
@@ -936,7 +1054,7 @@ class PaperSources:
             payload = self.request_json(f"https://api.crossref.org/works?{params}")
             for item in (payload.get("message") or {}).get("items", []):
                 doi = compact_text(item.get("DOI"))
-                title = compact_text(" ".join(item.get("title") or []))
+                title = compact_text(html.unescape(" ".join(item.get("title") or [])))
                 if not doi or not title:
                     continue
                 links = item.get("link") or []
@@ -961,6 +1079,7 @@ class PaperSources:
                     "title": title,
                     "abstract": compact_text(abstract),
                     "authors": authors,
+                    "institutions": self.crossref_institutions(item),
                     "venue": venue,
                     "published": published,
                     "updated": published,
@@ -977,6 +1096,298 @@ class PaperSources:
                     paper["quality_score"] = self.classifier.quality(paper)
                     papers.append(paper)
         return papers
+
+    @staticmethod
+    def ordinal(value: int) -> str:
+        if 10 <= value % 100 <= 20:
+            suffix = "th"
+        else:
+            suffix = {1: "st", 2: "nd", 3: "rd"}.get(value % 10, "th")
+        return f"{value}{suffix}"
+
+    def fetch_acm_mm(self) -> list[dict[str, Any]]:
+        current_year = utc_now().year
+        years_back = max(1, int(self.config.get("acm_mm_years_back", 3)))
+        papers_by_id: dict[str, dict[str, Any]] = {}
+        for year in range(current_year - years_back, current_year + 1):
+            edition = year - 1992
+            if edition < 1:
+                continue
+            proceedings = f"Proceedings of the {self.ordinal(edition)} ACM International Conference on Multimedia"
+            params = urllib.parse.urlencode(
+                {
+                    "query.container-title": proceedings,
+                    "filter": f"from-pub-date:{year}-01-01,until-pub-date:{year}-12-31,type:proceedings-article",
+                    "rows": 1000,
+                    "select": "DOI,title,abstract,author,container-title,published,created,URL,link,is-referenced-by-count,type",
+                }
+            )
+            payload = self.request_json(f"https://api.crossref.org/works?{params}")
+            for item in (payload.get("message") or {}).get("items", []):
+                container = compact_text(" ".join(item.get("container-title") or []))
+                normalized_container = VenueCatalog.normalize(container)
+                if "acm international conference on multimedia" not in normalized_container:
+                    continue
+                doi = compact_text(item.get("DOI"))
+                title = compact_text(" ".join(item.get("title") or []))
+                if not doi or not title:
+                    continue
+                links = item.get("link") or []
+                pdf_url = next(
+                    (link.get("URL", "") for link in links if "pdf" in link.get("content-type", "").lower()),
+                    "",
+                )
+                authors = [
+                    compact_text(f"{author.get('given', '')} {author.get('family', '')}")
+                    for author in item.get("author", [])
+                    if compact_text(f"{author.get('given', '')} {author.get('family', '')}")
+                ]
+                abstract = compact_text(re.sub(r"<[^>]+>", " ", item.get("abstract") or ""))
+                published = iso_date(item.get("published")) or iso_date(item.get("created"))
+                paper = {
+                    "id": f"doi:{doi.lower()}",
+                    "title": title,
+                    "abstract": abstract,
+                    "authors": authors,
+                    "institutions": self.crossref_institutions(item),
+                    "venue": "ACM MM",
+                    "published": published,
+                    "updated": published,
+                    "source": "Crossref / ACM MM",
+                    "source_url": item.get("URL") or f"https://doi.org/{doi}",
+                    "pdf_url": pdf_url,
+                    "doi": doi,
+                    "journal_ref": container,
+                    "citation_count": item.get("is-referenced-by-count") or 0,
+                }
+                self.classifier.enrich(paper)
+                paper["topics"] = self.classifier.classify(paper)
+                if paper["topics"] == ["其他相关"]:
+                    continue
+                paper["quality_score"] = self.classifier.quality(paper)
+                papers_by_id[paper["id"]] = paper
+        return list(papers_by_id.values())
+
+    def fetch_ieee_tro(self) -> list[dict[str, Any]]:
+        current_year = utc_now().year
+        years_back = max(1, int(self.config.get("ieee_tro_years_back", 3)))
+        params = urllib.parse.urlencode(
+            {
+                "query.container-title": "IEEE Transactions on Robotics",
+                "filter": (
+                    f"from-pub-date:{current_year - years_back}-01-01,"
+                    f"until-pub-date:{current_year}-12-31,type:journal-article"
+                ),
+                "rows": 1000,
+                "select": "DOI,title,abstract,author,container-title,published,created,URL,link,is-referenced-by-count,type",
+            }
+        )
+        payload = self.request_json(f"https://api.crossref.org/works?{params}")
+        papers = []
+        for item in (payload.get("message") or {}).get("items", []):
+            container = compact_text(" ".join(item.get("container-title") or []))
+            if VenueCatalog.normalize(container) != "ieee transactions on robotics":
+                continue
+            doi = compact_text(item.get("DOI"))
+            title = compact_text(html.unescape(" ".join(item.get("title") or [])))
+            if not doi or not title:
+                continue
+            if self.is_non_research_title(title):
+                continue
+            links = item.get("link") or []
+            pdf_url = next(
+                (link.get("URL", "") for link in links if "pdf" in link.get("content-type", "").lower()),
+                "",
+            )
+            authors = [
+                compact_text(f"{author.get('given', '')} {author.get('family', '')}")
+                for author in item.get("author", [])
+                if compact_text(f"{author.get('given', '')} {author.get('family', '')}")
+            ]
+            abstract = compact_text(re.sub(r"<[^>]+>", " ", html.unescape(item.get("abstract") or "")))
+            published = iso_date(item.get("published")) or iso_date(item.get("created"))
+            paper = {
+                "id": f"doi:{doi.lower()}",
+                "title": title,
+                "abstract": abstract,
+                "authors": authors,
+                "institutions": self.crossref_institutions(item),
+                "venue": "IEEE T-RO",
+                "published": published,
+                "updated": published,
+                "source": "Crossref / IEEE T-RO",
+                "source_url": item.get("URL") or f"https://doi.org/{doi}",
+                "pdf_url": pdf_url,
+                "doi": doi,
+                "journal_ref": container,
+                "citation_count": item.get("is-referenced-by-count") or 0,
+            }
+            self.classifier.enrich(paper)
+            paper["topics"] = self.classifier.classify(paper)
+            if paper["topics"] == ["其他相关"]:
+                paper["topics"] = ["具身智能"]
+            paper["quality_score"] = self.classifier.quality(paper)
+            papers.append(paper)
+        return papers
+
+    def fetch_catalog_venue(self, entry: dict[str, Any]) -> list[dict[str, Any]]:
+        current_year = utc_now().year
+        years_back = max(1, int(self.config.get("targeted_venue_years_back", 3)))
+        aliases = entry.get("aliases", []) or [entry["name"]]
+        query_name = max(aliases, key=lambda value: len(VenueCatalog.normalize(value)))
+        publication_type = "proceedings-article" if entry.get("kind") == "会议" else "journal-article"
+        params = urllib.parse.urlencode(
+            {
+                "query.container-title": query_name,
+                "filter": (
+                    f"from-pub-date:{current_year - years_back}-01-01,"
+                    f"until-pub-date:{current_year}-12-31,type:{publication_type}"
+                ),
+                "rows": max(50, min(300, int(self.config.get("targeted_venue_rows", 160)))),
+                "select": "DOI,title,abstract,author,container-title,published,created,URL,link,is-referenced-by-count,type",
+            }
+        )
+        payload = self.request_json(f"https://api.crossref.org/works?{params}")
+        papers = []
+        robotics_domains = {"具身智能", "机器人", "触觉", "自动驾驶"}
+        for item in (payload.get("message") or {}).get("items", []):
+            container = compact_text(" ".join(item.get("container-title") or []))
+            metadata = self.classifier.venue_catalog.describe(container, container, "Crossref targeted")
+            if metadata["canonical_venue"] != entry["name"]:
+                continue
+            doi = compact_text(item.get("DOI"))
+            title = compact_text(html.unescape(" ".join(item.get("title") or [])))
+            if not doi or not title:
+                continue
+            if self.is_non_research_title(title):
+                continue
+            links = item.get("link") or []
+            pdf_url = next(
+                (link.get("URL", "") for link in links if "pdf" in link.get("content-type", "").lower()),
+                "",
+            )
+            authors = [
+                compact_text(f"{author.get('given', '')} {author.get('family', '')}")
+                for author in item.get("author", [])
+                if compact_text(f"{author.get('given', '')} {author.get('family', '')}")
+            ]
+            abstract = compact_text(re.sub(r"<[^>]+>", " ", html.unescape(item.get("abstract") or "")))
+            published = iso_date(item.get("published")) or iso_date(item.get("created"))
+            paper = {
+                "id": f"doi:{doi.lower()}",
+                "title": title,
+                "abstract": abstract,
+                "authors": authors,
+                "institutions": self.crossref_institutions(item),
+                "venue": entry["name"],
+                "published": published,
+                "updated": published,
+                "source": "Crossref targeted",
+                "source_url": item.get("URL") or f"https://doi.org/{doi}",
+                "pdf_url": pdf_url,
+                "doi": doi,
+                "journal_ref": container,
+                "citation_count": item.get("is-referenced-by-count") or 0,
+            }
+            self.classifier.enrich(paper)
+            paper["topics"] = self.classifier.classify(paper)
+            if paper["topics"] == ["其他相关"]:
+                if robotics_domains.intersection(entry.get("domains", [])):
+                    paper["topics"] = ["具身智能"]
+                else:
+                    continue
+            paper["quality_score"] = self.classifier.quality(paper)
+            papers.append(paper)
+        return papers
+
+    def fetch_dblp_archive(self, entry: dict[str, Any]) -> list[dict[str, Any]]:
+        archive_path = (self.config.get("dblp_venue_paths") or {}).get(entry["name"], "")
+        if not archive_path:
+            return []
+        index_text = self.request_text(f"https://dblp.org/db/{archive_path}/index.xml")
+        root = ET.fromstring(index_text)
+        page_paths = []
+        minimum_year = utc_now().year - int(self.config.get("targeted_venue_years_back", 3))
+        for proceedings in root.iter("proceedings"):
+            year_text = compact_text(proceedings.findtext("year"))
+            candidate = compact_text(proceedings.findtext("url"))
+            if year_text.isdigit() and int(year_text) >= minimum_year and candidate.endswith(".html"):
+                if candidate not in page_paths:
+                    page_paths.append(candidate)
+        for list_item in root.iter("li"):
+            reference = list_item.find(".//ref")
+            if reference is None:
+                continue
+            candidate = reference.attrib.get("href", "")
+            label = compact_text("".join(list_item.itertext()))
+            year_match = re.search(r"(?:19|20)\d{2}", label)
+            if candidate.endswith(".html") and year_match and int(year_match.group(0)) >= minimum_year:
+                if candidate not in page_paths:
+                    page_paths.append(candidate)
+        for node in root.iter():
+            candidate = ""
+            if node.tag == "ref":
+                candidate = node.attrib.get("href", "")
+            elif node.tag == "url":
+                candidate = compact_text(node.text)
+            if candidate.endswith(".html") and "/index.html" not in candidate:
+                year_match = re.search(r"(?:19|20)\d{2}", candidate)
+                if not year_match or int(year_match.group(0)) < minimum_year:
+                    continue
+                if candidate not in page_paths:
+                    page_paths.append(candidate)
+        page_paths.sort(reverse=True)
+        max_pages = max(1, int(self.config.get("dblp_archive_pages", 8)))
+        papers_by_id: dict[str, dict[str, Any]] = {}
+        robotics_domains = {"具身智能", "机器人", "触觉", "自动驾驶"}
+        for page_path in page_paths[:max_pages]:
+            page_text = self.request_text(f"https://dblp.org/{page_path.removesuffix('.html')}.xml")
+            page_root = ET.fromstring(page_text)
+            for record_tag in ("inproceedings", "article", "incollection"):
+                for record in page_root.iter(record_tag):
+                    title_node = record.find("title")
+                    title = compact_text("".join(title_node.itertext()) if title_node is not None else "")
+                    if not title or self.is_non_research_title(title):
+                        continue
+                    authors = [compact_text("".join(node.itertext())) for node in record.findall("author")]
+                    year = compact_text(record.findtext("year"))
+                    ee_nodes = record.findall("ee")
+                    links = [compact_text(node.text) for node in ee_nodes if compact_text(node.text)]
+                    source_url = next(
+                        (compact_text(node.text) for node in ee_nodes if node.attrib.get("type") == "oa" and compact_text(node.text)),
+                        links[0] if links else "",
+                    )
+                    pdf_url = next((link for link in links if link.lower().endswith(".pdf")), "")
+                    doi_url = next((link for link in links if "doi.org/" in link.lower()), "")
+                    doi = doi_url.split("doi.org/", 1)[-1] if doi_url else ""
+                    key = record.attrib.get("key", title)
+                    paper = {
+                        "id": f"doi:{doi.lower()}" if doi else f"dblp:{slug_id(key)}",
+                        "title": title,
+                        "abstract": "",
+                        "authors": authors,
+                        "institutions": [],
+                        "venue": entry["name"],
+                        "published": f"{year}-01-01" if year else "",
+                        "updated": f"{year}-01-01" if year else "",
+                        "source": "DBLP archive",
+                        "source_url": source_url,
+                        "pdf_url": pdf_url,
+                        "doi": doi,
+                        "journal_ref": compact_text(record.findtext("booktitle") or record.findtext("journal")) or entry["name"],
+                        "citation_count": 0,
+                    }
+                    self.classifier.enrich(paper)
+                    paper["topics"] = self.classifier.classify(paper)
+                    if paper["topics"] == ["其他相关"]:
+                        if robotics_domains.intersection(entry.get("domains", [])):
+                            paper["topics"] = ["具身智能"]
+                        else:
+                            continue
+                    paper["quality_score"] = self.classifier.quality(paper)
+                    papers_by_id[paper["id"]] = paper
+            time.sleep(0.6)
+        return list(papers_by_id.values())
 
     def fetch_dblp(self) -> list[dict[str, Any]]:
         queries = self.config.get("source_queries") or [
@@ -2030,6 +2441,7 @@ def load_config() -> dict[str, Any]:
 
 CONFIG = load_config()
 VENUE_CATALOG = VenueCatalog(json.loads(VENUES_PATH.read_text(encoding="utf-8")))
+INSTITUTION_CATALOG = InstitutionCatalog(json.loads(INSTITUTIONS_PATH.read_text(encoding="utf-8")))
 STORE = PaperStore(DB_PATH)
 CLASSIFIER = PaperClassifier(CONFIG, VENUE_CATALOG)
 SOURCES = PaperSources(CONFIG, CLASSIFIER)
@@ -2112,6 +2524,116 @@ def seed_if_empty() -> None:
         STORE.upsert(paper)
 
 
+def build_catalog_coverage(
+    entries: list[dict[str, Any]],
+    papers: list[dict[str, Any]],
+    sync_states: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    visible_cutoff = (utc_now() + timedelta(days=1)).date().isoformat()
+    stored_counts: dict[str, int] = {}
+    visible_counts: dict[str, int] = {}
+    scheduled_counts: dict[str, int] = {}
+    for paper in papers:
+        if PaperSources.is_non_research_title(paper.get("title", "")):
+            continue
+        venue = paper.get("venue", "")
+        stored_counts[venue] = stored_counts.get(venue, 0) + 1
+        published = paper.get("published", "")
+        if published and published > visible_cutoff:
+            scheduled_counts[venue] = scheduled_counts.get(venue, 0) + 1
+        else:
+            visible_counts[venue] = visible_counts.get(venue, 0) + 1
+
+    items = []
+    for entry in entries:
+        state = sync_states.get(entry["name"], {})
+        count = visible_counts.get(entry["name"], 0)
+        stored_count = stored_counts.get(entry["name"], 0)
+        scheduled_count = scheduled_counts.get(entry["name"], 0)
+        sync_status = state.get("status", "")
+        if count > 0:
+            availability_status = "available"
+        elif scheduled_count > 0:
+            availability_status = "scheduled"
+        elif sync_status in {"blocked", "error", "empty"}:
+            availability_status = sync_status
+        elif stored_count > 0:
+            availability_status = "filtered"
+        else:
+            availability_status = "pending"
+        items.append(
+            {
+                "venue": entry["name"],
+                "count": count,
+                "stored_count": stored_count,
+                "scheduled_count": scheduled_count,
+                "tier": entry["tier"],
+                "kind": entry["kind"],
+                "platform": entry["platform"],
+                "domains": entry.get("domains", []),
+                "last_sync": state.get("last_sync", ""),
+                "sync_status": sync_status or ("covered" if stored_count else "not_targeted"),
+                "availability_status": availability_status,
+                "sync_error": state.get("error_text", ""),
+            }
+        )
+    covered = sum(1 for item in items if item["count"] > 0)
+    indexed = sum(1 for item in items if item["stored_count"] > 0)
+    return {
+        "items": items,
+        "catalog_total": len(items),
+        "covered": covered,
+        "indexed": indexed,
+        "zero": len(items) - covered,
+        "scheduled": sum(1 for item in items if item["availability_status"] == "scheduled"),
+        "blocked": sum(1 for item in items if item["availability_status"] == "blocked"),
+        "coverage_rate": round(covered / len(items) * 100, 1) if items else 0,
+        "indexed_rate": round(indexed / len(items) * 100, 1) if items else 0,
+    }
+
+
+def catalog_coverage() -> dict[str, Any]:
+    return build_catalog_coverage(VENUE_CATALOG.entries, STORE.list_papers(), STORE.venue_sync_states())
+
+
+def refresh_catalog_coverage(force: bool = False, max_venues: int | None = None) -> dict[str, Any]:
+    coverage = catalog_coverage()
+    budget = max_venues if max_venues is not None else int(CONFIG.get("targeted_venues_per_refresh", 8))
+    now = utc_now()
+    candidates = []
+    for item in coverage["items"]:
+        due = force or (item["count"] == 0 and not item.get("last_sync"))
+        if item.get("last_sync") and not force:
+            try:
+                last_sync = datetime.fromisoformat(item["last_sync"])
+                retry_days = 30 if item.get("sync_status") == "blocked" else 14
+                due = (now - last_sync).days >= retry_days
+            except ValueError:
+                due = True
+        if due:
+            candidates.append(item)
+    candidates.sort(key=lambda item: (item["count"] > 0, item["tier"] not in {"顶级会议", "顶级期刊"}, item["venue"]))
+    entry_by_name = {entry["name"]: entry for entry in VENUE_CATALOG.entries}
+    results = {}
+    inserted = 0
+    for item in candidates[: max(0, budget)]:
+        venue = item["venue"]
+        try:
+            papers = SOURCES.fetch_catalog_venue(entry_by_name[venue])
+            if not papers:
+                papers = SOURCES.fetch_dblp_archive(entry_by_name[venue])
+            inserted += STORE.upsert_many(papers)
+            status = "success" if papers else "empty"
+            STORE.save_venue_sync(venue, status, len(papers))
+            results[venue] = {"status": status, "items": len(papers)}
+        except Exception as error:
+            status = venue_sync_error_status(error)
+            STORE.save_venue_sync(venue, status, 0, str(error))
+            results[venue] = {"status": status, "items": 0, "error": str(error)}
+        time.sleep(0.2)
+    return {"inserted": inserted, "venues": results, "processed": len(results)}
+
+
 def refresh_all() -> dict[str, Any]:
     with REFRESH_STATE["lock"]:
         if REFRESH_STATE["running"]:
@@ -2127,6 +2649,8 @@ def refresh_all() -> dict[str, Any]:
             ("arXiv", SOURCES.fetch_arxiv),
             ("OpenAlex", SOURCES.fetch_openalex),
             ("Crossref", SOURCES.fetch_crossref),
+            ("ACM MM", SOURCES.fetch_acm_mm),
+            ("IEEE T-RO", SOURCES.fetch_ieee_tro),
             ("PMLR", SOURCES.fetch_pmlr),
             ("CVF Open Access", SOURCES.fetch_cvf),
         ]
@@ -2141,6 +2665,10 @@ def refresh_all() -> dict[str, Any]:
             except Exception as error:
                 errors.append(f"{name}: {error}")
                 source_results[name] = 0
+        REFRESH_STATE["message"] = "正在回填目录刊物"
+        coverage_result = refresh_catalog_coverage()
+        inserted += coverage_result["inserted"]
+        source_results["目录刊物回填"] = coverage_result["processed"]
         STORE.recalculate_quality(CLASSIFIER)
         REFRESH_STATE["message"] = "正在更新 GitHub 项目"
         try:
@@ -2253,6 +2781,7 @@ def filter_papers(papers: list[dict[str, Any]], params: dict[str, list[str]]) ->
     topic = get("topic")
     venue = get("venue")
     author = get("author").lower()
+    institution = get("institution").lower()
     source = get("source")
     tier = get("tier")
     platform = get("platform")
@@ -2274,6 +2803,17 @@ def filter_papers(papers: list[dict[str, Any]], params: dict[str, list[str]]) ->
             continue
         if author and not any(author in item.lower() for item in paper["authors"]):
             continue
+        if institution:
+            institution_text = " ".join(
+                paper.get("institutions", [])
+                + [
+                    value
+                    for item in paper.get("notable_institutions", [])
+                    for value in (item.get("id", ""), item.get("name", ""), item.get("parent", ""))
+                ]
+            ).lower()
+            if institution not in institution_text:
+                continue
         if source and source != paper["source"]:
             continue
         if tier and tier != paper["venue_tier"]:
@@ -2287,6 +2827,8 @@ def filter_papers(papers: list[dict[str, Any]], params: dict[str, list[str]]) ->
         if status and status != paper["status"]:
             continue
         if favorite == "1" and not paper["favorite"]:
+            continue
+        if SOURCES.is_non_research_title(paper["title"]):
             continue
         if paper["published"] and paper["published"] > latest_visible_date:
             continue
@@ -2493,12 +3035,16 @@ class AppHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/options":
             papers = filter_papers(STORE.list_papers(), {})
             projects = STORE.list_projects()
+            coverage = catalog_coverage()
             self.send_json(
                 {
                     "topics": sorted({topic for paper in papers for topic in paper["topics"]}),
                     "venues": sorted({paper["venue"] for paper in papers if paper["venue"]} | set(VENUE_CATALOG.venues())),
+                    "venue_counts": {item["venue"]: item["count"] for item in coverage["items"]},
+                    "venue_coverage": coverage,
                     "sources": sorted({paper["source"] for paper in papers if paper["source"]}),
                     "authors": sorted({author for paper in papers for author in paper["authors"]}),
+                    "institutions": INSTITUTION_CATALOG.entries,
                     "tiers": VenueCatalog.TIER_ORDER,
                     "platforms": sorted({paper["platform"] for paper in papers if paper["platform"]} | set(VENUE_CATALOG.platforms())),
                     "venue_types": ["会议", "期刊", "综述期刊", "预印本", "其他"],
@@ -2509,6 +3055,9 @@ class AppHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/venues":
             self.send_json({"items": VENUE_CATALOG.entries, "total": len(VENUE_CATALOG.entries)})
+            return
+        if parsed.path == "/api/coverage":
+            self.send_json(catalog_coverage())
             return
         if parsed.path == "/api/stats":
             papers = filter_papers(STORE.list_papers(), {})

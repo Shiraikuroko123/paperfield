@@ -76,6 +76,11 @@ class ExplanationTests(unittest.TestCase):
 
 
 class FeedTests(unittest.TestCase):
+    def test_acm_mm_edition_name_uses_correct_ordinal(self):
+        self.assertEqual(APP.PaperSources.ordinal(32), "32nd")
+        self.assertEqual(APP.PaperSources.ordinal(33), "33rd")
+        self.assertEqual(APP.PaperSources.ordinal(34), "34th")
+
     def test_future_issue_dates_are_hidden(self):
         today = APP.utc_now().date()
         base = {
@@ -96,6 +101,39 @@ class FeedTests(unittest.TestCase):
 
         self.assertEqual(APP.filter_papers([visible, future], {}), [visible])
 
+    def test_coverage_distinguishes_visible_scheduled_and_blocked_venues(self):
+        today = APP.utc_now().date()
+        entries = [
+            {"name": "Visible", "tier": "顶级会议", "kind": "会议", "platform": "Test"},
+            {"name": "Scheduled", "tier": "顶级会议", "kind": "会议", "platform": "Test"},
+            {"name": "Blocked", "tier": "顶级会议", "kind": "会议", "platform": "Test"},
+        ]
+        papers = [
+            {"title": "Visible paper", "venue": "Visible", "published": today.isoformat()},
+            {
+                "title": "Scheduled paper",
+                "venue": "Scheduled",
+                "published": (today + APP.timedelta(days=30)).isoformat(),
+            },
+        ]
+        coverage = APP.build_catalog_coverage(
+            entries,
+            papers,
+            {"Blocked": {"status": "blocked", "error_text": "browser challenge verification"}},
+        )
+        by_venue = {item["venue"]: item for item in coverage["items"]}
+
+        self.assertEqual(coverage["covered"], 1)
+        self.assertEqual(coverage["indexed"], 2)
+        self.assertEqual(by_venue["Scheduled"]["availability_status"], "scheduled")
+        self.assertEqual(by_venue["Blocked"]["availability_status"], "blocked")
+
+    def test_openreview_challenge_is_a_blocked_source(self):
+        self.assertEqual(
+            APP.venue_sync_error_status("OpenReview requires browser challenge verification"),
+            "blocked",
+        )
+
     def test_crossref_created_date_is_parsed(self):
         self.assertEqual(APP.iso_date({"date-time": "2026-07-11T08:30:00Z"}), "2026-07-11")
 
@@ -104,6 +142,18 @@ class FeedTests(unittest.TestCase):
         self.assertEqual(metadata["canonical_venue"], "IEEE RA-L")
         self.assertEqual(metadata["venue_tier"], "顶级期刊")
         self.assertEqual(metadata["platform"], "IEEE Xplore")
+
+    def test_venue_catalog_matches_proceedings_titles(self):
+        metadata = APP.VENUE_CATALOG.describe(
+            "Proceedings of the 32nd ACM International Conference on Multimedia"
+        )
+        self.assertEqual(metadata["canonical_venue"], "ACM MM")
+
+    def test_notable_institution_aliases_are_marked(self):
+        matches = APP.INSTITUTION_CATALOG.match(
+            ["Department of Electronic Engineering, Tsinghua University, Beijing, China"]
+        )
+        self.assertEqual(matches[0]["id"], "tsinghua-ai")
 
     def test_arxiv_is_labeled_as_unconfirmed_preprint(self):
         metadata = APP.VENUE_CATALOG.describe("arXiv", source="arXiv")
@@ -117,6 +167,7 @@ class FeedTests(unittest.TestCase):
                 "title": "A Vision-Language-Action Model for Robot Learning",
                 "abstract": "robot learning",
                 "authors": ["Researcher"],
+                "institutions": ["Tsinghua University"],
                 "published": "2026-01-01",
                 "updated": "2026-01-01",
                 "source_url": "https://example.com/paper",
@@ -133,6 +184,7 @@ class FeedTests(unittest.TestCase):
             self.assertFalse(inserted)
             self.assertEqual(store.count(), 1)
             self.assertEqual(store.list_papers()[0]["venue"], "CoRL")
+            self.assertEqual(store.list_papers()[0]["notable_institutions"][0]["id"], "tsinghua-ai")
 
     def test_project_name_links_to_paper_method_name(self):
         paper = {

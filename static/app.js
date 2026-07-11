@@ -69,6 +69,7 @@ function currentParams() {
     topic: state.topic || el("topicFilter").value,
     venue: el("venueFilter").value,
     author: el("authorFilter").value.trim(),
+    institution: el("institutionFilter").value,
     source: el("sourceFilter").value,
     tier: el("tierFilter").value,
     platform: el("platformFilter").value,
@@ -327,6 +328,7 @@ function renderPapers() {
         <h3 class="paper-title">${escapeHtml(paper.title)}</h3>
         <div class="paper-authors">${escapeHtml(paper.authors.join(" · ") || "作者信息缺失")}</div>
         <div class="paper-topics">${paper.topics.map((topic) => `<span class="topic-tag">${escapeHtml(topic)}</span>`).join("")}</div>
+        ${paper.notable_institutions?.length ? `<div class="institution-tags">${paper.notable_institutions.slice(0, 3).map((institution) => `<span title="${escapeHtml(institution.strengths.join(" · "))}">${escapeHtml(institution.name)}</span>`).join("")}</div>` : ""}
       </div>
       <div class="paper-score">
         <button class="favorite-toggle${paper.favorite ? " is-active" : ""}" type="button" aria-label="${paper.favorite ? "取消收藏" : "收藏论文"}" data-favorite>${paper.favorite ? "★" : "☆"}</button>
@@ -411,6 +413,12 @@ function renderDetail(paper) {
         ${paper.citation_count ? `<span>引用 ${paper.citation_count}</span>` : ""}
       </div>
       <div class="paper-topics">${paper.topics.map((topic) => `<span class="topic-tag">${escapeHtml(topic)}</span>`).join("")}</div>
+
+      ${paper.notable_institutions?.length ? `<section class="detail-section">
+        <h3>代表研究机构</h3>
+        <div class="institution-list">${paper.notable_institutions.map((institution) => `
+          <a href="${escapeHtml(institution.url)}" target="_blank" rel="noreferrer"><strong>${escapeHtml(institution.name)}</strong><span>${escapeHtml(institution.type)} · ${escapeHtml(institution.region)} · ${escapeHtml(institution.strengths.join("、"))}</span></a>`).join("")}</div>
+      </section>` : ""}
 
       ${paper.projects?.length ? `<section class="detail-section">
         <h3>关联 GitHub 项目</h3>
@@ -646,7 +654,8 @@ async function openReader(paperId) {
     const paper = await api(`/api/papers/${encodeURIComponent(paperId)}`);
     state.readerPaper = paper;
     el("readerTitle").textContent = paper.title;
-    el("readerMeta").textContent = `${paper.authors.join(" · ") || "作者信息缺失"} · ${paper.venue || paper.source} · ${formatDate(paper.published)}`;
+    const institutionNames = paper.notable_institutions?.slice(0, 2).map((item) => item.name).join(" · ");
+    el("readerMeta").textContent = `${paper.authors.join(" · ") || "作者信息缺失"} · ${paper.venue || paper.source} · ${formatDate(paper.published)}${institutionNames ? ` · ${institutionNames}` : ""}`;
     el("readerSourceLink").href = paper.source_url || paper.pdf_url || "#";
     renderReaderScore(paper);
     el("readerExplanation").innerHTML = paper.explanation
@@ -750,7 +759,27 @@ async function loadOptions() {
   fill(el("topicFilter"), options.topics, "全部主题");
   fill(el("tierFilter"), options.tiers, "全部层级");
   fill(el("platformFilter"), options.platforms, "全部平台");
-  fill(el("venueFilter"), options.venues, "全部刊物");
+  const coverageItems = options.venue_coverage?.items || [];
+  const coverageByVenue = new Map(coverageItems.map((item) => [item.venue, item]));
+  const venueLabel = (venue) => {
+    const item = coverageByVenue.get(venue);
+    if (!item) return venue;
+    if (item.availability_status === "scheduled") return `${venue}（待公开 ${item.scheduled_count}）`;
+    if (item.availability_status === "blocked") return `${venue}（数据源受限）`;
+    if (item.availability_status === "error") return `${venue}（同步失败）`;
+    if (item.availability_status === "pending") return `${venue}（待采集）`;
+    return `${venue}（${item.count}）`;
+  };
+  el("venueFilter").innerHTML = `<option value="">全部刊物</option>${options.venues.map((venue) => `<option value="${escapeHtml(venue)}">${escapeHtml(venueLabel(venue))}</option>`).join("")}`;
+  const coverage = options.venue_coverage;
+  el("coverageSummary").textContent = coverage
+    ? `当前可读 ${coverage.covered}/${coverage.catalog_total} · 已索引 ${coverage.indexed}/${coverage.catalog_total}${coverage.scheduled ? ` · ${coverage.scheduled} 个待公开` : ""}${coverage.blocked ? ` · ${coverage.blocked} 个受限` : ""}`
+    : "";
+  el("coverageSummary").title = coverageItems
+    .filter((item) => item.availability_status !== "available")
+    .map((item) => `${item.venue}: ${venueLabel(item.venue)}`)
+    .join("\n");
+  el("institutionFilter").innerHTML = `<option value="">全部机构</option>${options.institutions.map((institution) => `<option value="${escapeHtml(institution.id)}">${escapeHtml(institution.name)}</option>`).join("")}`;
   fill(el("sourceFilter"), options.sources, "全部数据源");
   fill(el("projectLanguageFilter"), options.project_languages, "全部语言");
   el("authorOptions").innerHTML = options.authors.map((author) => `<option value="${escapeHtml(author)}"></option>`).join("");
@@ -804,7 +833,7 @@ function clearFilters() {
   state.view = projectMode ? "projects" : recommendedMode ? "recommended" : "all";
   state.status = "";
   ["searchInput", "authorFilter", "dateFilter"].forEach((id) => { el(id).value = ""; });
-  ["topicFilter", "tierFilter", "platformFilter", "venueFilter", "sourceFilter"].forEach((id) => { el(id).value = ""; });
+  ["topicFilter", "tierFilter", "platformFilter", "venueFilter", "institutionFilter", "sourceFilter"].forEach((id) => { el(id).value = ""; });
   el("projectLanguageFilter").value = "";
   el("projectSortFilter").value = "updated";
   el("sortFilter").value = "quality";
@@ -819,7 +848,7 @@ function bindEvents() {
   const reload = debounce(() => loadPapers({ preserveSelection: false }));
   el("searchInput").addEventListener("input", reload);
   el("authorFilter").addEventListener("input", reload);
-  ["topicFilter", "tierFilter", "platformFilter", "venueFilter", "sourceFilter", "dateFilter", "sortFilter"].forEach((id) => el(id).addEventListener("change", () => {
+  ["topicFilter", "tierFilter", "platformFilter", "venueFilter", "institutionFilter", "sourceFilter", "dateFilter", "sortFilter"].forEach((id) => el(id).addEventListener("change", () => {
     if (id === "topicFilter") state.topic = "";
     loadPapers({ preserveSelection: false });
   }));

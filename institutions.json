@@ -1,0 +1,322 @@
+[
+  {
+    "id": "stanford-ai",
+    "name": "Stanford SAIL / CRFM",
+    "parent": "Stanford University",
+    "aliases": ["Stanford University", "Stanford AI Lab", "Stanford Artificial Intelligence Laboratory", "Stanford Center for Research on Foundation Models", "CRFM"],
+    "type": "高校研究机构",
+    "region": "美国",
+    "strengths": ["大语言模型", "具身智能", "多模态大模型", "智能体"],
+    "url": "https://ai.stanford.edu/"
+  },
+  {
+    "id": "berkeley-bair",
+    "name": "Berkeley AI Research",
+    "parent": "University of California, Berkeley",
+    "aliases": ["University of California Berkeley", "UC Berkeley", "Berkeley AI Research", "BAIR"],
+    "type": "高校研究机构",
+    "region": "美国",
+    "strengths": ["具身智能", "机器人学习", "大语言模型", "智能体"],
+    "url": "https://bair.berkeley.edu/"
+  },
+  {
+    "id": "cmu-ai",
+    "name": "CMU Robotics Institute / LTI",
+    "parent": "Carnegie Mellon University",
+    "aliases": ["Carnegie Mellon University", "CMU Robotics Institute", "Robotics Institute Carnegie Mellon", "Language Technologies Institute", "CMU LTI"],
+    "type": "高校研究机构",
+    "region": "美国",
+    "strengths": ["具身智能", "机器人学习", "大语言模型", "多模态大模型"],
+    "url": "https://www.ri.cmu.edu/"
+  },
+  {
+    "id": "mit-csail",
+    "name": "MIT CSAIL",
+    "parent": "Massachusetts Institute of Technology",
+    "aliases": ["Massachusetts Institute of Technology", "MIT", "MIT CSAIL", "Computer Science and Artificial Intelligence Laboratory"],
+    "type": "高校研究机构",
+    "region": "美国",
+    "strengths": ["具身智能", "机器人学习", "大语言模型", "智能体"],
+    "url": "https://www.csail.mit.edu/"
+  },
+  {
+    "id": "princeton-ai",
+    "name": "Princeton AI",
+    "parent": "Princeton University",
+    "aliases": ["Princeton University", "Princeton AI", "Princeton NLP"],
+    "type": "高校研究机构",
+    "region": "美国",
+    "strengths": ["大语言模型", "多模态大模型", "具身智能"],
+    "url": "https://ai.princeton.edu/"
+  },
+  {
+    "id": "washington-ai",
+    "name": "University of Washington AI",
+    "parent": "University of Washington",
+    "aliases": ["University of Washington", "UW NLP", "UW Robotics", "RAIVN Lab"],
+    "type": "高校研究机构",
+    "region": "美国",
+    "strengths": ["大语言模型", "多模态大模型", "具身智能", "机器人学习"],
+    "url": "https://www.cs.washington.edu/research/artificial-intelligence"
+  },
+  {
+    "id": "ucsd-robotics",
+    "name": "UC San Diego Contextual Robotics Institute",
+    "parent": "University of California, San Diego",
+    "aliases": ["University of California San Diego", "UC San Diego", "UCSD", "Contextual Robotics Institute"],
+    "type": "高校研究机构",
+    "region": "美国",
+    "strengths": ["具身智能", "机器人学习", "自动驾驶"],
+    "url": "https://contextualrobotics.ucsd.edu/"
+  },
+  {
+    "id": "gatech-irim",
+    "name": "Georgia Tech IRIM",
+    "parent": "Georgia Institute of Technology",
+    "aliases": ["Georgia Institute of Technology", "Georgia Tech", "Institute for Robotics and Intelligent Machines", "IRIM"],
+    "type": "高校研究机构",
+    "region": "美国",
+    "strengths": ["具身智能", "机器人学习", "触觉与灵巧操作"],
+    "url": "https://research.gatech.edu/robotics"
+  },
+  {
+    "id": "eth-robotics",
+    "name": "ETH Zurich Robotics",
+    "parent": "ETH Zurich",
+    "aliases": ["ETH Zurich", "ETH Zürich", "Robotic Systems Lab", "ETH RSL"],
+    "type": "高校研究机构",
+    "region": "瑞士",
+    "strengths": ["具身智能", "机器人学习", "自动驾驶"],
+    "url": "https://rsl.ethz.ch/"
+  },
+  {
+    "id": "oxford-robotics",
+    "name": "Oxford Robotics Institute",
+    "parent": "University of Oxford",
+    "aliases": ["University of Oxford", "Oxford Robotics Institute", "ORI Oxford"],
+    "type": "高校研究机构",
+    "region": "英国",
+    "strengths": ["具身智能", "机器人学习", "自动驾驶"],
+    "url": "https://ori.ox.ac.uk/"
+  },
+  {
+    "id": "mila",
+    "name": "Mila",
+    "parent": "Mila - Quebec AI Institute",
+    "aliases": ["Mila", "Mila Quebec AI Institute", "Mila - Quebec Artificial Intelligence Institute"],
+    "type": "公共研究机构",
+    "region": "加拿大",
+    "strengths": ["大语言模型", "多模态大模型", "强化学习"],
+    "url": "https://mila.quebec/"
+  },
+  {
+    "id": "vector-institute",
+    "name": "Vector Institute",
+    "parent": "Vector Institute",
+    "aliases": ["Vector Institute", "Vector Institute for Artificial Intelligence"],
+    "type": "公共研究机构",
+    "region": "加拿大",
+    "strengths": ["大语言模型", "多模态大模型", "模型效率"],
+    "url": "https://vectorinstitute.ai/"
+  },
+  {
+    "id": "ai2",
+    "name": "Allen Institute for AI",
+    "parent": "Allen Institute for AI",
+    "aliases": ["Allen Institute for AI", "Allen Institute for Artificial Intelligence", "AI2"],
+    "type": "公共研究机构",
+    "region": "美国",
+    "strengths": ["大语言模型", "多模态大模型", "智能体", "检索与知识增强"],
+    "url": "https://allenai.org/"
+  },
+  {
+    "id": "mpi-is",
+    "name": "Max Planck Institute for Intelligent Systems",
+    "parent": "Max Planck Society",
+    "aliases": ["Max Planck Institute for Intelligent Systems", "MPI for Intelligent Systems", "MPI-IS"],
+    "type": "公共研究机构",
+    "region": "德国",
+    "strengths": ["具身智能", "机器人学习", "触觉与灵巧操作"],
+    "url": "https://is.mpg.de/"
+  },
+  {
+    "id": "tsinghua-ai",
+    "name": "清华大学 AIR / THUNLP / KEG",
+    "parent": "清华大学",
+    "aliases": ["Tsinghua University", "清华大学", "Tsinghua Shenzhen International Graduate School", "清华大学深圳国际研究生院", "Institute for AI Industry Research", "AIR Tsinghua", "THUNLP", "Tsinghua KEG"],
+    "type": "高校研究机构",
+    "region": "中国",
+    "strengths": ["大语言模型", "多模态大模型", "智能体", "具身智能"],
+    "url": "https://air.tsinghua.edu.cn/"
+  },
+  {
+    "id": "pku-ai",
+    "name": "北京大学人工智能研究院",
+    "parent": "北京大学",
+    "aliases": ["Peking University", "北京大学", "PKU", "Institute for Artificial Intelligence Peking University", "北京大学人工智能研究院"],
+    "type": "高校研究机构",
+    "region": "中国",
+    "strengths": ["大语言模型", "多模态大模型", "具身智能", "智能体"],
+    "url": "https://www.ai.pku.edu.cn/"
+  },
+  {
+    "id": "shanghai-ai-lab",
+    "name": "上海人工智能实验室",
+    "parent": "上海人工智能实验室",
+    "aliases": ["Shanghai Artificial Intelligence Laboratory", "Shanghai AI Laboratory", "Shanghai AI Lab", "上海人工智能实验室"],
+    "type": "公共研究机构",
+    "region": "中国",
+    "strengths": ["大语言模型", "多模态大模型", "具身智能", "智能体"],
+    "url": "https://www.shlab.org.cn/"
+  },
+  {
+    "id": "casia",
+    "name": "中科院自动化所",
+    "parent": "中国科学院",
+    "aliases": ["Institute of Automation Chinese Academy of Sciences", "Institute of Automation, Chinese Academy of Sciences", "CASIA", "中科院自动化所", "中国科学院自动化研究所"],
+    "type": "公共研究机构",
+    "region": "中国",
+    "strengths": ["具身智能", "多模态大模型", "模式识别", "机器人学习"],
+    "url": "http://english.ia.cas.cn/"
+  },
+  {
+    "id": "zhejiang-ai",
+    "name": "浙江大学人工智能研究所 / CAD&CG",
+    "parent": "浙江大学",
+    "aliases": ["Zhejiang University", "浙江大学", "State Key Lab of CAD&CG", "CAD&CG Zhejiang University"],
+    "type": "高校研究机构",
+    "region": "中国",
+    "strengths": ["多模态大模型", "具身智能", "计算机视觉", "机器人学习"],
+    "url": "https://www.zju.edu.cn/english/"
+  },
+  {
+    "id": "sjtu-ai",
+    "name": "上海交通大学人工智能学院",
+    "parent": "上海交通大学",
+    "aliases": ["Shanghai Jiao Tong University", "上海交通大学", "SJTU", "School of Artificial Intelligence Shanghai Jiao Tong University"],
+    "type": "高校研究机构",
+    "region": "中国",
+    "strengths": ["大语言模型", "多模态大模型", "具身智能", "机器人学习"],
+    "url": "https://ai.sjtu.edu.cn/"
+  },
+  {
+    "id": "hit-robotics",
+    "name": "哈尔滨工业大学机器人研究所",
+    "parent": "哈尔滨工业大学",
+    "aliases": ["Harbin Institute of Technology", "哈尔滨工业大学", "HIT Robot Institute", "State Key Laboratory of Robotics and System"],
+    "type": "高校研究机构",
+    "region": "中国",
+    "strengths": ["具身智能", "机器人学习", "触觉与灵巧操作"],
+    "url": "https://www.hit.edu.cn/"
+  },
+  {
+    "id": "hkust-robotics",
+    "name": "HKUST Robotics Institute",
+    "parent": "Hong Kong University of Science and Technology",
+    "aliases": ["Hong Kong University of Science and Technology", "HKUST", "HKUST Robotics Institute"],
+    "type": "高校研究机构",
+    "region": "中国香港",
+    "strengths": ["具身智能", "机器人学习", "多模态大模型"],
+    "url": "https://ri.hkust.edu.hk/"
+  },
+  {
+    "id": "cuhk-mmlab",
+    "name": "CUHK MMLab",
+    "parent": "Chinese University of Hong Kong",
+    "aliases": ["Chinese University of Hong Kong", "CUHK", "CUHK MMLab", "Multimedia Laboratory CUHK"],
+    "type": "高校研究机构",
+    "region": "中国香港",
+    "strengths": ["多模态大模型", "计算机视觉", "具身智能"],
+    "url": "https://mmlab.ie.cuhk.edu.hk/"
+  },
+  {
+    "id": "pengcheng-lab",
+    "name": "鹏城实验室",
+    "parent": "鹏城实验室",
+    "aliases": ["Peng Cheng Laboratory", "Pengcheng Laboratory", "鹏城实验室"],
+    "type": "公共研究机构",
+    "region": "中国",
+    "strengths": ["大语言模型", "多模态大模型", "模型效率"],
+    "url": "https://www.pcl.ac.cn/"
+  },
+  {
+    "id": "idea-research",
+    "name": "IDEA 研究院",
+    "parent": "粤港澳大湾区数字经济研究院",
+    "aliases": ["International Digital Economy Academy", "IDEA Research", "IDEA 研究院", "粤港澳大湾区数字经济研究院"],
+    "type": "公共研究机构",
+    "region": "中国",
+    "strengths": ["大语言模型", "多模态大模型", "智能体"],
+    "url": "https://www.idea.edu.cn/"
+  },
+  {
+    "id": "google-deepmind",
+    "name": "Google DeepMind",
+    "parent": "Google",
+    "aliases": ["Google DeepMind", "DeepMind", "Google Research", "Google LLC"],
+    "type": "产业研究机构",
+    "region": "全球",
+    "strengths": ["大语言模型", "多模态大模型", "具身智能", "智能体"],
+    "url": "https://deepmind.google/"
+  },
+  {
+    "id": "nvidia-research",
+    "name": "NVIDIA Research",
+    "parent": "NVIDIA",
+    "aliases": ["NVIDIA", "NVIDIA Research", "NVIDIA Corporation"],
+    "type": "产业研究机构",
+    "region": "全球",
+    "strengths": ["具身智能", "多模态大模型", "模型效率", "机器人学习"],
+    "url": "https://research.nvidia.com/"
+  },
+  {
+    "id": "meta-fair",
+    "name": "Meta FAIR",
+    "parent": "Meta",
+    "aliases": ["Meta AI", "Meta FAIR", "FAIR", "Facebook AI Research", "Meta Platforms"],
+    "type": "产业研究机构",
+    "region": "全球",
+    "strengths": ["大语言模型", "多模态大模型", "具身智能", "智能体"],
+    "url": "https://ai.meta.com/research/"
+  },
+  {
+    "id": "microsoft-research",
+    "name": "Microsoft Research",
+    "parent": "Microsoft",
+    "aliases": ["Microsoft Research", "Microsoft Corporation", "Microsoft Research Asia", "MSRA", "微软亚洲研究院"],
+    "type": "产业研究机构",
+    "region": "全球",
+    "strengths": ["大语言模型", "多模态大模型", "智能体", "检索与知识增强"],
+    "url": "https://www.microsoft.com/en-us/research/"
+  },
+  {
+    "id": "toyota-research",
+    "name": "Toyota Research Institute",
+    "parent": "Toyota",
+    "aliases": ["Toyota Research Institute", "TRI", "Toyota Research Institute USA"],
+    "type": "产业研究机构",
+    "region": "美国",
+    "strengths": ["具身智能", "机器人学习", "自动驾驶", "触觉与灵巧操作"],
+    "url": "https://www.tri.global/"
+  },
+  {
+    "id": "physical-intelligence",
+    "name": "Physical Intelligence",
+    "parent": "Physical Intelligence",
+    "aliases": ["Physical Intelligence", "Physical Intelligence Inc", "PI Robotics"],
+    "type": "产业研究机构",
+    "region": "美国",
+    "strengths": ["具身智能", "机器人基础模型", "机器人学习"],
+    "url": "https://www.physicalintelligence.company/"
+  },
+  {
+    "id": "rai-institute",
+    "name": "The AI Institute",
+    "parent": "The AI Institute",
+    "aliases": ["The AI Institute", "Boston Dynamics AI Institute", "Robotics and AI Institute", "RAI Institute"],
+    "type": "产业研究机构",
+    "region": "美国",
+    "strengths": ["具身智能", "机器人学习", "触觉与灵巧操作"],
+    "url": "https://theaiinstitute.com/"
+  }
+]

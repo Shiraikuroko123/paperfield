@@ -15,12 +15,17 @@ Paperfield is a local research client for daily embodied-intelligence and large-
 ## Coverage
 
 - Official proceedings: PMLR (ICML, CoRL, AISTATS) and CVF Open Access (CVPR, ICCV, WACV)
-- Discovery and metadata: arXiv, OpenAlex, and Crossref
+- Dedicated collectors: ACM MM and IEEE Transactions on Robotics (IEEE T-RO)
+- Discovery and metadata: arXiv, OpenAlex, Crossref, and targeted Crossref venue queries
+- Fixed DBLP archives: selected conference proceedings and journal volumes that broad search misses
 - Curated catalog: 62 top or important conferences and journals across robotics, vision, language, machine learning, retrieval, agents, and ML systems
 - Optional DBLP supplement: set `PAPERFIELD_ENABLE_DBLP=1` when the DBLP API is reachable
 - GitHub project radar: tracks recently pushed embodied-AI and LLM repositories, with language/topic filters and high-confidence paper links
 
 Formal publications, important specialist venues, and unconfirmed arXiv preprints are labeled separately. The first full import is larger; later updates use indexed batch writes and normally finish much faster.
+The venue selector distinguishes papers available now, records with future publication dates, sources waiting for collection, and sources blocked by platform verification. See [`docs/COVERAGE_AUDIT.md`](docs/COVERAGE_AUDIT.md) for the latest audit and source limitations.
+
+Representative institutions and laboratories are marked from public affiliation metadata. These markers are informational and do not affect recommendation scores.
 
 ## Run
 
