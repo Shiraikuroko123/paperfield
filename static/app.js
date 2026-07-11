@@ -14,6 +14,8 @@ const state = {
   stats: null,
   connectorResults: [],
   storage: null,
+  projectWorkspace: null,
+  projectSelectedPath: "",
 };
 
 const el = (id) => document.getElementById(id);
@@ -141,25 +143,28 @@ function projectParams() {
   return params;
 }
 
+const isProjectMode = () => state.view === "projects" || state.view === "project-recommended";
+
 function applyViewMode() {
-  const projectMode = state.view === "projects";
+  const projectMode = isProjectMode();
+  const projectRecommendedMode = state.view === "project-recommended";
   const recommendedMode = state.view === "recommended";
-  document.querySelector(".content-grid").classList.toggle("is-recommended", recommendedMode);
+  document.querySelector(".content-grid").classList.toggle("is-recommended", recommendedMode || projectRecommendedMode);
   document.querySelectorAll(".paper-only-filter").forEach((item) => { item.hidden = projectMode || recommendedMode; });
-  document.querySelectorAll(".project-only-filter").forEach((item) => { item.hidden = !projectMode; });
-  el("dateFilter").closest("label").hidden = recommendedMode;
+  document.querySelectorAll(".project-only-filter").forEach((item) => { item.hidden = !projectMode || projectRecommendedMode; });
+  el("dateFilter").closest("label").hidden = recommendedMode || projectRecommendedMode;
   document.querySelector(".score-guide").hidden = projectMode;
-  el("streamTitle").textContent = projectMode ? "GitHub 项目" : recommendedMode ? "每日精选" : "论文流";
+  el("streamTitle").textContent = projectRecommendedMode ? "每日项目" : projectMode ? "GitHub 项目" : recommendedMode ? "每日精选" : "论文流";
   el("loadMoreButton").textContent = projectMode ? "加载更多项目" : "加载更多论文";
   document.querySelector(".stream-head .status-tabs").hidden = projectMode || recommendedMode;
-  el("overviewTitle").textContent = projectMode ? "今天有哪些项目在更新" : recommendedMode ? "今天先读这几篇" : "今天值得读什么";
-  el("overviewMessage").textContent = projectMode ? "跟踪具身智能与大模型开源仓库，并连接对应论文。" : recommendedMode ? "从完整候选池中按领域、刊物、时效、全文证据与复现线索二次筛选。" : "浏览全部公开论文元数据与来源。";
-  el("statTotalLabel").textContent = projectMode ? "GitHub 项目" : recommendedMode ? "今日精选" : "收录论文";
-  el("statUnreadLabel").textContent = projectMode ? "今日更新" : recommendedMode ? "候选池" : "未读";
+  el("overviewTitle").textContent = projectRecommendedMode ? "今天值得研究的项目" : projectMode ? "今天有哪些项目在更新" : recommendedMode ? "今天先读这几篇" : "今天值得读什么";
+  el("overviewMessage").textContent = projectRecommendedMode ? "从活跃仓库中按方向、社区采用、论文关联和完整度筛选。" : projectMode ? "跟踪具身智能与大模型开源仓库，并连接对应论文。" : recommendedMode ? "从完整候选池中按领域、刊物、时效、全文证据与复现线索二次筛选。" : "浏览全部公开论文元数据与来源。";
+  el("statTotalLabel").textContent = projectRecommendedMode ? "今日项目" : projectMode ? "GitHub 项目" : recommendedMode ? "今日精选" : "收录论文";
+  el("statUnreadLabel").textContent = projectRecommendedMode ? "候选项目" : projectMode ? "今日更新" : recommendedMode ? "候选池" : "未读";
   el("statFavoriteLabel").textContent = projectMode ? "论文关联" : "已收藏";
   if (state.stats) {
-    el("statTotal").textContent = projectMode ? state.stats.project_total : recommendedMode ? state.total : state.stats.total;
-    el("statUnread").textContent = projectMode ? state.stats.project_updated_today : recommendedMode ? state.stats.total : state.stats.unread;
+    el("statTotal").textContent = projectRecommendedMode ? state.total : projectMode ? state.stats.project_total : recommendedMode ? state.total : state.stats.total;
+    el("statUnread").textContent = projectRecommendedMode ? state.stats.project_total : projectMode ? state.stats.project_updated_today : recommendedMode ? state.stats.total : state.stats.unread;
     el("statFavorite").textContent = projectMode ? state.stats.project_link_count : state.stats.favorites;
     if (!state.stats.refresh.running) el("refreshButton").textContent = projectMode ? "更新全部" : "更新论文";
   }
@@ -177,6 +182,16 @@ function renderSkeleton() {
 async function loadProjects({ append = false } = {}) {
   if (!append) renderSkeleton();
   try {
+    if (state.view === "project-recommended") {
+      const payload = await api("/api/project-recommendations");
+      state.projects = payload.items;
+      state.total = payload.total;
+      renderProjects();
+      el("resultCount").textContent = `${payload.total} 个 · 候选 ${payload.candidate_total} 个`;
+      el("loadMoreWrap").hidden = true;
+      el("navProjectRecommendedCount").textContent = payload.total;
+      return;
+    }
     const params = projectParams();
     params.set("limit", state.pageSize);
     params.set("offset", append ? state.projects.length : 0);
@@ -220,6 +235,7 @@ function renderProjects() {
         <div class="paper-kicker">
           <span class="venue">${escapeHtml(project.categories.join(" · ") || "相关项目")}</span>
           <span>${escapeHtml(project.language || "语言未标注")}</span>
+          ${project.size_kb ? `<span>${Math.max(1, Math.round(project.size_kb / 1024))} MB</span>` : ""}
           <span>更新于 ${escapeHtml(formatDate(project.pushed_at?.slice(0, 10)))}</span>
         </div>
         <h3 class="paper-title">${escapeHtml(project.full_name)}</h3>
@@ -227,15 +243,15 @@ function renderProjects() {
         <div class="paper-topics">${project.topics.slice(0, 5).map((topic) => `<span class="topic-tag">${escapeHtml(topic)}</span>`).join("")}</div>
       </div>
       <div class="paper-score project-score">
-        <strong>${project.stars}</strong>
-        <span>Stars</span>
-        <b>${project.linked_paper_count} 篇论文</b>
+        <strong>${project.recommendation_score ? Math.round(project.recommendation_score) : project.stars}</strong>
+        <span>${project.recommendation_score ? "项目分" : "Stars"}</span>
+        <b>${project.recommendation_score ? `${project.stars} Stars` : `${project.linked_paper_count} 篇论文`}</b>
       </div>`;
-    row.addEventListener("click", () => openProject(project.full_name));
+    row.addEventListener("click", () => openProjectReader(project.full_name));
     row.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        openProject(project.full_name);
+        openProjectReader(project.full_name);
       }
     });
     list.append(row);
@@ -267,6 +283,7 @@ function renderProjectDetail(project) {
     <div class="detail-shell">
       <div class="detail-actions">
         <button type="button" data-close-detail>返回列表</button>
+        <button type="button" data-open-project-reader>代码工作台</button>
         <a href="${escapeHtml(project.url)}" target="_blank" rel="noreferrer">打开 GitHub</a>
         ${project.homepage ? `<a href="${escapeHtml(project.homepage)}" target="_blank" rel="noreferrer">项目主页</a>` : ""}
       </div>
@@ -287,6 +304,7 @@ function renderProjectDetail(project) {
       </section>
     </div>`;
   el("paperDetail").querySelector("[data-close-detail]").addEventListener("click", showReadingEmpty);
+  el("paperDetail").querySelector("[data-open-project-reader]").addEventListener("click", () => openProjectReader(project.full_name));
   el("paperDetail").querySelectorAll("[data-linked-paper]").forEach((button) => button.addEventListener("click", async () => {
     state.view = "all";
     state.topic = "";
@@ -297,8 +315,177 @@ function renderProjectDetail(project) {
   }));
 }
 
+function setProjectTab(tab) {
+  document.querySelectorAll("[data-project-tab]").forEach((button) => {
+    const active = button.dataset.projectTab === tab;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  const panels = { readme: "projectReadmePanel", explain: "projectExplainPanel", chat: "projectChatPanel" };
+  Object.entries(panels).forEach(([name, id]) => {
+    const active = name === tab;
+    el(id).hidden = !active;
+    el(id).classList.toggle("is-active", active);
+  });
+}
+
+function projectExplanationMarkup(explanation) {
+  const block = (title, value) => {
+    const content = Array.isArray(value)
+      ? `<ul>${value.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+      : `<p>${escapeHtml(value || "暂无")}</p>`;
+    return `<section class="project-explain-block"><h4>${title}</h4>${content}</section>`;
+  };
+  return `<div class="explain-head"><h3>代码讲解</h3><div class="explain-actions"><span class="explain-mode">${explanation.mode === "ai" ? `AI 讲解 · ${escapeHtml(explanation.model || "")}` : "元数据导读"}</span><button class="text-button" type="button" data-project-explain>重新生成</button></div></div>
+    ${explanation.notice ? `<p style="color:var(--warning)">${escapeHtml(explanation.notice)}</p>` : ""}
+    <div class="project-explain-grid">
+      ${block("项目目标", explanation.overview)}${block("代码架构", explanation.architecture)}${block("关键入口", explanation.entry_points)}
+      ${block("代码流程", explanation.code_flow)}${block("安装与运行", explanation.setup)}${block("值得学习", explanation.strengths)}
+      ${block("风险与边界", explanation.risks)}${block("阅读顺序", explanation.learning_path)}
+    </div>`;
+}
+
+function renderProjectTree(paths) {
+  const root = {};
+  paths.forEach((path) => {
+    let node = root;
+    const parts = path.split("/");
+    parts.forEach((part, index) => {
+      if (index === parts.length - 1) {
+        node.__files = node.__files || [];
+        node.__files.push({ name: part, path });
+      } else {
+        node[part] = node[part] || {};
+        node = node[part];
+      }
+    });
+  });
+  const renderNode = (node) => {
+    const directories = Object.keys(node).filter((key) => key !== "__files").sort();
+    const files = (node.__files || []).sort((a, b) => a.name.localeCompare(b.name));
+    return `${directories.map((name) => `<details><summary>${escapeHtml(name)}</summary>${renderNode(node[name])}</details>`).join("")}${files.map((file) => `<button type="button" title="${escapeHtml(file.path)}" data-project-file="${escapeHtml(file.path)}">${escapeHtml(file.name)}</button>`).join("")}`;
+  };
+  el("projectFileTree").innerHTML = renderNode(root);
+  el("projectFileTree").querySelectorAll("[data-project-file]").forEach((button) => button.addEventListener("click", () => loadProjectFile(button.dataset.projectFile)));
+}
+
+async function loadProjectFile(path) {
+  const workspace = state.projectWorkspace;
+  if (!workspace || !path) return;
+  state.projectSelectedPath = path;
+  el("projectCurrentPath").textContent = path;
+  el("projectCodeContent").textContent = "正在读取文件";
+  document.querySelectorAll("[data-project-file]").forEach((button) => button.classList.toggle("is-active", button.dataset.projectFile === path));
+  try {
+    const payload = await api(`/api/projects/${encodeURIComponent(workspace.project.full_name)}/source?path=${encodeURIComponent(path)}`);
+    el("projectCodeContent").textContent = payload.content || "文件为空";
+  } catch (error) {
+    el("projectCodeContent").textContent = error.message;
+  }
+}
+
+function renderProjectChatHistory(items = []) {
+  const history = el("projectChatHistory");
+  history.innerHTML = "";
+  if (!items.length) {
+    history.innerHTML = `<p class="chat-empty">还没有针对这个项目的提问。</p>`;
+    return;
+  }
+  items.forEach((item) => {
+    const message = document.createElement("div");
+    message.className = `chat-message is-${item.role}`;
+    const label = document.createElement("strong");
+    label.textContent = item.role === "user" ? "你" : "代码导师";
+    const content = document.createElement("p");
+    content.textContent = item.content;
+    message.append(label, content);
+    history.append(message);
+  });
+  history.scrollTop = history.scrollHeight;
+}
+
+async function loadProjectChatHistory(fullName) {
+  try {
+    const payload = await api(`/api/projects/${encodeURIComponent(fullName)}/chat`);
+    renderProjectChatHistory(payload.items);
+  } catch (error) {
+    renderProjectChatHistory([]);
+  }
+}
+
+function renderProjectWorkspace(workspace) {
+  state.projectWorkspace = workspace;
+  const project = workspace.project;
+  el("projectReaderTitle").textContent = project.full_name;
+  el("projectReaderMeta").textContent = `${project.language || "语言未标注"} · ${project.stars} Stars · ${workspace.file_count} 个源码文件 · ${project.linked_paper_count} 篇关联论文${project.size_kb ? ` · 仓库约 ${Math.max(1, Math.round(project.size_kb / 1024))} MB` : ""}`;
+  el("projectGithubLink").href = project.url;
+  el("projectReadmeContent").textContent = workspace.readme || "仓库没有找到 README。";
+  if (!workspace.ready) {
+    el("projectFileTree").innerHTML = "";
+    el("projectCurrentPath").textContent = "源码不可用";
+    el("projectCodeContent").textContent = workspace.error || "仓库中没有可安全显示的文本源码。";
+  } else {
+    renderProjectTree(workspace.files);
+    const preferred = workspace.files.find((path) => /(^|\/)(main|app|server|model|train)\.(py|js|ts|tsx|go|rs)$/i.test(path))
+      || workspace.files.find((path) => !/\.(md|rst|txt)$/i.test(path))
+      || workspace.files[0];
+    loadProjectFile(preferred);
+  }
+  el("projectExplanation").innerHTML = workspace.explanation
+    ? projectExplanationMarkup(workspace.explanation)
+    : `<div class="reader-explain-empty"><strong>尚未生成代码讲解</strong><p>讲解会读取 README、依赖配置、入口文件和核心模块，但不会执行仓库代码。</p><button class="button button-primary" type="button" data-project-explain>生成代码讲解</button></div>`;
+  el("projectExplanation").querySelector("[data-project-explain]")?.addEventListener("click", generateProjectExplanation);
+}
+
+async function openProjectReader(fullName, force = false) {
+  const dialog = el("projectReaderDialog");
+  state.selectedProject = fullName;
+  state.projectWorkspace = null;
+  state.projectSelectedPath = "";
+  setProjectTab("readme");
+  el("projectReaderTitle").textContent = fullName;
+  el("projectReaderMeta").textContent = "正在缓存公开仓库源码";
+  el("projectFileTree").innerHTML = "";
+  el("projectCurrentPath").textContent = "正在读取仓库";
+  el("projectCodeContent").textContent = "下载并校验公开源码压缩包";
+  el("projectReadmeContent").textContent = "正在读取 README";
+  el("projectExplanation").innerHTML = "";
+  renderProjectChatHistory([]);
+  if (!dialog.open) dialog.showModal();
+  const url = new URL(window.location.href);
+  url.searchParams.set("view", state.view);
+  url.searchParams.set("project", fullName);
+  url.searchParams.delete("paper");
+  window.history.replaceState({}, "", url);
+  try {
+    const workspace = await api(`/api/projects/${encodeURIComponent(fullName)}/workspace`, { method: "POST", body: JSON.stringify({ force }) });
+    renderProjectWorkspace(workspace);
+    await loadProjectChatHistory(fullName);
+  } catch (error) {
+    el("projectCodeContent").textContent = error.message;
+    el("projectReadmeContent").textContent = error.message;
+    toast(error.message, true);
+  }
+}
+
+async function generateProjectExplanation() {
+  const workspace = state.projectWorkspace;
+  if (!workspace) return;
+  setProjectTab("explain");
+  el("projectExplanation").innerHTML = `<div class="reader-explain-empty"><strong>正在分析代码</strong><p>读取入口、配置与核心模块</p></div>`;
+  try {
+    const explanation = await api(`/api/projects/${encodeURIComponent(workspace.project.full_name)}/explain`, { method: "POST", body: "{}" });
+    workspace.explanation = explanation;
+    el("projectExplanation").innerHTML = projectExplanationMarkup(explanation);
+    el("projectExplanation").querySelector("[data-project-explain]")?.addEventListener("click", generateProjectExplanation);
+  } catch (error) {
+    el("projectExplanation").innerHTML = `<div class="reader-explain-empty"><strong>代码讲解失败</strong><p>${escapeHtml(error.message)}</p><button class="button button-secondary" type="button" data-project-explain>重试</button></div>`;
+    el("projectExplanation").querySelector("[data-project-explain]").addEventListener("click", generateProjectExplanation);
+  }
+}
+
 async function loadPapers({ preserveSelection = true, append = false } = {}) {
-  if (state.view === "projects") return loadProjects({ append });
+  if (isProjectMode()) return loadProjects({ append });
   if (!append) renderSkeleton();
   try {
     if (state.view === "recommended") {
@@ -852,7 +1039,7 @@ function showReadingEmpty() {
   el("paperDetail").hidden = true;
   el("readingEmpty").hidden = false;
   el("readingPane").classList.remove("is-open");
-  if (state.view === "projects") state.selectedProject = null;
+  if (isProjectMode()) state.selectedProject = null;
   const url = new URL(window.location.href);
   url.searchParams.delete("paper");
   url.searchParams.delete("project");
@@ -902,6 +1089,7 @@ async function loadStats() {
   el("navAllCount").textContent = stats.total;
   el("navTopCount").textContent = stats.top_venue_count;
   el("navProjectCount").textContent = stats.project_total;
+  el("navProjectRecommendedCount").textContent = Math.min(4, stats.project_total);
   el("navFavoriteCount").textContent = stats.favorites;
   el("navEmbodiedCount").textContent = stats.topic_counts["具身智能"] || 0;
   el("navLlmCount").textContent = stats.topic_counts["大语言模型"] || 0;
@@ -935,10 +1123,10 @@ async function triggerRefresh() {
 }
 
 function clearFilters() {
-  const projectMode = state.view === "projects";
+  const projectMode = isProjectMode();
   const recommendedMode = state.view === "recommended";
   state.topic = "";
-  state.view = projectMode ? "projects" : recommendedMode ? "recommended" : "all";
+  state.view = projectMode ? state.view : recommendedMode ? "recommended" : "all";
   state.status = "";
   ["searchInput", "authorFilter", "dateFilter"].forEach((id) => { el(id).value = ""; });
   ["topicFilter", "tierFilter", "platformFilter", "venueFilter", "institutionFilter", "sourceFilter"].forEach((id) => { el(id).value = ""; });
@@ -998,12 +1186,12 @@ function bindEvents() {
       return;
     }
     if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) return;
-    const activeItems = state.view === "projects" ? state.projects : state.papers;
+    const activeItems = isProjectMode() ? state.projects : state.papers;
     if ((event.key === "j" || event.key === "k") && activeItems.length) {
       event.preventDefault();
-      const current = Math.max(0, activeItems.findIndex((item) => state.view === "projects" ? item.full_name === state.selectedProject : item.id === state.selectedId));
+      const current = Math.max(0, activeItems.findIndex((item) => isProjectMode() ? item.full_name === state.selectedProject : item.id === state.selectedId));
       const next = event.key === "j" ? Math.min(activeItems.length - 1, current + 1) : Math.max(0, current - 1);
-      if (state.view === "projects") openProject(activeItems[next].full_name);
+      if (isProjectMode()) openProjectReader(activeItems[next].full_name);
       else openPaper(activeItems[next].id);
     }
   });
@@ -1020,6 +1208,36 @@ function bindEvents() {
   el("pdfUnavailableImportButton").addEventListener("click", () => el("readerPdfInput").click());
   el("readerPdfInput").addEventListener("change", () => importReaderPdf(el("readerPdfInput").files?.[0]));
   el("readerCloudButton").addEventListener("click", archiveReaderPdf);
+  el("projectReaderClose").addEventListener("click", () => el("projectReaderDialog").close());
+  document.querySelectorAll("[data-project-tab]").forEach((button) => button.addEventListener("click", () => setProjectTab(button.dataset.projectTab)));
+  el("projectRefreshSource").addEventListener("click", () => state.projectWorkspace && openProjectReader(state.projectWorkspace.project.full_name, true));
+  el("projectFileSearch").addEventListener("input", () => {
+    const query = el("projectFileSearch").value.trim().toLowerCase();
+    el("projectFileTree").querySelectorAll("[data-project-file]").forEach((button) => {
+      button.hidden = Boolean(query) && !button.dataset.projectFile.toLowerCase().includes(query);
+    });
+    if (query) el("projectFileTree").querySelectorAll("details").forEach((item) => { item.open = true; });
+  });
+  el("projectChatForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const workspace = state.projectWorkspace;
+    const question = el("projectChatQuestion").value.trim();
+    if (!workspace || !question) return;
+    const button = event.submitter || el("projectChatForm").querySelector("button[type=submit]");
+    button.disabled = true;
+    el("projectChatQuestion").value = "";
+    try {
+      await api(`/api/projects/${encodeURIComponent(workspace.project.full_name)}/chat`, {
+        method: "POST",
+        body: JSON.stringify({ question, selected_path: state.projectSelectedPath }),
+      });
+      await loadProjectChatHistory(workspace.project.full_name);
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  });
   el("translationPage").addEventListener("change", () => loadTranslationPage(Number(el("translationPage").value) || 1));
   el("translatePageButton").addEventListener("click", translateCurrentPage);
   el("chatForm").addEventListener("submit", async (event) => {
@@ -1054,7 +1272,9 @@ async function init() {
   const initialParams = new URLSearchParams(window.location.search);
   const initialPaperId = initialParams.get("paper");
   const initialProject = initialParams.get("project");
-  if (initialParams.get("view") === "projects" || initialProject) state.view = "projects";
+  const requestedView = initialParams.get("view");
+  if (requestedView === "project-recommended") state.view = "project-recommended";
+  else if (requestedView === "projects" || initialProject) state.view = "projects";
   el("overviewDate").textContent = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric", weekday: "long" }).format(now);
   bindEvents();
   applyViewMode();
@@ -1062,7 +1282,7 @@ async function init() {
   try {
     await Promise.all([loadOptions(), loadStats(), loadStorageStatus(), loadPapers({ preserveSelection: false })]);
     if (initialPaperId) await openPaper(initialPaperId, false);
-    if (initialProject) await openProject(initialProject, false);
+    if (initialProject) await openProjectReader(initialProject);
   } catch (error) {
     toast(error.message, true);
   }

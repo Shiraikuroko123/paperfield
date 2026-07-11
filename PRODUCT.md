@@ -10,7 +10,7 @@ The primary user is a Chinese graduate student or early-stage researcher who fol
 
 ## Product Purpose
 
-Paperfield collects recent research from public scholarly sources, selects a small high-quality daily reading list, resolves legal open-access PDFs, and turns full papers into a Chinese reading workflow. Success means the user can identify the few papers worth reading today, inspect the source PDF, understand methods and evidence, ask grounded questions, and preserve a useful research trail without maintaining spreadsheets or browser tabs.
+Paperfield collects recent research and public GitHub projects, selects small high-quality daily reading lists, resolves legal open-access PDFs, and turns papers and source code into Chinese reading workflows. Success means the user can identify the few papers and projects worth studying today, inspect source evidence, understand methods and implementations, ask grounded questions, and preserve a useful research trail without maintaining spreadsheets or browser tabs.
 
 ## Brand Personality
 

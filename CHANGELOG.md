@@ -6,6 +6,13 @@ All notable changes to Paperfield are documented here.
 
 - No unreleased changes yet.
 
+## 0.7.0 - 2026-07-11
+
+- Added a daily list of up to four recommended GitHub projects with explainable scores and topic diversity.
+- Added safe public-repository source caching without executing downloaded code.
+- Added a project code workspace with file tree, source viewer, README, AI explanation, and grounded chat.
+- Added repository branch and size metadata to improve source retrieval and recommendation quality.
+
 ## 0.6.0 - 2026-07-11
 
 - Added explicit primary and secondary sorting for papers and GitHub projects.

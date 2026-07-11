@@ -9,6 +9,7 @@ import ipaddress
 import json
 import os
 import re
+import shutil
 import sqlite3
 import threading
 import time
@@ -16,6 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+import zipfile
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -29,10 +31,11 @@ DATA_DIR = Path(os.environ.get("PAPERFIELD_DATA_DIR", ROOT / "data")).expanduser
 DB_PATH = Path(os.environ.get("PAPERFIELD_DB_PATH", DATA_DIR / "papers.db")).expanduser().resolve()
 PDF_DIR = Path(os.environ.get("PAPERFIELD_PDF_DIR", DATA_DIR / "pdfs")).expanduser().resolve()
 FULLTEXT_DIR = Path(os.environ.get("PAPERFIELD_FULLTEXT_DIR", DATA_DIR / "fulltext")).expanduser().resolve()
+PROJECT_REPO_DIR = Path(os.environ.get("PAPERFIELD_PROJECT_REPO_DIR", DATA_DIR / "repos")).expanduser().resolve()
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
 INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", ROOT / "institutions.json")).expanduser().resolve()
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.7.0"
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
 
@@ -252,6 +255,8 @@ class PaperStore:
                     open_issues INTEGER NOT NULL DEFAULT 0,
                     language TEXT NOT NULL DEFAULT '',
                     license TEXT NOT NULL DEFAULT '',
+                    default_branch TEXT NOT NULL DEFAULT '',
+                    size_kb INTEGER NOT NULL DEFAULT 0,
                     topics_json TEXT NOT NULL DEFAULT '[]',
                     categories_json TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL DEFAULT '',
@@ -266,6 +271,25 @@ class PaperStore:
                     reason TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY (paper_id, project_full_name),
                     FOREIGN KEY(paper_id) REFERENCES papers(id),
+                    FOREIGN KEY(project_full_name) REFERENCES github_projects(full_name)
+                );
+                CREATE TABLE IF NOT EXISTS project_assets (
+                    project_full_name TEXT PRIMARY KEY,
+                    local_repo_path TEXT NOT NULL DEFAULT '',
+                    readme_path TEXT NOT NULL DEFAULT '',
+                    file_count INTEGER NOT NULL DEFAULT 0,
+                    source_chars INTEGER NOT NULL DEFAULT 0,
+                    checked_at TEXT NOT NULL DEFAULT '',
+                    error_text TEXT NOT NULL DEFAULT '',
+                    explanation_json TEXT NOT NULL DEFAULT '',
+                    FOREIGN KEY(project_full_name) REFERENCES github_projects(full_name)
+                );
+                CREATE TABLE IF NOT EXISTS project_chat_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_full_name TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
                     FOREIGN KEY(project_full_name) REFERENCES github_projects(full_name)
                 );
                 CREATE TABLE IF NOT EXISTS paper_assets (
@@ -308,6 +332,8 @@ class PaperStore:
                     ON paper_project_links(project_full_name);
                 CREATE INDEX IF NOT EXISTS idx_paper_chat_messages_paper
                     ON paper_chat_messages(paper_id, id);
+                CREATE INDEX IF NOT EXISTS idx_project_chat_messages_project
+                    ON project_chat_messages(project_full_name, id);
                 """
             )
             paper_columns = {row["name"] for row in db.execute("PRAGMA table_info(papers)").fetchall()}
@@ -321,6 +347,13 @@ class PaperStore:
             ):
                 if name not in asset_columns:
                     db.execute(f"ALTER TABLE paper_assets ADD COLUMN {name} {definition}")
+            project_columns = {row["name"] for row in db.execute("PRAGMA table_info(github_projects)").fetchall()}
+            for name, definition in (
+                ("default_branch", "TEXT NOT NULL DEFAULT ''"),
+                ("size_kb", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if name not in project_columns:
+                    db.execute(f"ALTER TABLE github_projects ADD COLUMN {name} {definition}")
 
     def count(self) -> int:
         with self.connect() as db:
@@ -409,9 +442,9 @@ class PaperStore:
                     """
                     INSERT INTO github_projects (
                         full_name, name, owner, description, url, homepage, stars, forks,
-                        open_issues, language, license, topics_json, categories_json,
-                        created_at, updated_at, pushed_at, fetched_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        open_issues, language, license, default_branch, size_kb, topics_json,
+                        categories_json, created_at, updated_at, pushed_at, fetched_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(full_name) DO UPDATE SET
                         name=excluded.name,
                         owner=excluded.owner,
@@ -423,6 +456,8 @@ class PaperStore:
                         open_issues=excluded.open_issues,
                         language=excluded.language,
                         license=excluded.license,
+                        default_branch=excluded.default_branch,
+                        size_kb=excluded.size_kb,
                         topics_json=excluded.topics_json,
                         categories_json=excluded.categories_json,
                         updated_at=excluded.updated_at,
@@ -433,6 +468,7 @@ class PaperStore:
                         project["full_name"], project["name"], project["owner"], project.get("description", ""),
                         project["url"], project.get("homepage", ""), project.get("stars", 0), project.get("forks", 0),
                         project.get("open_issues", 0), project.get("language", ""), project.get("license", ""),
+                        project.get("default_branch", ""), project.get("size_kb", 0),
                         json.dumps(project.get("topics", []), ensure_ascii=False),
                         json.dumps(project.get("categories", []), ensure_ascii=False),
                         project.get("created_at", ""), project.get("updated_at", ""), project.get("pushed_at", ""),
@@ -471,6 +507,72 @@ class PaperStore:
         project = self._serialize_project(row)
         project["papers"] = self.papers_for_project(full_name)
         return project
+
+    def get_project_asset(self, full_name: str) -> dict[str, Any] | None:
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM project_assets WHERE project_full_name = ?", (full_name,)).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        raw = result.pop("explanation_json", "")
+        result["explanation"] = json.loads(raw) if raw else None
+        return result
+
+    def save_project_asset(self, full_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        current = self.get_project_asset(full_name) or {}
+        explanation = payload.get("explanation", current.get("explanation"))
+        values = {
+            "local_repo_path": payload.get("local_repo_path", current.get("local_repo_path", "")),
+            "readme_path": payload.get("readme_path", current.get("readme_path", "")),
+            "file_count": int(payload.get("file_count", current.get("file_count", 0)) or 0),
+            "source_chars": int(payload.get("source_chars", current.get("source_chars", 0)) or 0),
+            "checked_at": payload.get("checked_at", utc_now().isoformat()),
+            "error_text": str(payload.get("error_text", current.get("error_text", "")))[:2000],
+            "explanation_json": json.dumps(explanation, ensure_ascii=False) if explanation else "",
+        }
+        with self.connect() as db:
+            db.execute(
+                """
+                INSERT INTO project_assets (
+                    project_full_name, local_repo_path, readme_path, file_count,
+                    source_chars, checked_at, error_text, explanation_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(project_full_name) DO UPDATE SET
+                    local_repo_path=excluded.local_repo_path,
+                    readme_path=excluded.readme_path,
+                    file_count=excluded.file_count,
+                    source_chars=excluded.source_chars,
+                    checked_at=excluded.checked_at,
+                    error_text=excluded.error_text,
+                    explanation_json=excluded.explanation_json
+                """,
+                (
+                    full_name, values["local_repo_path"], values["readme_path"], values["file_count"],
+                    values["source_chars"], values["checked_at"], values["error_text"], values["explanation_json"],
+                ),
+            )
+        return self.get_project_asset(full_name) or {"project_full_name": full_name, **values}
+
+    def save_project_explanation(self, full_name: str, explanation: dict[str, Any]) -> dict[str, Any]:
+        return self.save_project_asset(full_name, {"explanation": explanation})
+
+    def add_project_chat_message(self, full_name: str, role: str, content: str) -> None:
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO project_chat_messages (project_full_name, role, content, created_at) VALUES (?, ?, ?, ?)",
+                (full_name, role, content[:30000], utc_now().isoformat()),
+            )
+
+    def project_chat_history(self, full_name: str, limit: int = 12) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            rows = db.execute(
+                """
+                SELECT role, content, created_at FROM project_chat_messages
+                WHERE project_full_name = ? ORDER BY id DESC LIMIT ?
+                """,
+                (full_name, limit),
+            ).fetchall()
+        return [dict(row) for row in reversed(rows)]
 
     def count_projects(self) -> int:
         with self.connect() as db:
@@ -1872,6 +1974,8 @@ class GitHubSource:
                     "open_issues": repo.get("open_issues_count") or 0,
                     "language": repo.get("language") or "",
                     "license": ((repo.get("license") or {}).get("spdx_id") or "").replace("NOASSERTION", ""),
+                    "default_branch": repo.get("default_branch") or "",
+                    "size_kb": repo.get("size") or 0,
                     "topics": topics,
                     "categories": categories,
                     "created_at": repo.get("created_at") or "",
@@ -1883,6 +1987,319 @@ class GitHubSource:
         if not successful_queries and last_error:
             raise last_error
         return list(projects.values())
+
+
+class ProjectAssetService:
+    TEXT_EXTENSIONS = {
+        ".py", ".pyi", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".java", ".kt",
+        ".c", ".cc", ".cpp", ".h", ".hpp", ".go", ".rs", ".rb", ".php", ".swift",
+        ".sh", ".ps1", ".bat", ".yaml", ".yml", ".json", ".toml", ".ini", ".cfg",
+        ".md", ".rst", ".txt", ".html", ".css", ".scss", ".sql", ".proto", ".ipynb",
+    }
+    TEXT_FILENAMES = {
+        "dockerfile", "makefile", "license", "notice", "requirements.txt", "environment.yml",
+        "pyproject.toml", "package.json", "cargo.toml", "go.mod", "cmakelists.txt",
+    }
+    IGNORED_PARTS = {
+        ".git", ".github", "node_modules", "vendor", "dist", "build", "target", "__pycache__",
+        ".venv", "venv", "datasets", "data", "checkpoints", "weights", "outputs", "logs",
+    }
+
+    def __init__(self, store: PaperStore) -> None:
+        self.store = store
+        self._lock = threading.RLock()
+        PROJECT_REPO_DIR.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _cache_key(full_name: str) -> str:
+        return hashlib.sha256(full_name.encode("utf-8")).hexdigest()[:24]
+
+    def _repo_path(self, full_name: str) -> Path:
+        return PROJECT_REPO_DIR / self._cache_key(full_name)
+
+    @classmethod
+    def _wanted_file(cls, relative: Path) -> bool:
+        lower_parts = {part.lower() for part in relative.parts}
+        if lower_parts.intersection(cls.IGNORED_PARTS):
+            return False
+        return relative.suffix.lower() in cls.TEXT_EXTENSIONS or relative.name.lower() in cls.TEXT_FILENAMES
+
+    def _download(self, project: dict[str, Any], target: Path) -> tuple[int, int, str]:
+        full_name = project["full_name"]
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", full_name):
+            raise ValueError("GitHub 仓库名称不合法")
+        maximum_zip = max(20, int(os.environ.get("PAPERFIELD_PROJECT_ZIP_MAX_MB", "120"))) * 1024 * 1024
+        branch = compact_text(project.get("default_branch"))
+        archive_url = (
+            f"https://codeload.github.com/{full_name}/zip/refs/heads/{urllib.parse.quote(branch, safe='')}"
+            if branch else f"https://github.com/{full_name}/archive/HEAD.zip"
+        )
+        request = urllib.request.Request(
+            archive_url,
+            headers={"User-Agent": USER_AGENT, "Accept": "application/zip"},
+        )
+        archive = PROJECT_REPO_DIR / f"{self._cache_key(full_name)}.zip.part"
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response, archive.open("wb") as handle:
+                content_length = int(response.headers.get("Content-Length", "0") or 0)
+                if content_length > maximum_zip:
+                    raise ValueError("仓库压缩包超过缓存大小限制")
+                total = 0
+                while True:
+                    chunk = response.read(1024 * 512)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > maximum_zip:
+                        raise ValueError("仓库压缩包超过缓存大小限制")
+                    handle.write(chunk)
+            if target.exists():
+                resolved_target = target.resolve()
+                if not resolved_target.is_relative_to(PROJECT_REPO_DIR.resolve()):
+                    raise ValueError("仓库缓存目录不安全")
+                shutil.rmtree(target)
+            target.mkdir(parents=True, exist_ok=True)
+            file_count = 0
+            source_chars = 0
+            extracted_bytes = 0
+            extracted_limit = max(50, int(os.environ.get("PAPERFIELD_PROJECT_TEXT_MAX_MB", "200"))) * 1024 * 1024
+            with zipfile.ZipFile(archive) as bundle:
+                for index, info in enumerate(bundle.infolist()):
+                    if index >= 20000:
+                        break
+                    if info.is_dir() or info.file_size > 1024 * 1024:
+                        continue
+                    if ((info.external_attr >> 16) & 0o170000) == 0o120000:
+                        continue
+                    parts = [part for part in info.filename.replace("\\", "/").split("/") if part]
+                    if len(parts) < 2:
+                        continue
+                    relative = Path(*parts[1:])
+                    if relative.is_absolute() or ".." in relative.parts or not self._wanted_file(relative):
+                        continue
+                    extracted_bytes += info.file_size
+                    if extracted_bytes > extracted_limit or file_count >= 5000:
+                        break
+                    content = bundle.read(info)
+                    if b"\x00" in content[:4096]:
+                        continue
+                    destination = (target / relative).resolve()
+                    if not destination.is_relative_to(target.resolve()):
+                        continue
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_bytes(content)
+                    file_count += 1
+                    source_chars += len(content.decode("utf-8", errors="replace"))
+            readmes = sorted(
+                (path for path in target.rglob("*") if path.is_file() and path.name.lower().startswith("readme")),
+                key=lambda path: (len(path.relative_to(target).parts), path.name.lower()),
+            )
+            readme_path = str(readmes[0]) if readmes else ""
+            return file_count, source_chars, readme_path
+        finally:
+            archive.unlink(missing_ok=True)
+
+    def prepare(self, project: dict[str, Any], force: bool = False) -> dict[str, Any]:
+        with self._lock:
+            asset = self.store.get_project_asset(project["full_name"]) or {}
+            repo_path = Path(asset.get("local_repo_path", "")) if asset.get("local_repo_path") else None
+            if not force and repo_path and repo_path.exists() and asset.get("checked_at"):
+                try:
+                    if (utc_now() - datetime.fromisoformat(asset["checked_at"])).days < 7:
+                        return self.workspace(project, asset)
+                except ValueError:
+                    pass
+            target = self._repo_path(project["full_name"])
+            try:
+                file_count, source_chars, readme_path = self._download(project, target)
+                asset = self.store.save_project_asset(
+                    project["full_name"],
+                    {
+                        "local_repo_path": str(target),
+                        "readme_path": readme_path,
+                        "file_count": file_count,
+                        "source_chars": source_chars,
+                        "error_text": "" if file_count else "仓库中没有可安全显示的文本源码",
+                    },
+                )
+            except Exception as error:
+                asset = self.store.save_project_asset(project["full_name"], {"error_text": str(error)})
+            return self.workspace(project, asset)
+
+    def _root(self, full_name: str, asset: dict[str, Any] | None = None) -> Path | None:
+        value = asset or self.store.get_project_asset(full_name) or {}
+        root = Path(value.get("local_repo_path", "")) if value.get("local_repo_path") else None
+        return root if root and root.exists() and root.resolve().is_relative_to(PROJECT_REPO_DIR.resolve()) else None
+
+    def files(self, full_name: str, asset: dict[str, Any] | None = None) -> list[str]:
+        root = self._root(full_name, asset)
+        if not root:
+            return []
+        return sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file())
+
+    def file(self, full_name: str, relative_path: str, limit: int = 500000) -> dict[str, Any] | None:
+        root = self._root(full_name)
+        if not root:
+            return None
+        normalized = urllib.parse.unquote(relative_path).replace("\\", "/").lstrip("/")
+        target = (root / normalized).resolve()
+        if not target.is_relative_to(root.resolve()) or not target.is_file():
+            return None
+        content = target.read_text(encoding="utf-8", errors="replace")[:limit]
+        return {"path": target.relative_to(root).as_posix(), "content": content, "truncated": target.stat().st_size > limit}
+
+    def workspace(self, project: dict[str, Any], asset: dict[str, Any] | None = None) -> dict[str, Any]:
+        value = asset or self.store.get_project_asset(project["full_name"]) or {}
+        files = self.files(project["full_name"], value)
+        readme = ""
+        readme_path = Path(value.get("readme_path", "")) if value.get("readme_path") else None
+        if readme_path and readme_path.exists():
+            readme = readme_path.read_text(encoding="utf-8", errors="replace")[:300000]
+        return {
+            "project": project,
+            "ready": bool(files),
+            "files": files,
+            "readme": readme,
+            "readme_path": readme_path.name if readme_path else "",
+            "file_count": len(files),
+            "source_chars": int(value.get("source_chars", 0) or 0),
+            "checked_at": value.get("checked_at", ""),
+            "error": value.get("error_text", ""),
+            "explanation": value.get("explanation"),
+        }
+
+    @staticmethod
+    def _numbered(content: str) -> str:
+        return "\n".join(f"{index:04d}: {line}" for index, line in enumerate(content.splitlines(), start=1))
+
+    def source_context(self, full_name: str, selected_path: str = "", limit: int = 70000) -> str:
+        files = self.files(full_name)
+        priorities = ("readme", "pyproject", "requirements", "package.json", "main.", "app.", "server.", "model", "train", "config")
+        ordered = sorted(files, key=lambda path: (not any(marker in path.lower() for marker in priorities), len(Path(path).parts), path))
+        if selected_path and selected_path in ordered:
+            ordered.remove(selected_path)
+            ordered.insert(0, selected_path)
+        chunks = []
+        used = 0
+        for path in ordered[:40]:
+            item = self.file(full_name, path, limit=18000)
+            if not item:
+                continue
+            chunk = f"--- file: {path} ---\n{self._numbered(item['content'])}"
+            if chunks and used + len(chunk) > limit:
+                break
+            chunks.append(chunk)
+            used += len(chunk)
+        return "\n\n".join(chunks)
+
+
+class ProjectExplainer:
+    def __init__(self, store: PaperStore, assets: ProjectAssetService, ai: PaperExplainer) -> None:
+        self.store = store
+        self.assets = assets
+        self.ai = ai
+
+    @staticmethod
+    def _parse_json(output: str) -> dict[str, Any]:
+        match = re.search(r"\{.*\}", output, flags=re.S)
+        if not match:
+            raise ValueError("模型没有返回可解析的 JSON")
+        return json.loads(match.group(0))
+
+    @staticmethod
+    def _fallback(project: dict[str, Any], workspace: dict[str, Any], notice: str = "") -> dict[str, Any]:
+        result = {
+            "mode": "metadata",
+            "overview": project.get("description") or "仓库没有提供简介。",
+            "architecture": "当前未完成 AI 代码分析，无法可靠还原模块架构。",
+            "entry_points": ["从 README 和根目录配置文件开始阅读。"],
+            "code_flow": "打开左侧源码后，可按入口文件、核心模块、训练或推理脚本顺序阅读。",
+            "setup": "请以 README 中的安装说明为准。",
+            "strengths": [f"仓库包含 {workspace['file_count']} 个可阅读文本文件。"],
+            "risks": ["尚未对代码执行安全审计，也不会在本地自动运行仓库代码。"],
+            "learning_path": ["README", "依赖与配置", "入口文件", "核心模型", "训练或推理流程"],
+            "generated_at": utc_now().isoformat(),
+        }
+        if notice:
+            result["notice"] = notice
+        return result
+
+    def explain(self, project: dict[str, Any]) -> dict[str, Any]:
+        workspace = self.assets.prepare(project)
+        if not workspace.get("ready"):
+            result = self._fallback(project, workspace, f"源码尚不可用：{workspace.get('error') or '未找到文本源码'}")
+            self.store.save_project_explanation(project["full_name"], result)
+            return result
+        connection = self.ai.connection()
+        if not connection:
+            result = self._fallback(project, workspace, "当前未配置大模型，已返回仓库元数据导读。")
+            self.store.save_project_explanation(project["full_name"], result)
+            return result
+        context = self.assets.source_context(project["full_name"])
+        prompt = f"""你是一名严谨的中文代码导师。请只依据仓库元数据和源码摘录讲解项目，不得声称运行过代码。
+返回严格 JSON，不要 Markdown，字段为 overview, architecture, entry_points, code_flow, setup, strengths, risks, learning_path。
+entry_points、strengths、risks、learning_path 使用字符串数组；其他字段使用中文字符串。
+architecture 说明模块职责；code_flow 按输入、预处理、核心逻辑、输出说明；涉及代码结论时引用文件路径。
+
+项目：{project['full_name']}
+简介：{project.get('description', '')}
+语言：{project.get('language', '')}
+主题：{', '.join(project.get('topics', []))}
+关联论文：{', '.join(paper['title'] for paper in project.get('papers', [])) or '无'}
+
+源码摘录：
+{context}
+"""
+        try:
+            result = self._parse_json(self.ai._request_text(prompt, connection, timeout=180))
+        except Exception as error:
+            result = self._fallback(project, workspace, f"AI 服务暂时不可用：{error}")
+            self.store.save_project_explanation(project["full_name"], result)
+            return result
+        result.update(
+            {
+                "mode": "ai",
+                "provider": connection["provider"],
+                "model": connection["model"],
+                "generated_at": utc_now().isoformat(),
+            }
+        )
+        self.store.save_project_explanation(project["full_name"], result)
+        return result
+
+    def ask(self, project: dict[str, Any], question: str, selected_path: str = "") -> dict[str, Any]:
+        connection = self.ai.connection()
+        if not connection:
+            raise RuntimeError("当前没有可用的大模型配置")
+        context = self.assets.source_context(project["full_name"], selected_path, limit=60000)
+        if not context:
+            raise RuntimeError("项目源码尚未缓存，无法进行基于代码的问答")
+        history = self.store.project_chat_history(project["full_name"])
+        history_text = "\n".join(
+            f"{('用户' if item['role'] == 'user' else '代码导师')}：{item['content']}" for item in history[-8:]
+        )
+        prompt = f"""你是中文代码阅读导师。只依据提供的仓库源码回答问题，不得声称运行过代码。
+先给直接结论，再解释调用链、关键实现和风险。代码判断引用 [文件路径:L起-L止]；材料不足时明确说明。
+
+项目：{project['full_name']}
+当前文件：{selected_path or '未选择'}
+最近对话：
+{history_text or '无'}
+
+用户问题：{question}
+
+源码材料：
+{context}
+"""
+        answer = self.ai._request_text(prompt, connection, timeout=180).strip()
+        self.store.add_project_chat_message(project["full_name"], "user", question)
+        self.store.add_project_chat_message(project["full_name"], "assistant", answer)
+        return {
+            "answer": answer,
+            "provider": connection["provider"],
+            "model": connection["model"],
+            "generated_at": utc_now().isoformat(),
+        }
 
 
 LINK_STOPWORDS = {
@@ -2828,6 +3245,8 @@ SOURCES = PaperSources(CONFIG, CLASSIFIER)
 CONNECTOR = PaperConnector(STORE, SOURCES, CLASSIFIER)
 GITHUB_SOURCE = GitHubSource(CONFIG)
 EXPLAINER = PaperExplainer()
+PROJECT_ASSETS = ProjectAssetService(STORE)
+PROJECT_EXPLAINER = ProjectExplainer(STORE, PROJECT_ASSETS, EXPLAINER)
 CLOUD = S3ObjectStorage()
 ASSETS = PaperAssetService(STORE, CLOUD)
 TRANSLATOR = TranslationService()
@@ -3157,6 +3576,92 @@ def daily_recommendations(topic: str = "", per_topic: int | None = None) -> dict
     }
 
 
+def project_recommendation(project: dict[str, Any]) -> dict[str, Any]:
+    try:
+        pushed = datetime.fromisoformat(project.get("pushed_at", "").replace("Z", "+00:00"))
+        if pushed.tzinfo is None:
+            pushed = pushed.replace(tzinfo=timezone.utc)
+        age_days = max(0, (utc_now() - pushed).days)
+    except ValueError:
+        age_days = 365
+    categories = project.get("categories", [])
+    topics = project.get("topics", [])
+    relevance = min(20.0, 8.0 + len(categories) * 6.0 + min(4.0, len(topics)))
+    freshness = 25.0 * max(0.08, 1 - min(age_days, 60) / 65)
+    stars = int(project.get("stars", 0) or 0)
+    adoption = 20.0 * min(1.0, (stars / 1000) ** 0.5)
+    linked = int(project.get("linked_paper_count", 0) or 0)
+    paper_link = 0.0 if linked == 0 else 17.0 if linked == 1 else min(25.0, 17.0 + linked * 4.0)
+    completeness_signals = (
+        bool(project.get("description")), bool(project.get("language")), bool(project.get("license")),
+        bool(project.get("homepage")), bool(topics),
+    )
+    completeness = 10.0 * sum(completeness_signals) / len(completeness_signals)
+    size_kb = int(project.get("size_kb", 0) or 0)
+    if size_kb > 500000:
+        completeness = min(completeness, 3.0)
+    elif size_kb > 200000:
+        completeness = min(completeness, 6.0)
+    components = [
+        ("方向匹配", relevance, 20, "仓库主题与具身智能、大模型配置的匹配"),
+        ("近期活跃", freshness, 25, f"最近推送距今约 {age_days} 天"),
+        ("社区采用", adoption, 20, f"当前 Stars {stars}"),
+        ("论文关联", paper_link, 25, f"高置信度关联论文 {linked} 篇"),
+        ("仓库完整度", completeness, 10, f"说明、语言、许可证与源码体积约 {round(size_kb / 1024)} MB" if size_kb else "说明、语言、许可证、主页和主题元数据"),
+    ]
+    return {
+        "total": round(sum(value for _, value, _, _ in components), 1),
+        "components": [
+            {"name": name, "score": round(value, 1), "max": maximum, "reason": reason}
+            for name, value, maximum, reason in components
+        ],
+    }
+
+
+def daily_project_recommendations(limit: int | None = None) -> dict[str, Any]:
+    maximum = max(1, min(4, limit or int(CONFIG.get("daily_project_recommendations", 4))))
+    window_days = max(7, int(CONFIG.get("project_recommendation_window_days", 45)))
+    cutoff = utc_now() - timedelta(days=window_days)
+    projects = []
+    for project in STORE.list_projects():
+        try:
+            pushed = datetime.fromisoformat(project.get("pushed_at", "").replace("Z", "+00:00"))
+            if pushed.tzinfo is None:
+                pushed = pushed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            pushed = datetime.min.replace(tzinfo=timezone.utc)
+        if pushed < cutoff:
+            continue
+        score = project_recommendation(project)
+        projects.append({**project, "recommendation_score": score["total"], "score_breakdown": score["components"]})
+    projects.sort(
+        key=lambda item: (item["recommendation_score"], item["linked_paper_count"], item["stars"], item["pushed_at"]),
+        reverse=True,
+    )
+    selected = []
+    represented = set()
+    for project in projects:
+        primary_category = (project.get("categories") or [""])[0]
+        if primary_category and primary_category in represented:
+            continue
+        selected.append(project)
+        represented.add(primary_category)
+        if len(selected) >= maximum:
+            break
+    if len(selected) < maximum:
+        selected_names = {project["full_name"] for project in selected}
+        remaining = [project for project in projects if project["full_name"] not in selected_names]
+        selected.extend(remaining[: maximum - len(selected)])
+    return {
+        "items": selected,
+        "total": len(selected),
+        "candidate_total": len(projects),
+        "limit": maximum,
+        "window_days": window_days,
+        "generated_at": utc_now().isoformat(),
+    }
+
+
 def filter_papers(papers: list[dict[str, Any]], params: dict[str, list[str]]) -> list[dict[str, Any]]:
     get = lambda name, default="": (params.get(name) or [default])[0].strip()
     query = get("q").lower()
@@ -3389,6 +3894,13 @@ class AppHandler(SimpleHTTPRequestHandler):
                 per_topic = int(CONFIG.get("daily_recommendations_per_topic", 5))
             self.send_json(daily_recommendations(topic, per_topic))
             return
+        if parsed.path == "/api/project-recommendations":
+            try:
+                limit = int((params.get("limit") or [str(CONFIG.get("daily_project_recommendations", 4))])[0])
+            except ValueError:
+                limit = int(CONFIG.get("daily_project_recommendations", 4))
+            self.send_json(daily_project_recommendations(limit))
+            return
         if parsed.path == "/api/projects":
             projects = filter_projects(STORE.list_projects(), params)
             limit = max(1, min(500, int((params.get("limit") or ["100"])[0])))
@@ -3402,6 +3914,24 @@ class AppHandler(SimpleHTTPRequestHandler):
                     "has_more": offset + limit < len(projects),
                 }
             )
+            return
+        project_action = re.fullmatch(r"/api/projects/(.+)/(workspace|source|chat)", parsed.path)
+        if project_action:
+            full_name = urllib.parse.unquote(project_action.group(1))
+            action = project_action.group(2)
+            project = STORE.get_project(full_name)
+            if not project:
+                self.send_json({"error": "项目不存在"}, 404)
+                return
+            if action == "workspace":
+                self.send_json(PROJECT_ASSETS.workspace(project))
+                return
+            if action == "source":
+                relative_path = (params.get("path") or [""])[0]
+                source_file = PROJECT_ASSETS.file(full_name, relative_path)
+                self.send_json(source_file or {"error": "源码文件不存在"}, 200 if source_file else 404)
+                return
+            self.send_json({"items": STORE.project_chat_history(full_name), "project_full_name": full_name})
             return
         if parsed.path.startswith("/api/projects/"):
             full_name = urllib.parse.unquote(parsed.path.removeprefix("/api/projects/"))
@@ -3551,6 +4081,36 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json(CONNECTOR.import_paper(self.read_json()), 201)
             except (TypeError, ValueError) as error:
                 self.send_json({"error": str(error)}, 400)
+            return
+        project_action = re.fullmatch(r"/api/projects/(.+)/(workspace|explain|chat)", parsed.path)
+        if project_action:
+            full_name = urllib.parse.unquote(project_action.group(1))
+            action = project_action.group(2)
+            project = STORE.get_project(full_name)
+            if not project:
+                self.send_json({"error": "项目不存在"}, 404)
+                return
+            if action == "workspace":
+                payload = self.read_json()
+                self.send_json(PROJECT_ASSETS.prepare(project, bool(payload.get("force"))))
+                return
+            if action == "explain":
+                try:
+                    explanation = PROJECT_EXPLAINER.explain(project)
+                    STORE.save_project_explanation(full_name, explanation)
+                    self.send_json(explanation)
+                except Exception as error:
+                    self.send_json({"error": str(error)}, 503)
+                return
+            payload = self.read_json()
+            question = compact_text(str(payload.get("question", "")))[:4000]
+            if not question:
+                self.send_json({"error": "请输入关于项目代码的问题"}, 400)
+                return
+            try:
+                self.send_json(PROJECT_EXPLAINER.ask(project, question, compact_text(str(payload.get("selected_path", "")))))
+            except Exception as error:
+                self.send_json({"error": str(error)}, 503)
             return
         match = re.fullmatch(r"/api/papers/(.+)/(state|explain|resolve|chat|import|archive)", parsed.path)
         if match:

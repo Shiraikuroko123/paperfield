@@ -42,6 +42,8 @@ docker compose down
 | `PAPERFIELD_S3_ACCESS_KEY_ID` | Server-side object-storage access key |
 | `PAPERFIELD_S3_SECRET_ACCESS_KEY` | Server-side object-storage secret |
 | `PAPERFIELD_LOCAL_CACHE_MAX_MB` | Maximum local PDF cache before old files are pruned |
+| `PAPERFIELD_PROJECT_ZIP_MAX_MB` | Maximum compressed public repository download |
+| `PAPERFIELD_PROJECT_TEXT_MAX_MB` | Maximum extracted text source cache per repository |
 | `GITHUB_TOKEN` | Optional GitHub rate-limit increase |
 
 ## Cloud constraints

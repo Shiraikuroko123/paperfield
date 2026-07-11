@@ -60,6 +60,7 @@ Use 150-220ms ease-out transitions for selection, pane opening, filter changes, 
 - Dense paper rows with venue, authors, topic, recency, and reading state.
 - Reading pane with source metadata, abstract, generated explanation, and actions.
 - Full-screen PDF reader with score evidence, full-text explanation, grounded chat, and page translation tabs.
+- Full-screen project reader with repository tree, source file viewer, README, code explanation, and grounded chat.
 - Skeleton rows, educational empty states, inline errors, and non-blocking status messages.
 
 ## Content Rules

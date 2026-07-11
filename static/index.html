@@ -31,6 +31,9 @@
         <button class="rail-link" data-view="projects">
           <span>GitHub 项目</span><b id="navProjectCount">0</b>
         </button>
+        <button class="rail-link" data-view="project-recommended">
+          <span>每日项目</span><b id="navProjectRecommendedCount">0</b>
+        </button>
         <button class="rail-link" data-topic="具身智能">
           <span>具身智能</span><b id="navEmbodiedCount">0</b>
         </button>
@@ -218,6 +221,49 @@
       <div><input id="connectorQuery" type="search" autocomplete="off" placeholder="10.1145/... 或论文标题"><button class="button button-primary" type="submit">查找</button></div>
     </form>
     <div class="connector-results" id="connectorResults" aria-live="polite"></div>
+  </dialog>
+
+  <dialog class="project-reader-dialog" id="projectReaderDialog" aria-labelledby="projectReaderTitle">
+    <div class="project-reader-shell">
+      <header class="reader-header">
+        <button class="reader-close" id="projectReaderClose" type="button" aria-label="关闭项目工作台" title="关闭">×</button>
+        <div class="reader-heading"><h2 id="projectReaderTitle">项目代码工作台</h2><p id="projectReaderMeta"></p></div>
+        <div class="reader-header-actions">
+          <a id="projectGithubLink" href="#" target="_blank" rel="noreferrer">GitHub</a>
+          <button class="button button-secondary" id="projectRefreshSource" type="button">更新源码</button>
+        </div>
+      </header>
+      <div class="project-reader-grid">
+        <section class="project-source-workspace" aria-label="项目源码">
+          <aside class="project-file-browser">
+            <label for="projectFileSearch">源码文件</label>
+            <input id="projectFileSearch" type="search" placeholder="筛选路径">
+            <nav id="projectFileTree" aria-label="仓库文件树"></nav>
+          </aside>
+          <div class="project-code-pane">
+            <div class="project-code-toolbar"><span id="projectCurrentPath">选择一个文件</span></div>
+            <pre><code id="projectCodeContent">正在读取仓库源码</code></pre>
+          </div>
+        </section>
+        <aside class="project-insight-pane" aria-label="项目阅读助手">
+          <div class="reader-tabs" role="tablist" aria-label="项目阅读工具">
+            <button class="is-active" role="tab" aria-selected="true" data-project-tab="readme">README</button>
+            <button role="tab" aria-selected="false" data-project-tab="explain">代码讲解</button>
+            <button role="tab" aria-selected="false" data-project-tab="chat">问答</button>
+          </div>
+          <section class="project-reader-panel is-active" id="projectReadmePanel" role="tabpanel"><pre id="projectReadmeContent"></pre></section>
+          <section class="project-reader-panel" id="projectExplainPanel" role="tabpanel" hidden><div id="projectExplanation"></div></section>
+          <section class="project-reader-panel" id="projectChatPanel" role="tabpanel" hidden>
+            <div class="chat-history" id="projectChatHistory"></div>
+            <form class="chat-form" id="projectChatForm">
+              <label for="projectChatQuestion">向代码提问</label>
+              <textarea id="projectChatQuestion" rows="3" placeholder="例如：这个项目的推理入口和数据流在哪里？"></textarea>
+              <button class="button button-primary" type="submit">发送问题</button>
+            </form>
+          </section>
+        </aside>
+      </div>
+    </div>
   </dialog>
 
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>

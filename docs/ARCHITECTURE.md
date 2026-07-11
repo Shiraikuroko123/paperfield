@@ -28,6 +28,8 @@ This model is appropriate for a personal workstation. It is intentionally not ex
 - `PaperAssetService`: open-access resolution, PDF cache, page extraction, and cached reading notes.
 - `PaperConnector`: DOI, title, Crossref, and arXiv lookup for user-requested imports.
 - `S3ObjectStorage`: optional private cloud archive behind an S3-compatible API.
+- `ProjectAssetService`: bounded, text-only GitHub repository cache and source reader.
+- `ProjectExplainer`: README/source-grounded project explanation and chat.
 - `TranslationService`: non-GPT browser/LibreTranslate/Google translation path.
 - `AppHandler`: HTTP boundary.
 - `static/`: browser client.

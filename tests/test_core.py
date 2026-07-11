@@ -85,6 +85,55 @@ class ExplanationTests(unittest.TestCase):
 
 
 class FeedTests(unittest.TestCase):
+    def test_daily_project_recommendations_are_capped_at_four(self):
+        now = APP.utc_now().isoformat()
+        projects = [
+            {
+                "full_name": f"owner/project-{index}", "description": "embodied AI", "topics": ["embodied-ai"],
+                "categories": ["具身智能" if index % 2 else "大语言模型"], "pushed_at": now,
+                "stars": 100 - index, "linked_paper_count": index % 3, "language": "Python", "license": "MIT",
+                "homepage": "",
+            }
+            for index in range(8)
+        ]
+
+        class FakeStore:
+            @staticmethod
+            def list_projects():
+                return projects
+
+        original_store = APP.STORE
+        APP.STORE = FakeStore()
+        try:
+            result = APP.daily_project_recommendations(10)
+        finally:
+            APP.STORE = original_store
+
+        self.assertEqual(result["total"], 4)
+        self.assertLessEqual(len(result["items"]), 4)
+        self.assertIn("score_breakdown", result["items"][0])
+
+    def test_project_source_reader_rejects_path_traversal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_repo_dir = APP.PROJECT_REPO_DIR
+            APP.PROJECT_REPO_DIR = Path(directory) / "repos"
+            try:
+                store = APP.PaperStore(Path(directory) / "papers.db")
+                assets = APP.ProjectAssetService(store)
+                root = assets._repo_path("owner/project")
+                root.mkdir(parents=True)
+                (root / "main.py").write_text("print('safe')", encoding="utf-8")
+                (Path(directory) / "secret.txt").write_text("secret", encoding="utf-8")
+                store.save_project_asset(
+                    "owner/project",
+                    {"local_repo_path": str(root), "file_count": 1, "source_chars": 13},
+                )
+
+                self.assertEqual(assets.file("owner/project", "main.py")["content"], "print('safe')")
+                self.assertIsNone(assets.file("owner/project", "../secret.txt"))
+            finally:
+                APP.PROJECT_REPO_DIR = original_repo_dir
+
     def test_connector_normalizes_crossref_metadata(self):
         connector = APP.PaperConnector(APP.STORE, APP.SOURCES, APP.CLASSIFIER)
         paper = connector._crossref_paper(

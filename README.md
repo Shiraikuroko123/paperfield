@@ -21,11 +21,14 @@ Paperfield is a local research client for daily embodied-intelligence and large-
 - Curated catalog: 62 top or important conferences and journals across robotics, vision, language, machine learning, retrieval, agents, and ML systems
 - Optional DBLP supplement: set `PAPERFIELD_ENABLE_DBLP=1` when the DBLP API is reachable
 - GitHub project radar: tracks recently pushed embodied-AI and LLM repositories, with language/topic filters and high-confidence paper links
+- Daily project selection: recommends up to four active repositories using topic relevance, freshness, Stars, paper links, and repository completeness
 
 Formal publications, important specialist venues, and unconfirmed arXiv preprints are labeled separately. The first full import is larger; later updates use indexed batch writes and normally finish much faster.
 The venue selector distinguishes papers available now, records with future publication dates, sources waiting for collection, and sources blocked by platform verification. See [`docs/COVERAGE_AUDIT.md`](docs/COVERAGE_AUDIT.md) for the latest audit and source limitations.
 
 Representative institutions and laboratories are marked from public affiliation metadata. These markers are informational and do not affect recommendation scores.
+
+Recommended GitHub projects open in a dedicated code workspace. Paperfield downloads only public text source files, ignores dependency/build/data directories, never executes repository code, and presents a file tree, README, Chinese code explanation, and source-grounded project chat.
 
 ## Run
 
