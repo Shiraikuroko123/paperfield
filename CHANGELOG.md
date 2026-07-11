@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.0
+
+- Added persistent local/cloud/hybrid PDF targets, a configurable PDF folder, and a configurable cache limit.
+- Added Cloudflare R2 bucket inventory, billing-cycle Class A/Class B counters, free-tier percentages, and estimated overage.
+- Added date-stable daily paper rotation so high-quality recommendations change between days.
+- Grouped repository files into logical reading sections and rendered sanitized README Markdown.
+
 All notable changes to Paperfield are documented here.
 
 ## Unreleased

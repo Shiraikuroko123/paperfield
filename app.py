@@ -8,6 +8,7 @@ import http.client
 import ipaddress
 import json
 import os
+import posixpath
 import re
 import shutil
 import sqlite3
@@ -20,22 +21,30 @@ import xml.etree.ElementTree as ET
 import zipfile
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
+from html.parser import HTMLParser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
 
 ROOT = Path(__file__).resolve().parent
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(ROOT / ".env", override=False)
+except ImportError:
+    pass
 STATIC_DIR = ROOT / "static"
 DATA_DIR = Path(os.environ.get("PAPERFIELD_DATA_DIR", ROOT / "data")).expanduser().resolve()
 DB_PATH = Path(os.environ.get("PAPERFIELD_DB_PATH", DATA_DIR / "papers.db")).expanduser().resolve()
 PDF_DIR = Path(os.environ.get("PAPERFIELD_PDF_DIR", DATA_DIR / "pdfs")).expanduser().resolve()
 FULLTEXT_DIR = Path(os.environ.get("PAPERFIELD_FULLTEXT_DIR", DATA_DIR / "fulltext")).expanduser().resolve()
 PROJECT_REPO_DIR = Path(os.environ.get("PAPERFIELD_PROJECT_REPO_DIR", DATA_DIR / "repos")).expanduser().resolve()
+SETTINGS_PATH = Path(os.environ.get("PAPERFIELD_SETTINGS_PATH", DATA_DIR / "settings.json")).expanduser().resolve()
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
 INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", ROOT / "institutions.json")).expanduser().resolve()
-APP_VERSION = "0.7.0"
+APP_VERSION = "0.8.0"
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
 
@@ -316,6 +325,32 @@ class PaperStore:
                     content TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(paper_id) REFERENCES papers(id)
+                );
+                CREATE TABLE IF NOT EXISTS cloud_usage_monthly (
+                    month TEXT PRIMARY KEY,
+                    class_a INTEGER NOT NULL DEFAULT 0,
+                    class_b INTEGER NOT NULL DEFAULT 0,
+                    bytes_uploaded INTEGER NOT NULL DEFAULT 0,
+                    bytes_downloaded INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS cloud_usage_daily (
+                    day TEXT PRIMARY KEY,
+                    class_a INTEGER NOT NULL DEFAULT 0,
+                    class_b INTEGER NOT NULL DEFAULT 0,
+                    bytes_uploaded INTEGER NOT NULL DEFAULT 0,
+                    bytes_downloaded INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS cloud_objects (
+                    object_key TEXT PRIMARY KEY,
+                    size_bytes INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL DEFAULT ''
+                );
+                CREATE TABLE IF NOT EXISTS cloud_inventory_state (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    last_scan TEXT NOT NULL DEFAULT '',
+                    object_count INTEGER NOT NULL DEFAULT 0,
+                    total_bytes INTEGER NOT NULL DEFAULT 0,
+                    error_text TEXT NOT NULL DEFAULT ''
                 );
                 CREATE TABLE IF NOT EXISTS venue_sync_state (
                     venue TEXT PRIMARY KEY,
@@ -775,6 +810,108 @@ class PaperStore:
                 ),
             )
         return self.get_asset(paper_id) or {"paper_id": paper_id, **values}
+
+    def record_cloud_operation(self, operation_class: str, byte_count: int = 0, count: int = 1) -> None:
+        if operation_class not in {"class_a", "class_b"}:
+            raise ValueError("未知的云端操作类型")
+        month = utc_now().strftime("%Y-%m")
+        class_a = count if operation_class == "class_a" else 0
+        class_b = count if operation_class == "class_b" else 0
+        uploaded = max(0, byte_count) if operation_class == "class_a" else 0
+        downloaded = max(0, byte_count) if operation_class == "class_b" else 0
+        with self.connect() as db:
+            db.execute(
+                """
+                INSERT INTO cloud_usage_monthly (month, class_a, class_b, bytes_uploaded, bytes_downloaded)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(month) DO UPDATE SET
+                    class_a=class_a + excluded.class_a,
+                    class_b=class_b + excluded.class_b,
+                    bytes_uploaded=bytes_uploaded + excluded.bytes_uploaded,
+                    bytes_downloaded=bytes_downloaded + excluded.bytes_downloaded
+                """,
+                (month, class_a, class_b, uploaded, downloaded),
+            )
+            db.execute(
+                """
+                INSERT INTO cloud_usage_daily (day, class_a, class_b, bytes_uploaded, bytes_downloaded)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(day) DO UPDATE SET
+                    class_a=class_a + excluded.class_a,
+                    class_b=class_b + excluded.class_b,
+                    bytes_uploaded=bytes_uploaded + excluded.bytes_uploaded,
+                    bytes_downloaded=bytes_downloaded + excluded.bytes_downloaded
+                """,
+                (utc_now().date().isoformat(), class_a, class_b, uploaded, downloaded),
+            )
+
+    def cloud_usage(self, month: str | None = None) -> dict[str, Any]:
+        selected = month or utc_now().strftime("%Y-%m")
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM cloud_usage_monthly WHERE month = ?", (selected,)).fetchone()
+        return dict(row) if row else {
+            "month": selected, "class_a": 0, "class_b": 0, "bytes_uploaded": 0, "bytes_downloaded": 0,
+        }
+
+    def cloud_usage_range(self, start_day: str, end_day: str) -> dict[str, Any]:
+        with self.connect() as db:
+            row = db.execute(
+                """
+                SELECT COALESCE(SUM(class_a), 0) AS class_a, COALESCE(SUM(class_b), 0) AS class_b,
+                       COALESCE(SUM(bytes_uploaded), 0) AS bytes_uploaded,
+                       COALESCE(SUM(bytes_downloaded), 0) AS bytes_downloaded
+                FROM cloud_usage_daily WHERE day >= ? AND day < ?
+                """,
+                (start_day, end_day),
+            ).fetchone()
+        return {"period_start": start_day, "period_end": end_day, **dict(row)}
+
+    def save_cloud_object(self, key: str, size_bytes: int) -> None:
+        with self.connect() as db:
+            db.execute(
+                """
+                INSERT INTO cloud_objects (object_key, size_bytes, updated_at) VALUES (?, ?, ?)
+                ON CONFLICT(object_key) DO UPDATE SET size_bytes=excluded.size_bytes, updated_at=excluded.updated_at
+                """,
+                (key, max(0, size_bytes), utc_now().isoformat()),
+            )
+
+    def save_cloud_inventory(self, objects: list[tuple[str, int]], error_text: str = "") -> dict[str, Any]:
+        now = utc_now().isoformat()
+        with self.connect() as db:
+            if not error_text:
+                db.execute("DELETE FROM cloud_objects")
+                db.executemany(
+                    "INSERT INTO cloud_objects (object_key, size_bytes, updated_at) VALUES (?, ?, ?)",
+                    [(key, max(0, size), now) for key, size in objects],
+                )
+            total_bytes = sum(max(0, size) for _, size in objects)
+            db.execute(
+                """
+                INSERT INTO cloud_inventory_state (id, last_scan, object_count, total_bytes, error_text)
+                VALUES (1, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    last_scan=excluded.last_scan,
+                    object_count=excluded.object_count,
+                    total_bytes=excluded.total_bytes,
+                    error_text=excluded.error_text
+                """,
+                (now, len(objects), total_bytes, error_text[:2000]),
+            )
+        return self.cloud_inventory()
+
+    def cloud_inventory(self) -> dict[str, Any]:
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM cloud_inventory_state WHERE id = 1").fetchone()
+            if row:
+                return dict(row)
+            summary = db.execute(
+                "SELECT COUNT(*) AS object_count, COALESCE(SUM(size_bytes), 0) AS total_bytes FROM cloud_objects"
+            ).fetchone()
+        return {
+            "last_scan": "", "object_count": int(summary["object_count"]),
+            "total_bytes": int(summary["total_bytes"]), "error_text": "",
+        }
 
     def has_project(self, paper_id: str) -> bool:
         with self.connect() as db:
@@ -2137,6 +2274,63 @@ class ProjectAssetService:
             return []
         return sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file())
 
+    @staticmethod
+    def _file_group(path: str) -> tuple[str, str]:
+        lower = path.lower()
+        name = Path(path).name.lower()
+        parts = set(Path(lower).parts)
+        if name.startswith("readme") or name in {"license", "license.md", "changelog.md", "contributing.md"}:
+            return "start", "开始阅读"
+        if parts.intersection({"docs", "doc", "examples", "example", "tutorials", "notebooks"}) or lower.endswith((".md", ".rst")):
+            return "docs", "文档与示例"
+        if parts.intersection({"test", "tests", "testing", "benchmarks", "benchmark"}) or name.startswith("test_"):
+            return "tests", "测试与评测"
+        if any(marker in lower for marker in ("train", "training", "infer", "inference", "eval", "demo", "serve")):
+            return "runtime", "训练与推理"
+        if name in {
+            "requirements.txt", "pyproject.toml", "setup.py", "setup.cfg", "package.json", "package-lock.json",
+            "yarn.lock", "pnpm-lock.yaml", "environment.yml", "dockerfile", "compose.yaml", "docker-compose.yml",
+            "cargo.toml", "go.mod", "makefile", ".gitignore", ".env.example",
+        } or parts.intersection({"config", "configs", ".github"}) or lower.endswith((".yaml", ".yml", ".toml", ".ini")):
+            return "config", "配置与依赖"
+        if lower.endswith((".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java", ".cpp", ".cc", ".c", ".h", ".hpp")):
+            return "source", "核心源码"
+        return "other", "其他文件"
+
+    def file_groups(self, files: list[str]) -> list[dict[str, Any]]:
+        order = ["start", "source", "runtime", "config", "docs", "tests", "other"]
+        grouped: dict[str, dict[str, Any]] = {}
+        for path in files:
+            key, label = self._file_group(path)
+            grouped.setdefault(key, {"key": key, "label": label, "files": []})["files"].append(path)
+        return [grouped[key] for key in order if key in grouped]
+
+    @staticmethod
+    def _readme_html(markdown_text: str, full_name: str, branch: str, readme_relative: str) -> str:
+        if not markdown_text:
+            return ""
+        try:
+            import bleach
+            import markdown
+        except ImportError:
+            return f"<pre>{html.escape(markdown_text)}</pre>"
+        markdown_text = re.sub(
+            r"<(script|style)\b[^>]*>.*?</\1\s*>", "", markdown_text, flags=re.IGNORECASE | re.DOTALL,
+        )
+        rendered = markdown.markdown(markdown_text, extensions=["fenced_code", "tables", "sane_lists"])
+        allowed_tags = {
+            "a", "blockquote", "br", "code", "del", "details", "em", "h1", "h2", "h3", "h4", "h5", "h6",
+            "hr", "img", "li", "ol", "p", "pre", "strong", "summary", "table", "tbody", "td", "th", "thead", "tr", "ul",
+        }
+        cleaned = bleach.clean(
+            rendered,
+            tags=allowed_tags,
+            attributes={"a": ["href", "title"], "img": ["src", "alt", "title"], "code": ["class"]},
+            protocols={"http", "https", "mailto"},
+            strip=True,
+        )
+        return ReadmeLinkRewriter(full_name, branch or "HEAD", readme_relative).rewrite(cleaned)
+
     def file(self, full_name: str, relative_path: str, limit: int = 500000) -> dict[str, Any] | None:
         root = self._root(full_name)
         if not root:
@@ -2155,11 +2349,19 @@ class ProjectAssetService:
         readme_path = Path(value.get("readme_path", "")) if value.get("readme_path") else None
         if readme_path and readme_path.exists():
             readme = readme_path.read_text(encoding="utf-8", errors="replace")[:300000]
+        readme_relative = ""
+        root = self._root(project["full_name"], value)
+        if root and readme_path and readme_path.exists():
+            readme_relative = readme_path.relative_to(root).as_posix()
         return {
             "project": project,
             "ready": bool(files),
             "files": files,
+            "file_groups": self.file_groups(files),
             "readme": readme,
+            "readme_html": self._readme_html(
+                readme, project["full_name"], project.get("default_branch", ""), readme_relative,
+            ),
             "readme_path": readme_path.name if readme_path else "",
             "file_count": len(files),
             "source_chars": int(value.get("source_chars", 0) or 0),
@@ -2404,8 +2606,133 @@ def rebuild_project_links() -> int:
     return len(links)
 
 
+class ReadmeLinkRewriter(HTMLParser):
+    def __init__(self, full_name: str, branch: str, readme_path: str) -> None:
+        super().__init__(convert_charrefs=False)
+        self.full_name = full_name
+        self.branch = branch
+        self.base_dir = posixpath.dirname(readme_path)
+        self.parts: list[str] = []
+
+    def _url(self, value: str, image: bool) -> str:
+        parsed = urllib.parse.urlsplit(value)
+        if parsed.scheme or value.startswith(("#", "//")):
+            return value
+        normalized = posixpath.normpath(posixpath.join(self.base_dir, parsed.path)).lstrip("/")
+        if normalized.startswith("../"):
+            return "#"
+        root = "https://raw.githubusercontent.com" if image else "https://github.com"
+        segment = "" if image else "/blob"
+        rebuilt = f"{root}/{self.full_name}{segment}/{self.branch}/{urllib.parse.quote(normalized, safe='/')}"
+        if parsed.query:
+            rebuilt += f"?{parsed.query}"
+        if parsed.fragment:
+            rebuilt += f"#{parsed.fragment}"
+        return rebuilt
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = []
+        for name, value in attrs:
+            current = value or ""
+            if tag == "a" and name == "href":
+                current = self._url(current, False)
+            elif tag == "img" and name == "src":
+                current = self._url(current, True)
+            values.append(f' {name}="{html.escape(current, quote=True)}"')
+        self.parts.append(f"<{tag}{''.join(values)}>")
+
+    def handle_endtag(self, tag: str) -> None:
+        self.parts.append(f"</{tag}>")
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+    def handle_entityref(self, name: str) -> None:
+        self.parts.append(f"&{name};")
+
+    def handle_charref(self, name: str) -> None:
+        self.parts.append(f"&#{name};")
+
+    def rewrite(self, value: str) -> str:
+        self.feed(value)
+        return "".join(self.parts)
+
+
+class RuntimeSettings:
+    MODES = {"local", "cloud", "hybrid"}
+
+    def __init__(self, path: Path | None = None) -> None:
+        self.path = path
+        self._lock = threading.RLock()
+        self._values = self._defaults()
+        if path and path.exists():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                self._values.update({key: loaded[key] for key in self._values if key in loaded})
+            except (OSError, ValueError, TypeError):
+                pass
+        self._values = self._validated(self._values, cloud_configured=True)
+
+    @staticmethod
+    def _defaults() -> dict[str, Any]:
+        return {
+            "pdf_storage_mode": os.environ.get("PAPERFIELD_PDF_STORAGE_MODE", "local"),
+            "local_pdf_dir": str(PDF_DIR),
+            "local_cache_max_mb": int(os.environ.get("PAPERFIELD_LOCAL_CACHE_MAX_MB", "2048")),
+            "r2_billing_cycle_day": int(os.environ.get("PAPERFIELD_R2_BILLING_CYCLE_DAY", "1")),
+        }
+
+    @classmethod
+    def _validated(cls, payload: dict[str, Any], cloud_configured: bool) -> dict[str, Any]:
+        mode = str(payload.get("pdf_storage_mode", "local")).strip().lower()
+        if mode not in cls.MODES:
+            raise ValueError("默认存储方式必须是本地、云端或本地 + 云端")
+        if mode in {"cloud", "hybrid"} and not cloud_configured:
+            raise ValueError("云端存储尚未配置，不能设为默认目标")
+        raw_path = str(payload.get("local_pdf_dir", "")).strip()
+        if not raw_path:
+            raise ValueError("请填写本地 PDF 文件夹")
+        local_path = Path(raw_path).expanduser().resolve()
+        local_path.mkdir(parents=True, exist_ok=True)
+        cache_mb = int(payload.get("local_cache_max_mb", 2048))
+        if cache_mb < 128 or cache_mb > 1024 * 1024:
+            raise ValueError("本地缓存限制需在 128 MB 到 1 TB 之间")
+        billing_day = int(payload.get("r2_billing_cycle_day", 1))
+        if billing_day < 1 or billing_day > 28:
+            raise ValueError("R2 账期起始日需在 1 到 28 之间")
+        return {
+            "pdf_storage_mode": mode, "local_pdf_dir": str(local_path),
+            "local_cache_max_mb": cache_mb, "r2_billing_cycle_day": billing_day,
+        }
+
+    def get(self) -> dict[str, Any]:
+        with self._lock:
+            return dict(self._values)
+
+    def update(self, payload: dict[str, Any], cloud_configured: bool) -> dict[str, Any]:
+        with self._lock:
+            merged = {**self._values, **payload}
+            self._values = self._validated(merged, cloud_configured)
+            if self.path:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = self.path.with_suffix(".json.tmp")
+                temporary.write_text(json.dumps(self._values, ensure_ascii=False, indent=2), encoding="utf-8")
+                temporary.replace(self.path)
+            return dict(self._values)
+
+    @property
+    def pdf_dir(self) -> Path:
+        path = Path(self.get()["local_pdf_dir"])
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+
 class S3ObjectStorage:
-    def __init__(self) -> None:
+    def __init__(self, store: PaperStore) -> None:
+        self.store = store
         self.bucket = os.environ.get("PAPERFIELD_S3_BUCKET", "").strip()
         self.endpoint = os.environ.get("PAPERFIELD_S3_ENDPOINT", "").strip() or None
         self.region = os.environ.get("PAPERFIELD_S3_REGION", "auto").strip() or "auto"
@@ -2436,33 +2763,119 @@ class S3ObjectStorage:
         return self._client_value
 
     def upload(self, path: Path, key: str, content_type: str) -> None:
-        self.client().upload_file(str(path), self.bucket, key, ExtraArgs={"ContentType": content_type})
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            self.client().put_object(Bucket=self.bucket, Key=key, Body=handle, ContentType=content_type)
+        self.store.record_cloud_operation("class_a", size)
+        self.store.save_cloud_object(key, size)
 
     def download(self, key: str, target: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_suffix(target.suffix + ".cloudpart")
         try:
-            self.client().download_file(self.bucket, key, str(temporary))
+            response = self.client().get_object(Bucket=self.bucket, Key=key)
+            total = 0
+            with temporary.open("wb") as handle:
+                while True:
+                    chunk = response["Body"].read(1024 * 256)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    handle.write(chunk)
             temporary.replace(target)
+            self.store.record_cloud_operation("class_b", total)
         except Exception:
             temporary.unlink(missing_ok=True)
             raise
 
-    def status(self) -> dict[str, Any]:
+    def refresh_inventory(self) -> dict[str, Any]:
+        if not self.configured:
+            raise RuntimeError("尚未配置云端对象存储")
+        objects: list[tuple[str, int]] = []
+        token = ""
+        while True:
+            options: dict[str, Any] = {"Bucket": self.bucket, "MaxKeys": 1000}
+            if token:
+                options["ContinuationToken"] = token
+            response = self.client().list_objects_v2(**options)
+            self.store.record_cloud_operation("class_a")
+            objects.extend((str(item.get("Key", "")), int(item.get("Size", 0) or 0)) for item in response.get("Contents", []))
+            if not response.get("IsTruncated"):
+                break
+            token = str(response.get("NextContinuationToken", ""))
+            if not token:
+                break
+        return self.store.save_cloud_inventory(objects)
+
+    @staticmethod
+    def _usage_ratio(value: float, free: float) -> float:
+        return round(value / free * 100, 3) if free else 0.0
+
+    def status(self, settings: RuntimeSettings, refresh: bool = False) -> dict[str, Any]:
+        inventory = self.store.cloud_inventory()
+        inventory_error = inventory.get("error_text", "")
+        if self.configured:
+            stale = True
+            if inventory.get("last_scan"):
+                try:
+                    stale = utc_now() - datetime.fromisoformat(inventory["last_scan"]) >= timedelta(hours=24)
+                except ValueError:
+                    pass
+            if refresh or stale:
+                try:
+                    inventory = self.refresh_inventory()
+                    inventory_error = ""
+                except Exception as error:
+                    inventory_error = str(error)
+        values = settings.get()
+        billing_day = int(values.get("r2_billing_cycle_day", 1))
+        now = utc_now()
+        if now.day >= billing_day:
+            period_start = datetime(now.year, now.month, billing_day, tzinfo=timezone.utc)
+        else:
+            previous_month = now.month - 1 or 12
+            previous_year = now.year - 1 if now.month == 1 else now.year
+            period_start = datetime(previous_year, previous_month, billing_day, tzinfo=timezone.utc)
+        next_month = period_start.month + 1 if period_start.month < 12 else 1
+        next_year = period_start.year + 1 if period_start.month == 12 else period_start.year
+        period_end = datetime(next_year, next_month, billing_day, tzinfo=timezone.utc)
+        usage = self.store.cloud_usage_range(period_start.date().isoformat(), period_end.date().isoformat())
+        storage_gb = int(inventory.get("total_bytes", 0) or 0) / 1_000_000_000
+        class_a = int(usage.get("class_a", 0) or 0)
+        class_b = int(usage.get("class_b", 0) or 0)
+        storage_cost = max(0.0, storage_gb - 10) * 0.015
+        class_a_cost = max(0, class_a - 1_000_000) / 1_000_000 * 4.5
+        class_b_cost = max(0, class_b - 10_000_000) / 1_000_000 * 0.36
         return {
             "configured": self.configured,
             "provider": self.provider if self.configured else "",
             "bucket": self.bucket if self.configured else "",
-            "local_cache_max_mb": int(os.environ.get("PAPERFIELD_LOCAL_CACHE_MAX_MB", "2048")),
+            "settings": values,
+            "usage": {
+                **usage,
+                "object_count": int(inventory.get("object_count", 0) or 0),
+                "storage_bytes": int(inventory.get("total_bytes", 0) or 0),
+                "last_inventory_scan": inventory.get("last_scan", ""),
+                "inventory_error": inventory_error,
+                "class_a_free": 1_000_000,
+                "class_b_free": 10_000_000,
+                "storage_free_gb": 10,
+                "class_a_percent": self._usage_ratio(class_a, 1_000_000),
+                "class_b_percent": self._usage_ratio(class_b, 10_000_000),
+                "storage_percent": self._usage_ratio(storage_gb, 10),
+                "estimated_overage_usd": round(storage_cost + class_a_cost + class_b_cost, 6),
+                "estimate_notice": "操作数仅统计 Paperfield 发起的请求；容量来自每日桶清点，费用按当前容量估算。",
+            },
         }
 
 
 class PaperAssetService:
-    def __init__(self, store: PaperStore, cloud: S3ObjectStorage) -> None:
+    def __init__(self, store: PaperStore, cloud: S3ObjectStorage, settings: RuntimeSettings | None = None) -> None:
         self.store = store
         self.cloud = cloud
+        self.settings = settings or RuntimeSettings()
         self._lock = threading.RLock()
-        PDF_DIR.mkdir(parents=True, exist_ok=True)
+        self.settings.pdf_dir.mkdir(parents=True, exist_ok=True)
         FULLTEXT_DIR.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
@@ -2573,8 +2986,8 @@ class PaperAssetService:
         return f"papers/{self._cache_key(paper_id)}/{filename}"
 
     def _prune_pdf_cache(self, exclude: Path | None = None) -> None:
-        limit = max(128, int(os.environ.get("PAPERFIELD_LOCAL_CACHE_MAX_MB", "2048"))) * 1024 * 1024
-        files = [path for path in PDF_DIR.glob("*.pdf") if path.is_file()]
+        limit = max(128, int(self.settings.get()["local_cache_max_mb"])) * 1024 * 1024
+        files = [path for path in self.settings.pdf_dir.glob("*.pdf") if path.is_file()]
         total = sum(path.stat().st_size for path in files)
         for path in sorted(files, key=lambda item: item.stat().st_mtime):
             if total <= limit:
@@ -2585,12 +2998,34 @@ class PaperAssetService:
             path.unlink(missing_ok=True)
             total -= size
 
-    def import_pdf(self, paper: dict[str, Any], content: bytes, filename: str = "") -> dict[str, Any]:
+    def _storage_mode(self, requested: str = "") -> str:
+        mode = compact_text(requested).lower() or self.settings.get()["pdf_storage_mode"]
+        if mode not in RuntimeSettings.MODES:
+            raise ValueError("存储目标必须是 local、cloud 或 hybrid")
+        if mode in {"cloud", "hybrid"} and not self.cloud.configured:
+            raise RuntimeError("尚未配置云端对象存储")
+        return mode
+
+    def _apply_storage_mode(self, paper_id: str, mode: str) -> dict[str, Any]:
+        asset = self.store.get_asset(paper_id) or {}
+        if mode == "local":
+            return self.store.save_asset(paper_id, {"storage_mode": "local"})
+        pdf_path = Path(asset.get("local_pdf_path", "")) if asset.get("local_pdf_path") else None
+        if asset.get("cloud_pdf_key"):
+            local_pdf_path = str(pdf_path) if pdf_path and pdf_path.exists() else ""
+            if mode == "cloud" and pdf_path and pdf_path.exists():
+                pdf_path.unlink(missing_ok=True)
+                local_pdf_path = ""
+            return self.store.save_asset(paper_id, {"storage_mode": mode, "local_pdf_path": local_pdf_path})
+        return self.store.get_asset(paper_id) if not pdf_path or not pdf_path.exists() else self._archive_asset(paper_id, mode)
+
+    def import_pdf(self, paper: dict[str, Any], content: bytes, filename: str = "", storage_mode: str = "") -> dict[str, Any]:
         if not content or len(content) > MAX_PDF_BYTES:
             raise ValueError("PDF 为空或超过大小限制")
         if b"%PDF" not in content[:2048]:
             raise ValueError("导入文件不是有效 PDF")
-        target = PDF_DIR / f"{self._cache_key(paper['id'])}.pdf"
+        mode = self._storage_mode(storage_mode)
+        target = self.settings.pdf_dir / f"{self._cache_key(paper['id'])}.pdf"
         temporary = target.with_suffix(".importpart")
         temporary.write_bytes(content)
         temporary.replace(target)
@@ -2608,16 +3043,37 @@ class PaperAssetService:
                 "access_status": "ready" if text_chars else "pdf_only",
                 "local_pdf_path": str(target),
                 "local_text_path": str(text_target),
-                "storage_mode": "local",
+                "storage_mode": mode,
                 "page_count": page_count,
                 "text_chars": text_chars,
                 "error_text": "",
             },
         )
         self._prune_pdf_cache(target)
+        saved = self._apply_storage_mode(paper["id"], mode)
         return self.public_asset(paper["id"], saved)
 
+    def _archive_asset(self, paper_id: str, mode: str) -> dict[str, Any]:
+        if mode not in {"cloud", "hybrid"}:
+            raise ValueError("云端归档方式无效")
+        return self.store.get_asset(paper_id) if not self.cloud.configured else self._upload_asset(paper_id, mode == "cloud")
+
     def archive_to_cloud(self, paper_id: str, remove_local: bool = True) -> dict[str, Any]:
+        existing = self.store.get_asset(paper_id) or {}
+        if existing.get("cloud_pdf_key") and self.cloud.configured:
+            local_path = Path(existing.get("local_pdf_path", "")) if existing.get("local_pdf_path") else None
+            if remove_local:
+                if local_path and local_path.exists():
+                    local_path.unlink(missing_ok=True)
+                saved = self.store.save_asset(paper_id, {"local_pdf_path": "", "storage_mode": "cloud"})
+            else:
+                if not local_path or not local_path.exists():
+                    self.pdf_path(paper_id)
+                saved = self.store.save_asset(paper_id, {"storage_mode": "hybrid"})
+            return self.public_asset(paper_id, saved)
+        return self._upload_asset(paper_id, remove_local)
+
+    def _upload_asset(self, paper_id: str, remove_local: bool) -> dict[str, Any]:
         if not self.cloud.configured:
             raise RuntimeError("尚未配置云端对象存储")
         asset = self.store.get_asset(paper_id) or {}
@@ -2696,10 +3152,14 @@ class PaperAssetService:
         text_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         return len(pages), sum(len(page["text"]) for page in pages)
 
-    def prepare(self, paper: dict[str, Any], force: bool = False) -> dict[str, Any]:
+    def prepare(self, paper: dict[str, Any], force: bool = False, storage_mode: str = "") -> dict[str, Any]:
         with self._lock:
+            mode = self._storage_mode(storage_mode)
             asset = self.store.get_asset(paper["id"]) or {}
             if asset.get("cloud_pdf_key") and self.cloud.configured:
+                if mode in {"local", "hybrid"}:
+                    self.pdf_path(paper["id"])
+                asset = self._apply_storage_mode(paper["id"], mode)
                 return self.public_asset(paper["id"], asset)
             if not force and asset.get("access_status") == "unavailable" and asset.get("checked_at"):
                 try:
@@ -2721,10 +3181,11 @@ class PaperAssetService:
                         )
                     except Exception as error:
                         asset = self.store.save_asset(paper["id"], {"access_status": "pdf_only", "error_text": f"全文提取失败：{error}"})
+                asset = self._apply_storage_mode(paper["id"], mode)
                 return self.public_asset(paper["id"], asset)
 
             errors = []
-            target = PDF_DIR / f"{self._cache_key(paper['id'])}.pdf"
+            target = self.settings.pdf_dir / f"{self._cache_key(paper['id'])}.pdf"
             for url, provider in self.candidate_urls(paper):
                 try:
                     final_url = self._download(url, target)
@@ -2745,11 +3206,14 @@ class PaperAssetService:
                             "access_status": "ready" if text_chars else "pdf_only",
                             "local_pdf_path": str(target),
                             "local_text_path": str(text_target) if text_target.exists() else "",
+                            "storage_mode": mode,
                             "page_count": page_count,
                             "text_chars": text_chars,
                             "error_text": extract_error,
                         },
                     )
+                    self._prune_pdf_cache(target)
+                    saved = self._apply_storage_mode(paper["id"], mode)
                     return self.public_asset(paper["id"], saved)
                 except Exception as error:
                     target.unlink(missing_ok=True)
@@ -2799,7 +3263,7 @@ class PaperAssetService:
             return path
         cloud_key = asset.get("cloud_pdf_key", "")
         if cloud_key and self.cloud.configured:
-            target = PDF_DIR / f"{self._cache_key(paper_id)}.pdf"
+            target = self.settings.pdf_dir / f"{self._cache_key(paper_id)}.pdf"
             self.cloud.download(cloud_key, target)
             self.store.save_asset(paper_id, {"local_pdf_path": str(target)})
             self._prune_pdf_cache(target)
@@ -3247,8 +3711,9 @@ GITHUB_SOURCE = GitHubSource(CONFIG)
 EXPLAINER = PaperExplainer()
 PROJECT_ASSETS = ProjectAssetService(STORE)
 PROJECT_EXPLAINER = ProjectExplainer(STORE, PROJECT_ASSETS, EXPLAINER)
-CLOUD = S3ObjectStorage()
-ASSETS = PaperAssetService(STORE, CLOUD)
+SETTINGS = RuntimeSettings(SETTINGS_PATH)
+CLOUD = S3ObjectStorage(STORE)
+ASSETS = PaperAssetService(STORE, CLOUD, SETTINGS)
 TRANSLATOR = TranslationService()
 REFRESH_STATE: dict[str, Any] = {"running": False, "message": "", "lock": threading.Lock()}
 
@@ -3515,6 +3980,21 @@ def scheduler_loop() -> None:
         time.sleep(300)
 
 
+def rotate_daily_candidates(
+    ranked: list[tuple[float, dict[str, Any], dict[str, Any], dict[str, Any] | None]],
+    limit: int,
+    topic: str,
+    day: Any,
+) -> list[tuple[float, dict[str, Any], dict[str, Any], dict[str, Any] | None]]:
+    rotation_pool = ranked[:max(limit, limit * 7)]
+    block_count = max(1, len(rotation_pool) // limit)
+    topic_offset = int(hashlib.sha256(topic.encode("utf-8")).hexdigest()[:8], 16)
+    block_index = (day.toordinal() + topic_offset) % block_count
+    rotated = rotation_pool[block_index * limit:(block_index + 1) * limit]
+    rotated_ids = {entry[1]["id"] for entry in rotated}
+    return [*rotated, *(entry for entry in ranked if entry[1]["id"] not in rotated_ids)]
+
+
 def daily_recommendations(topic: str = "", per_topic: int | None = None) -> dict[str, Any]:
     papers = filter_papers(STORE.list_papers(), {})
     topics = [topic] if topic else CONFIG.get("daily_topics", list(CLASSIFIER.topics))
@@ -3524,6 +4004,7 @@ def daily_recommendations(topic: str = "", per_topic: int | None = None) -> dict
     groups = []
     items = []
     seen: set[str] = set()
+    rotation_date = utc_now().date()
     for current_topic in topics:
         candidates = [paper for paper in papers if current_topic in paper.get("topics", [])]
         recent = [paper for paper in candidates if not paper.get("published") or paper["published"] >= cutoff]
@@ -3546,8 +4027,10 @@ def daily_recommendations(topic: str = "", per_topic: int | None = None) -> dict
             score = CLASSIFIER.recommendation(paper, current_topic, asset, paper["id"] in linked_papers)
             ranked.append((score["total"], paper, score, asset))
         ranked.sort(key=lambda item: (item[0], item[1].get("published", "")), reverse=True)
+        available = [entry for entry in ranked if entry[1]["id"] not in seen]
+        ranked_for_today = rotate_daily_candidates(available, limit, current_topic, rotation_date)
         selected = []
-        for _, paper, score, asset in ranked:
+        for _, paper, score, asset in ranked_for_today:
             if paper["id"] in seen:
                 continue
             item = {
@@ -3571,6 +4054,8 @@ def daily_recommendations(topic: str = "", per_topic: int | None = None) -> dict
         "total": len(items),
         "per_topic": limit,
         "window_days": window_days,
+        "rotation_date": rotation_date.isoformat(),
+        "rotation_policy": "同日稳定、按日轮换七组高分候选",
         "weights": CONFIG.get("recommendation_weights", {}),
         "generated_at": utc_now().isoformat(),
     }
@@ -3796,12 +4281,15 @@ class AppHandler(SimpleHTTPRequestHandler):
 
     def send_json(self, payload: Any, status: int = 200) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            pass
 
     def read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
@@ -3836,24 +4324,27 @@ class AppHandler(SimpleHTTPRequestHandler):
                 return
             status = HTTPStatus.PARTIAL_CONTENT
         length = end - start + 1
-        self.send_response(status)
-        self.send_header("Content-Type", "application/pdf")
-        self.send_header("Content-Disposition", f'inline; filename="{path.name}"')
-        self.send_header("Accept-Ranges", "bytes")
-        self.send_header("Content-Length", str(length))
-        if status == HTTPStatus.PARTIAL_CONTENT:
-            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-        self.send_header("Cache-Control", "private, max-age=3600")
-        self.end_headers()
-        with path.open("rb") as handle:
-            handle.seek(start)
-            remaining = length
-            while remaining > 0:
-                chunk = handle.read(min(1024 * 256, remaining))
-                if not chunk:
-                    break
-                self.wfile.write(chunk)
-                remaining -= len(chunk)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Disposition", f'inline; filename="{path.name}"')
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(length))
+            if status == HTTPStatus.PARTIAL_CONTENT:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.send_header("Cache-Control", "private, max-age=3600")
+            self.end_headers()
+            with path.open("rb") as handle:
+                handle.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = handle.read(min(1024 * 256, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            pass
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -4012,7 +4503,10 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.send_json(catalog_coverage())
             return
         if parsed.path == "/api/storage":
-            self.send_json(CLOUD.status())
+            self.send_json(CLOUD.status(SETTINGS, (params.get("refresh") or [""])[0] == "1"))
+            return
+        if parsed.path == "/api/settings":
+            self.send_json(SETTINGS.get())
             return
         if parsed.path == "/api/connectors/search":
             query = (params.get("q") or [""])[0].strip()
@@ -4076,6 +4570,12 @@ class AppHandler(SimpleHTTPRequestHandler):
             started = refresh_in_background()
             self.send_json({"started": started, "message": "更新已开始" if started else "更新任务正在运行"}, 202)
             return
+        if parsed.path == "/api/settings":
+            try:
+                self.send_json(SETTINGS.update(self.read_json(), CLOUD.configured))
+            except (OSError, TypeError, ValueError) as error:
+                self.send_json({"error": str(error)}, 400)
+            return
         if parsed.path == "/api/connectors/import":
             try:
                 self.send_json(CONNECTOR.import_paper(self.read_json()), 201)
@@ -4127,7 +4627,8 @@ class AppHandler(SimpleHTTPRequestHandler):
             if action == "import":
                 try:
                     filename = urllib.parse.unquote(self.headers.get("X-Paperfield-Filename", ""))[:240]
-                    self.send_json(ASSETS.import_pdf(paper, self.read_binary(), filename), 201)
+                    storage_mode = self.headers.get("X-Paperfield-Storage", "")
+                    self.send_json(ASSETS.import_pdf(paper, self.read_binary(), filename, storage_mode), 201)
                 except (OSError, TypeError, ValueError) as error:
                     self.send_json({"error": str(error)}, 400)
                 return
@@ -4140,7 +4641,10 @@ class AppHandler(SimpleHTTPRequestHandler):
                 return
             if action == "resolve":
                 payload = self.read_json()
-                self.send_json(ASSETS.prepare(paper, bool(payload.get("force"))))
+                try:
+                    self.send_json(ASSETS.prepare(paper, bool(payload.get("force")), str(payload.get("storage", ""))))
+                except (RuntimeError, ValueError) as error:
+                    self.send_json({"error": str(error)}, 400)
                 return
             if action == "chat":
                 payload = self.read_json()

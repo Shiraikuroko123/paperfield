@@ -99,7 +99,7 @@ docker compose up --build -d
 
 ## Optional cloud PDF archive
 
-Paperfield supports private S3-compatible storage for long-term PDF copies. Files can be moved from the workstation to Cloudflare R2, Backblaze B2, AWS S3, or another compatible provider and downloaded again when opened. A bounded local cache prevents recently opened cloud papers from filling the disk.
+Paperfield supports private S3-compatible storage for long-term PDF copies. Files can be saved locally, in Cloudflare R2, or in both places and downloaded again when opened. The in-app storage panel controls the local PDF directory and cache limit, inventories the private bucket daily, tracks Paperfield's Class A/Class B requests by billing cycle, and estimates R2 free-tier overage. Operation counts exclude requests made outside Paperfield; current bucket capacity is a point-in-time estimate rather than Cloudflare's average GB-month bill.
 
 Configuration and current price comparison: [`docs/CLOUD_STORAGE.md`](docs/CLOUD_STORAGE.md)
 

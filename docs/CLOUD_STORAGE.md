@@ -38,7 +38,7 @@ For mainland-China access, Alibaba Cloud OSS and Tencent Cloud COS may offer bet
 
 ## Paperfield Configuration
 
-Paperfield never sends object-storage credentials to browser JavaScript. Configure them as server environment variables:
+Paperfield never sends object-storage credentials to browser JavaScript. For a local installation, place them in the ignored `.env` file at the project root; Docker Compose reads the same file. Environment variables remain supported:
 
 ```env
 PAPERFIELD_S3_PROVIDER=Cloudflare R2
@@ -48,9 +48,12 @@ PAPERFIELD_S3_BUCKET=paperfield-private
 PAPERFIELD_S3_ACCESS_KEY_ID=...
 PAPERFIELD_S3_SECRET_ACCESS_KEY=...
 PAPERFIELD_LOCAL_CACHE_MAX_MB=2048
+PAPERFIELD_R2_BILLING_CYCLE_DAY=11
 ```
 
 For AWS S3, leave `PAPERFIELD_S3_ENDPOINT` blank and set the real AWS region. For Backblaze B2, use its S3 endpoint and region. The bucket must remain private; Paperfield reads and writes it through server-side credentials.
+
+After restarting Paperfield, open **存储与用量** in the left rail. Set the billing-cycle start day to the day shown by the Cloudflare dashboard, choose the local PDF directory and cache limit, and use **重新清点** to establish the first bucket inventory. Paperfield counts its own `PutObject`, `GetObject`, and `ListObjectsV2` requests exactly; Cloudflare dashboard requests or other clients are outside that counter. The capacity estimate uses the latest bucket scan, while Cloudflare bills average GB-month usage.
 
 ## Recommended Choice
 

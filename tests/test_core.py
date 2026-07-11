@@ -1,6 +1,8 @@
 import importlib.util
+import io
 import tempfile
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 
 
@@ -85,6 +87,88 @@ class ExplanationTests(unittest.TestCase):
 
 
 class FeedTests(unittest.TestCase):
+    def test_daily_candidate_rotation_is_stable_today_and_changes_tomorrow(self):
+        ranked = [(100 - index, {"id": f"paper-{index}"}, {}, None) for index in range(35)]
+        today = date(2026, 7, 11)
+        first = APP.rotate_daily_candidates(ranked, 5, "具身智能", today)[:5]
+        repeated = APP.rotate_daily_candidates(ranked, 5, "具身智能", today)[:5]
+        tomorrow = APP.rotate_daily_candidates(ranked, 5, "具身智能", today + timedelta(days=1))[:5]
+        self.assertEqual([item[1]["id"] for item in first], [item[1]["id"] for item in repeated])
+        self.assertTrue({item[1]["id"] for item in first}.isdisjoint({item[1]["id"] for item in tomorrow}))
+
+    def test_runtime_settings_persist_pdf_directory_cache_and_billing_day(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings = APP.RuntimeSettings(root / "settings.json")
+            saved = settings.update(
+                {
+                    "pdf_storage_mode": "hybrid",
+                    "local_pdf_dir": str(root / "library"),
+                    "local_cache_max_mb": 4096,
+                    "r2_billing_cycle_day": 11,
+                },
+                cloud_configured=True,
+            )
+            loaded = APP.RuntimeSettings(root / "settings.json").get()
+            self.assertEqual(saved, loaded)
+            self.assertTrue((root / "library").is_dir())
+            self.assertEqual(loaded["r2_billing_cycle_day"], 11)
+
+    def test_cloud_operations_are_counted_and_inventory_is_recorded(self):
+        class FakeBody(io.BytesIO):
+            pass
+
+        class FakeClient:
+            def __init__(self):
+                self.objects = {}
+
+            def put_object(self, Bucket, Key, Body, ContentType):
+                self.objects[Key] = Body.read()
+
+            def get_object(self, Bucket, Key):
+                return {"Body": FakeBody(self.objects[Key])}
+
+            def list_objects_v2(self, **options):
+                return {
+                    "IsTruncated": False,
+                    "Contents": [{"Key": key, "Size": len(value)} for key, value in self.objects.items()],
+                }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = APP.PaperStore(root / "papers.db")
+            cloud = APP.S3ObjectStorage(store)
+            cloud.bucket = "test"
+            cloud.endpoint = "https://example.r2.cloudflarestorage.com"
+            cloud.access_key = "key"
+            cloud.secret_key = "secret"
+            cloud._client_value = FakeClient()
+            source = root / "paper.pdf"
+            source.write_bytes(b"%PDF-test")
+            cloud.upload(source, "papers/test/paper.pdf", "application/pdf")
+            cloud.download("papers/test/paper.pdf", root / "restored.pdf")
+            inventory = cloud.refresh_inventory()
+            usage = store.cloud_usage()
+            self.assertEqual(usage["class_a"], 2)
+            self.assertEqual(usage["class_b"], 1)
+            self.assertEqual(inventory["object_count"], 1)
+            self.assertEqual(inventory["total_bytes"], len(b"%PDF-test"))
+
+    def test_project_workspace_groups_files_and_sanitizes_readme(self):
+        files = ["README.md", "src/model.py", "scripts/train.py", "configs/base.yaml", "tests/test_model.py"]
+        with tempfile.TemporaryDirectory() as directory:
+            service = APP.ProjectAssetService(APP.PaperStore(Path(directory) / "papers.db"))
+            groups = {item["label"]: item["files"] for item in service.file_groups(files)}
+            rendered = service._readme_html(
+                "# Project\n<script>alert(1)</script>\n[Guide](docs/guide.md)",
+                "owner/project", "main", "README.md",
+            )
+            self.assertIn("README.md", groups["开始阅读"])
+            self.assertIn("scripts/train.py", groups["训练与推理"])
+            self.assertNotIn("<script", rendered)
+            self.assertNotIn("alert(1)", rendered)
+            self.assertIn("github.com/owner/project/blob/main/docs/guide.md", rendered)
+
     def test_daily_project_recommendations_are_capped_at_four(self):
         now = APP.utc_now().isoformat()
         projects = [
@@ -342,7 +426,9 @@ class FeedTests(unittest.TestCase):
                 self.assertTrue(imported["fulltext_available"])
                 self.assertTrue(archived["cloud_available"])
                 self.assertFalse(archived["local_cached"])
-                self.assertTrue(assets.pdf_path("paper").exists())
+                restored = assets.archive_to_cloud("paper", remove_local=False)
+                self.assertEqual(restored["storage_mode"], "hybrid")
+                self.assertTrue(restored["local_cached"])
             finally:
                 APP.PDF_DIR = original_pdf_dir
                 APP.FULLTEXT_DIR = original_fulltext_dir

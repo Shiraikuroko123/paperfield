@@ -49,6 +49,9 @@
       </nav>
 
       <div class="rail-foot">
+        <button class="storage-entry" id="openStorageButton" type="button">
+          <span>存储与用量</span><b id="storageEntryStatus">本地</b>
+        </button>
         <div class="sync-indicator">
           <span class="sync-dot" id="syncDot"></span>
           <div><strong id="syncTitle">等待更新</strong><small id="syncTime">尚未同步</small></div>
@@ -150,6 +153,13 @@
         </div>
         <div class="reader-header-actions">
           <a id="readerSourceLink" href="#" target="_blank" rel="noreferrer">来源页</a>
+          <label class="reader-storage-target">保存到
+            <select id="readerStorageMode">
+              <option value="local">本地</option>
+              <option value="cloud">云端</option>
+              <option value="hybrid">本地 + 云端</option>
+            </select>
+          </label>
           <input id="readerPdfInput" type="file" accept="application/pdf,.pdf" hidden>
           <button class="button button-secondary" id="readerImportButton" type="button">导入并精读</button>
           <button class="button button-secondary" id="readerCloudButton" type="button" hidden>转存云端</button>
@@ -251,7 +261,7 @@
             <button role="tab" aria-selected="false" data-project-tab="explain">代码讲解</button>
             <button role="tab" aria-selected="false" data-project-tab="chat">问答</button>
           </div>
-          <section class="project-reader-panel is-active" id="projectReadmePanel" role="tabpanel"><pre id="projectReadmeContent"></pre></section>
+          <section class="project-reader-panel is-active" id="projectReadmePanel" role="tabpanel"><article class="project-readme" id="projectReadmeContent"></article></section>
           <section class="project-reader-panel" id="projectExplainPanel" role="tabpanel" hidden><div id="projectExplanation"></div></section>
           <section class="project-reader-panel" id="projectChatPanel" role="tabpanel" hidden>
             <div class="chat-history" id="projectChatHistory"></div>
@@ -263,6 +273,28 @@
           </section>
         </aside>
       </div>
+    </div>
+  </dialog>
+
+  <dialog class="storage-dialog" id="storageDialog" aria-labelledby="storageTitle">
+    <header class="connector-header">
+      <div><h2 id="storageTitle">存储与用量</h2><p>本地 PDF、缓存上限与 Cloudflare R2 额度</p></div>
+      <button class="reader-close" id="storageClose" type="button" aria-label="关闭存储设置" title="关闭">×</button>
+    </header>
+    <div class="storage-dialog-body">
+      <section class="storage-usage" aria-labelledby="cloudUsageTitle">
+        <div class="storage-section-head"><div><h3 id="cloudUsageTitle">云端用量</h3><p id="cloudUsageMeta">尚未配置对象存储</p></div><button class="text-button" id="refreshStorageUsage" type="button">重新清点</button></div>
+        <div class="usage-meters" id="storageUsageMeters"></div>
+        <p class="storage-notice" id="storageUsageNotice"></p>
+      </section>
+      <form class="storage-settings" id="storageSettingsForm">
+        <h3>PDF 保存设置</h3>
+        <label>默认保存位置<select id="defaultStorageMode"><option value="local">本地</option><option value="cloud">云端</option><option value="hybrid">本地 + 云端</option></select></label>
+        <label>本地 PDF 文件夹<input id="localPdfDir" type="text" spellcheck="false" placeholder="G:\\Paperfield PDFs"></label>
+        <label>本地缓存上限<div class="storage-size-input"><input id="localCacheMaxMb" type="number" min="128" max="1048576" step="128"><span>MB</span></div></label>
+        <label>R2 账期起始日<div class="storage-size-input"><input id="r2BillingCycleDay" type="number" min="1" max="28" step="1"><span>日</span></div></label>
+        <div class="storage-form-actions"><span>修改文件夹只影响后续下载，已有论文仍保留原路径。</span><button class="button button-primary" type="submit">保存设置</button></div>
+      </form>
     </div>
   </dialog>
 

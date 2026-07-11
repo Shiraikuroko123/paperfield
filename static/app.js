@@ -345,7 +345,7 @@ function projectExplanationMarkup(explanation) {
     </div>`;
 }
 
-function renderProjectTree(paths) {
+function projectTreeMarkup(paths) {
   const root = {};
   paths.forEach((path) => {
     let node = root;
@@ -365,7 +365,13 @@ function renderProjectTree(paths) {
     const files = (node.__files || []).sort((a, b) => a.name.localeCompare(b.name));
     return `${directories.map((name) => `<details><summary>${escapeHtml(name)}</summary>${renderNode(node[name])}</details>`).join("")}${files.map((file) => `<button type="button" title="${escapeHtml(file.path)}" data-project-file="${escapeHtml(file.path)}">${escapeHtml(file.name)}</button>`).join("")}`;
   };
-  el("projectFileTree").innerHTML = renderNode(root);
+  return renderNode(root);
+}
+
+function renderProjectTree(paths, groups = []) {
+  el("projectFileTree").innerHTML = groups.length
+    ? groups.map((group, index) => `<details class="project-file-group" ${index < 2 ? "open" : ""}><summary><span>${escapeHtml(group.label)}</span><b>${group.files.length}</b></summary>${projectTreeMarkup(group.files)}</details>`).join("")
+    : projectTreeMarkup(paths);
   el("projectFileTree").querySelectorAll("[data-project-file]").forEach((button) => button.addEventListener("click", () => loadProjectFile(button.dataset.projectFile)));
 }
 
@@ -419,13 +425,13 @@ function renderProjectWorkspace(workspace) {
   el("projectReaderTitle").textContent = project.full_name;
   el("projectReaderMeta").textContent = `${project.language || "语言未标注"} · ${project.stars} Stars · ${workspace.file_count} 个源码文件 · ${project.linked_paper_count} 篇关联论文${project.size_kb ? ` · 仓库约 ${Math.max(1, Math.round(project.size_kb / 1024))} MB` : ""}`;
   el("projectGithubLink").href = project.url;
-  el("projectReadmeContent").textContent = workspace.readme || "仓库没有找到 README。";
+  el("projectReadmeContent").innerHTML = workspace.readme_html || "<p>仓库没有找到 README。</p>";
   if (!workspace.ready) {
     el("projectFileTree").innerHTML = "";
     el("projectCurrentPath").textContent = "源码不可用";
     el("projectCodeContent").textContent = workspace.error || "仓库中没有可安全显示的文本源码。";
   } else {
-    renderProjectTree(workspace.files);
+    renderProjectTree(workspace.files, workspace.file_groups);
     const preferred = workspace.files.find((path) => /(^|\/)(main|app|server|model|train)\.(py|js|ts|tsx|go|rs)$/i.test(path))
       || workspace.files.find((path) => !/\.(md|rst|txt)$/i.test(path))
       || workspace.files[0];
@@ -811,8 +817,9 @@ function renderReaderAsset(paper, asset, reloadPdf = true) {
   el("translationPageCount").textContent = `/ ${asset.page_count || 0}`;
   const cloudButton = el("readerCloudButton");
   cloudButton.hidden = !state.storage?.configured;
-  cloudButton.disabled = !asset.local_cached || asset.cloud_available;
-  cloudButton.textContent = asset.cloud_available ? "云端已保存" : "转存云端";
+  cloudButton.disabled = !asset.local_cached && !asset.cloud_available;
+  cloudButton.textContent = asset.cloud_available ? "更新存储位置" : "保存到云端";
+  el("readerStorageMode").value = asset.storage_mode || el("readerStorageMode").value;
   if (asset.pdf_available) {
     el("pdfStatus").hidden = true;
     el("pdfUnavailable").hidden = true;
@@ -834,7 +841,10 @@ async function resolveReaderAsset(paper, force = false) {
   setPdfStatus("正在寻找公开 PDF", "检查论文源、OpenAlex、Semantic Scholar、arXiv 与公开机构仓储");
   el("readerCacheButton").disabled = true;
   try {
-    const asset = await api(`/api/papers/${encodeURIComponent(paper.id)}/resolve`, { method: "POST", body: JSON.stringify({ force }) });
+    const asset = await api(`/api/papers/${encodeURIComponent(paper.id)}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ force, storage: el("readerStorageMode").value }),
+    });
     renderReaderAsset(paper, asset);
   } catch (error) {
     setPdfStatus("PDF 解析失败", error.message);
@@ -855,7 +865,11 @@ async function importReaderPdf(file) {
   try {
     const response = await fetch(`/api/papers/${encodeURIComponent(paper.id)}/import`, {
       method: "POST",
-      headers: { "Content-Type": "application/pdf", "X-Paperfield-Filename": encodeURIComponent(file.name) },
+      headers: {
+        "Content-Type": "application/pdf",
+        "X-Paperfield-Filename": encodeURIComponent(file.name),
+        "X-Paperfield-Storage": el("readerStorageMode").value,
+      },
       body: file,
     });
     const asset = await response.json();
@@ -879,22 +893,69 @@ async function archiveReaderPdf() {
   button.disabled = true;
   button.textContent = "正在上传";
   try {
-    const asset = await api(`/api/papers/${encodeURIComponent(paper.id)}/archive`, {
-      method: "POST",
-      body: JSON.stringify({ remove_local: true }),
-    });
+    const mode = el("readerStorageMode").value;
+    const asset = mode === "local"
+      ? await api(`/api/papers/${encodeURIComponent(paper.id)}/resolve`, { method: "POST", body: JSON.stringify({ storage: mode }) })
+      : await api(`/api/papers/${encodeURIComponent(paper.id)}/archive`, {
+        method: "POST",
+        body: JSON.stringify({ remove_local: mode === "cloud" }),
+      });
     renderReaderAsset(paper, asset, false);
     toast(`PDF 已保存到 ${asset.cloud_provider}`);
   } catch (error) {
     toast(error.message, true);
     button.disabled = false;
-    button.textContent = "转存云端";
+    button.textContent = "保存到云端";
   }
 }
 
-async function loadStorageStatus() {
-  state.storage = await api("/api/storage");
+const formatStorageBytes = (bytes = 0) => {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = units[0];
+  for (let index = 1; index < units.length && value >= 1024; index += 1) {
+    value /= 1024;
+    unit = units[index];
+  }
+  return `${value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${unit}`;
+};
+
+function renderStorageStatus(payload) {
+  state.storage = payload;
+  const settings = payload.settings || {};
   el("readerCloudButton").hidden = !state.storage.configured;
+  el("readerStorageMode").querySelectorAll("option").forEach((option) => {
+    option.disabled = !payload.configured && option.value !== "local";
+  });
+  el("defaultStorageMode").querySelectorAll("option").forEach((option) => {
+    option.disabled = !payload.configured && option.value !== "local";
+  });
+  el("defaultStorageMode").value = settings.pdf_storage_mode || "local";
+  el("readerStorageMode").value = settings.pdf_storage_mode || "local";
+  el("localPdfDir").value = settings.local_pdf_dir || "";
+  el("localCacheMaxMb").value = settings.local_cache_max_mb || 2048;
+  el("r2BillingCycleDay").value = settings.r2_billing_cycle_day || 1;
+  el("storageEntryStatus").textContent = payload.configured ? payload.provider : "本地";
+  const usage = payload.usage || {};
+  el("cloudUsageMeta").textContent = payload.configured
+    ? `${payload.provider} · ${payload.bucket} · ${usage.period_start || ""} 至 ${usage.period_end || ""} · ${usage.object_count || 0} 个对象`
+    : "尚未配置对象存储，云端选项暂不可用";
+  const meters = [
+    ["存储容量", usage.storage_percent || 0, `${formatStorageBytes(usage.storage_bytes || 0)} / 10 GB`],
+    ["A 类操作", usage.class_a_percent || 0, `${Number(usage.class_a || 0).toLocaleString()} / 1,000,000`],
+    ["B 类操作", usage.class_b_percent || 0, `${Number(usage.class_b || 0).toLocaleString()} / 10,000,000`],
+  ];
+  el("storageUsageMeters").innerHTML = meters.map(([label, percent, detail]) => `<div class="usage-meter"><div><strong>${label}</strong><span>${detail}</span></div><progress max="100" value="${Math.min(100, percent)}"></progress><small>${percent.toFixed(3)}% 免费额度</small></div>`).join("");
+  const estimate = Number(usage.estimated_overage_usd || 0);
+  el("storageUsageNotice").textContent = payload.configured
+    ? `${usage.estimate_notice || ""} 当前估算超额费用：$${estimate.toFixed(4)}。${usage.inventory_error ? ` 清点失败：${usage.inventory_error}` : ""}`
+    : "配置后，Paperfield 会每天清点一次桶容量，并统计自身产生的 A/B 类操作。";
+}
+
+async function loadStorageStatus(refresh = false) {
+  const payload = await api(`/api/storage${refresh ? "?refresh=1" : ""}`);
+  renderStorageStatus(payload);
 }
 
 function renderChatHistory(items = []) {
@@ -1161,6 +1222,47 @@ function bindEvents() {
     el("connectorQuery").focus();
   });
   el("connectorClose").addEventListener("click", () => el("connectorDialog").close());
+  el("openStorageButton").addEventListener("click", () => {
+    el("storageDialog").showModal();
+    el("defaultStorageMode").focus();
+  });
+  el("storageClose").addEventListener("click", () => el("storageDialog").close());
+  el("refreshStorageUsage").addEventListener("click", async () => {
+    const button = el("refreshStorageUsage");
+    button.disabled = true;
+    button.textContent = "正在清点";
+    try {
+      await loadStorageStatus(true);
+      toast("云端用量已更新");
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      button.disabled = false;
+      button.textContent = "重新清点";
+    }
+  });
+  el("storageSettingsForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = event.submitter;
+    button.disabled = true;
+    try {
+      await api("/api/settings", {
+        method: "POST",
+        body: JSON.stringify({
+          pdf_storage_mode: el("defaultStorageMode").value,
+          local_pdf_dir: el("localPdfDir").value.trim(),
+          local_cache_max_mb: Number(el("localCacheMaxMb").value),
+          r2_billing_cycle_day: Number(el("r2BillingCycleDay").value),
+        }),
+      });
+      await loadStorageStatus();
+      toast("存储设置已保存");
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  });
   el("connectorForm").addEventListener("submit", (event) => { event.preventDefault(); searchConnector(); });
   el("loadMoreButton").addEventListener("click", () => loadPapers({ append: true }));
 
@@ -1217,6 +1319,9 @@ function bindEvents() {
       button.hidden = Boolean(query) && !button.dataset.projectFile.toLowerCase().includes(query);
     });
     if (query) el("projectFileTree").querySelectorAll("details").forEach((item) => { item.open = true; });
+    el("projectFileTree").querySelectorAll(".project-file-group").forEach((group) => {
+      group.hidden = Boolean(query) && ![...group.querySelectorAll("[data-project-file]")].some((button) => !button.hidden);
+    });
   });
   el("projectChatForm").addEventListener("submit", async (event) => {
     event.preventDefault();
