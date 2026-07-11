@@ -62,6 +62,7 @@
           <input id="searchInput" type="search" placeholder="搜索论文、作者或刊物" autocomplete="off">
           <kbd>/</kbd>
         </label>
+        <button class="button button-secondary" id="openConnectorButton" type="button">添加论文</button>
         <button class="button button-primary" id="refreshButton" type="button">更新论文</button>
       </header>
 
@@ -88,8 +89,10 @@
         <label class="paper-only-filter">数据源<select id="sourceFilter"><option value="">全部数据源</option></select></label>
         <label class="project-only-filter" hidden>语言<select id="projectLanguageFilter"><option value="">全部语言</option></select></label>
         <label>起始日期<input id="dateFilter" type="date"></label>
-        <label class="paper-only-filter">排序<select id="sortFilter"><option value="quality">推荐优先</option><option value="date">最新发表</option><option value="citations">引用优先</option></select></label>
-        <label class="project-only-filter" hidden>项目排序<select id="projectSortFilter"><option value="updated">最近更新</option><option value="stars">Stars 优先</option><option value="links">论文关联优先</option></select></label>
+        <label class="paper-only-filter">主排序<select id="sortFilter"><option value="quality">推荐分高优先</option><option value="date">最新发表优先</option><option value="citations">引用数高优先</option><option value="title">标题 A-Z</option><option value="venue">刊物 A-Z</option></select></label>
+        <label class="paper-only-filter">次排序<select id="secondarySortFilter"><option value="">自动</option><option value="quality">推荐分高优先</option><option value="date">最新发表优先</option><option value="citations">引用数高优先</option><option value="title">标题 A-Z</option><option value="venue">刊物 A-Z</option></select></label>
+        <label class="project-only-filter" hidden>主排序<select id="projectSortFilter"><option value="updated">最近更新优先</option><option value="links">关联论文多优先</option><option value="stars">Stars 多优先</option><option value="forks">Forks 多优先</option><option value="issues">Issue 多优先</option><option value="name">名称 A-Z</option></select></label>
+        <label class="project-only-filter" hidden>次排序<select id="projectSecondarySortFilter"><option value="">自动</option><option value="updated">最近更新优先</option><option value="links">关联论文多优先</option><option value="stars">Stars 多优先</option><option value="forks">Forks 多优先</option><option value="issues">Issue 多优先</option><option value="name">名称 A-Z</option></select></label>
         <button class="text-button" id="clearFilters" type="button">清除筛选</button>
         <output class="coverage-summary paper-only-filter" id="coverageSummary" aria-live="polite"></output>
       </section>
@@ -144,6 +147,9 @@
         </div>
         <div class="reader-header-actions">
           <a id="readerSourceLink" href="#" target="_blank" rel="noreferrer">来源页</a>
+          <input id="readerPdfInput" type="file" accept="application/pdf,.pdf" hidden>
+          <button class="button button-secondary" id="readerImportButton" type="button">导入并精读</button>
+          <button class="button button-secondary" id="readerCloudButton" type="button" hidden>转存云端</button>
           <button class="button button-secondary" id="readerCacheButton" type="button">重新解析 PDF</button>
         </div>
       </header>
@@ -159,6 +165,7 @@
             <strong>暂未找到公开 PDF 副本</strong>
             <p id="pdfUnavailableReason"></p>
             <a id="pdfFallbackLink" href="#" target="_blank" rel="noreferrer">查看论文来源页</a>
+            <button class="button button-secondary" id="pdfUnavailableImportButton" type="button">导入本地 PDF</button>
           </div>
         </section>
 
@@ -199,6 +206,18 @@
         </aside>
       </div>
     </div>
+  </dialog>
+
+  <dialog class="connector-dialog" id="connectorDialog" aria-labelledby="connectorTitle">
+    <header class="connector-header">
+      <div><h2 id="connectorTitle">添加论文</h2><p>Crossref · arXiv · 本地论文库</p></div>
+      <button class="reader-close" id="connectorClose" type="button" aria-label="关闭添加论文" title="关闭">×</button>
+    </header>
+    <form class="connector-search" id="connectorForm">
+      <label for="connectorQuery">DOI、arXiv 或标题</label>
+      <div><input id="connectorQuery" type="search" autocomplete="off" placeholder="10.1145/... 或论文标题"><button class="button button-primary" type="submit">查找</button></div>
+    </form>
+    <div class="connector-results" id="connectorResults" aria-live="polite"></div>
   </dialog>
 
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>

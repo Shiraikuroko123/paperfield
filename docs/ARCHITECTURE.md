@@ -2,7 +2,7 @@
 
 ## Current deployment model
 
-Paperfield 0.4 is a single-process, single-user application:
+Paperfield 0.6 is a single-process, single-user application:
 
 ```mermaid
 flowchart LR
@@ -26,6 +26,8 @@ This model is appropriate for a personal workstation. It is intentionally not ex
 - `PaperSources` and `GitHubSource`: external-source adapters.
 - `PaperExplainer`: AI-provider adapter.
 - `PaperAssetService`: open-access resolution, PDF cache, page extraction, and cached reading notes.
+- `PaperConnector`: DOI, title, Crossref, and arXiv lookup for user-requested imports.
+- `S3ObjectStorage`: optional private cloud archive behind an S3-compatible API.
 - `TranslationService`: non-GPT browser/LibreTranslate/Google translation path.
 - `AppHandler`: HTTP boundary.
 - `static/`: browser client.

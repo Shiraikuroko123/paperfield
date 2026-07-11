@@ -6,6 +6,13 @@ All notable changes to Paperfield are documented here.
 
 - No unreleased changes yet.
 
+## 0.6.0 - 2026-07-11
+
+- Added explicit primary and secondary sorting for papers and GitHub projects.
+- Added a DOI, title, and arXiv paper connector with metadata import.
+- Added local PDF upload, page-aware extraction, and immediate full-text analysis.
+- Added optional S3-compatible cloud archiving with on-demand restore and bounded local caching.
+
 ## 0.5.0 - 2026-07-11
 
 - Expanded venue collection with dedicated ACM MM and IEEE T-RO collectors, targeted Crossref queries, and selected DBLP archives.

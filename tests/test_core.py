@@ -85,6 +85,35 @@ class ExplanationTests(unittest.TestCase):
 
 
 class FeedTests(unittest.TestCase):
+    def test_connector_normalizes_crossref_metadata(self):
+        connector = APP.PaperConnector(APP.STORE, APP.SOURCES, APP.CLASSIFIER)
+        paper = connector._crossref_paper(
+            {
+                "DOI": "10.1000/test",
+                "title": ["A Vision-Language-Action Model"],
+                "container-title": ["Conference on Robot Learning"],
+                "author": [{"given": "Ada", "family": "Lovelace", "affiliation": [{"name": "Tsinghua University"}]}],
+                "published": {"date-parts": [[2026, 7, 1]]},
+                "URL": "https://doi.org/10.1000/test",
+            }
+        )
+
+        self.assertEqual(paper["id"], "doi:10.1000/test")
+        self.assertEqual(paper["venue"], "CoRL")
+        self.assertEqual(paper["authors"], ["Ada Lovelace"])
+        self.assertIn("具身智能", paper["topics"])
+
+    def test_project_multi_sort_uses_stars_when_link_counts_match(self):
+        projects = [
+            {"full_name": "low", "description": "", "topics": [], "categories": [], "language": "", "pushed_at": "2026-01-01", "linked_paper_count": 2, "stars": 10, "forks": 1, "open_issues": 0},
+            {"full_name": "high", "description": "", "topics": [], "categories": [], "language": "", "pushed_at": "2025-01-01", "linked_paper_count": 2, "stars": 100, "forks": 1, "open_issues": 0},
+            {"full_name": "linked", "description": "", "topics": [], "categories": [], "language": "", "pushed_at": "2024-01-01", "linked_paper_count": 3, "stars": 1, "forks": 1, "open_issues": 0},
+        ]
+
+        result = APP.filter_projects(projects, {"sort": ["links"], "sort_secondary": ["stars"]})
+
+        self.assertEqual([item["full_name"] for item in result], ["linked", "high", "low"])
+
     def test_acm_mm_edition_name_uses_correct_ordinal(self):
         self.assertEqual(APP.PaperSources.ordinal(32), "32nd")
         self.assertEqual(APP.PaperSources.ordinal(33), "33rd")
@@ -225,6 +254,49 @@ class FeedTests(unittest.TestCase):
             self.assertEqual(saved["provider"], "arXiv")
             self.assertEqual(saved["page_count"], 12)
             self.assertEqual(store.assets_for_papers(["paper"])["paper"]["text_chars"], 42000)
+
+    def test_imported_pdf_can_archive_and_restore_from_cloud(self):
+        import fitz
+
+        class FakeCloud:
+            configured = True
+            provider = "Test Cloud"
+
+            def __init__(self):
+                self.objects = {}
+
+            def upload(self, path, key, content_type):
+                self.objects[key] = path.read_bytes()
+
+            def download(self, key, target):
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(self.objects[key])
+
+        with tempfile.TemporaryDirectory() as directory:
+            original_pdf_dir = APP.PDF_DIR
+            original_fulltext_dir = APP.FULLTEXT_DIR
+            APP.PDF_DIR = Path(directory) / "pdfs"
+            APP.FULLTEXT_DIR = Path(directory) / "fulltext"
+            try:
+                store = APP.PaperStore(Path(directory) / "papers.db")
+                assets = APP.PaperAssetService(store, FakeCloud())
+                document = fitz.open()
+                for _ in range(20):
+                    page = document.new_page()
+                    page.insert_textbox((72, 72, 520, 760), "Embodied intelligence full text. " * 18)
+                pdf_bytes = document.tobytes()
+                document.close()
+
+                imported = assets.import_pdf({"id": "paper", "title": "Imported"}, pdf_bytes, "paper.pdf")
+                archived = assets.archive_to_cloud("paper", remove_local=True)
+
+                self.assertTrue(imported["fulltext_available"])
+                self.assertTrue(archived["cloud_available"])
+                self.assertFalse(archived["local_cached"])
+                self.assertTrue(assets.pdf_path("paper").exists())
+            finally:
+                APP.PDF_DIR = original_pdf_dir
+                APP.FULLTEXT_DIR = original_fulltext_dir
 
     def test_pdf_url_safety_rejects_local_networks(self):
         self.assertFalse(APP.PaperAssetService._safe_remote_url("http://127.0.0.1/private.pdf"))

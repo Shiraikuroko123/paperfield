@@ -12,6 +12,8 @@ const state = {
   total: 0,
   pageSize: 100,
   stats: null,
+  connectorResults: [],
+  storage: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -49,6 +51,47 @@ function toast(message, error = false) {
   setTimeout(() => item.remove(), 3200);
 }
 
+function renderConnectorResults(items = []) {
+  state.connectorResults = items;
+  const container = el("connectorResults");
+  if (!items.length) {
+    container.innerHTML = `<div class="connector-empty">没有找到匹配论文</div>`;
+    return;
+  }
+  container.innerHTML = items.map((paper, index) => `
+    <article class="connector-result">
+      <div><h3>${escapeHtml(paper.title)}</h3><p>${escapeHtml(paper.authors.join(" · ") || "作者信息缺失")}</p><span>${escapeHtml(paper.venue || paper.source)} · ${escapeHtml(formatDate(paper.published))}${paper.doi ? ` · DOI ${escapeHtml(paper.doi)}` : ""}</span></div>
+      <button class="button ${paper.already_saved ? "button-secondary" : "button-primary"}" type="button" data-connector-import="${index}">${paper.already_saved ? "打开" : "加入并打开"}</button>
+    </article>`).join("");
+  container.querySelectorAll("[data-connector-import]").forEach((button) => button.addEventListener("click", async () => {
+    const paper = state.connectorResults[Number(button.dataset.connectorImport)];
+    button.disabled = true;
+    try {
+      const imported = paper.already_saved
+        ? { id: paper.existing_id }
+        : await api("/api/connectors/import", { method: "POST", body: JSON.stringify(paper) });
+      el("connectorDialog").close();
+      await Promise.all([loadPapers({ preserveSelection: false }), loadStats(), loadOptions()]);
+      openReader(imported.id);
+    } catch (error) {
+      toast(error.message, true);
+      button.disabled = false;
+    }
+  }));
+}
+
+async function searchConnector() {
+  const query = el("connectorQuery").value.trim();
+  if (!query) return;
+  el("connectorResults").innerHTML = `<div class="connector-empty">正在查找论文</div>`;
+  try {
+    const payload = await api(`/api/connectors/search?q=${encodeURIComponent(query)}`);
+    renderConnectorResults(payload.items);
+  } catch (error) {
+    el("connectorResults").innerHTML = `<div class="connector-empty is-error">${escapeHtml(error.message)}</div>`;
+  }
+}
+
 function formatDate(value) {
   if (!value) return "日期未知";
   const date = new Date(`${value}T00:00:00`);
@@ -76,6 +119,7 @@ function currentParams() {
     top: state.view === "top" ? "1" : "",
     date_from: el("dateFilter").value,
     sort: el("sortFilter").value,
+    sort_secondary: el("secondarySortFilter").value,
     status: state.status,
     favorite: state.view === "favorites" ? "1" : "",
   };
@@ -91,6 +135,7 @@ function projectParams() {
     language: el("projectLanguageFilter").value,
     date_from: el("dateFilter").value,
     sort: el("projectSortFilter").value,
+    sort_secondary: el("projectSecondarySortFilter").value,
   };
   Object.entries(values).forEach(([key, value]) => value && params.set(key, value));
   return params;
@@ -573,34 +618,96 @@ function setPdfStatus(title, detail = "") {
   el("pdfUnavailable").hidden = true;
 }
 
+function renderReaderAsset(paper, asset, reloadPdf = true) {
+  state.readerAsset = asset;
+  el("translationPage").max = Math.max(1, asset.page_count || 1);
+  el("translationPageCount").textContent = `/ ${asset.page_count || 0}`;
+  const cloudButton = el("readerCloudButton");
+  cloudButton.hidden = !state.storage?.configured;
+  cloudButton.disabled = !asset.local_cached || asset.cloud_available;
+  cloudButton.textContent = asset.cloud_available ? "云端已保存" : "转存云端";
+  if (asset.pdf_available) {
+    el("pdfStatus").hidden = true;
+    el("pdfUnavailable").hidden = true;
+    if (reloadPdf) el("pdfFrame").src = `${asset.pdf_url}#view=FitH`;
+    el("pdfFrame").hidden = false;
+    el("readerCacheButton").textContent = asset.cloud_available && !asset.local_cached ? "从云端读取" : "PDF 已缓存";
+    if (asset.fulltext_available) loadTranslationPage(1);
+  } else {
+    el("pdfStatus").hidden = true;
+    el("pdfFrame").hidden = true;
+    el("pdfUnavailable").hidden = false;
+    el("pdfUnavailableReason").textContent = asset.error || "公开学术源中没有发现可直接访问的副本。";
+    el("pdfFallbackLink").href = paper.source_url || paper.pdf_url || "#";
+    el("readerCacheButton").textContent = "重新查找 PDF";
+  }
+}
+
 async function resolveReaderAsset(paper, force = false) {
   setPdfStatus("正在寻找公开 PDF", "检查论文源、OpenAlex、Semantic Scholar、arXiv 与公开机构仓储");
   el("readerCacheButton").disabled = true;
   try {
     const asset = await api(`/api/papers/${encodeURIComponent(paper.id)}/resolve`, { method: "POST", body: JSON.stringify({ force }) });
-    state.readerAsset = asset;
-    el("translationPage").max = Math.max(1, asset.page_count || 1);
-    el("translationPageCount").textContent = `/ ${asset.page_count || 0}`;
-    if (asset.pdf_available) {
-      el("pdfStatus").hidden = true;
-      el("pdfUnavailable").hidden = true;
-      el("pdfFrame").src = `${asset.pdf_url}#view=FitH`;
-      el("pdfFrame").hidden = false;
-      el("readerCacheButton").textContent = "PDF 已缓存";
-      if (asset.fulltext_available) loadTranslationPage(1);
-    } else {
-      el("pdfStatus").hidden = true;
-      el("pdfFrame").hidden = true;
-      el("pdfUnavailable").hidden = false;
-      el("pdfUnavailableReason").textContent = asset.error || "公开学术源中没有发现可直接访问的副本。";
-      el("pdfFallbackLink").href = paper.source_url || paper.pdf_url || "#";
-      el("readerCacheButton").textContent = "重新查找 PDF";
-    }
+    renderReaderAsset(paper, asset);
   } catch (error) {
     setPdfStatus("PDF 解析失败", error.message);
   } finally {
     el("readerCacheButton").disabled = false;
   }
+}
+
+async function importReaderPdf(file) {
+  const paper = state.readerPaper;
+  if (!paper || !file) return;
+  if (file.type && file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+    toast("请选择 PDF 文件", true);
+    return;
+  }
+  setPdfStatus("正在导入 PDF", "校验文件并提取逐页全文");
+  el("readerImportButton").disabled = true;
+  try {
+    const response = await fetch(`/api/papers/${encodeURIComponent(paper.id)}/import`, {
+      method: "POST",
+      headers: { "Content-Type": "application/pdf", "X-Paperfield-Filename": encodeURIComponent(file.name) },
+      body: file,
+    });
+    const asset = await response.json();
+    if (!response.ok) throw new Error(asset.error || `导入失败：${response.status}`);
+    renderReaderAsset(paper, asset);
+    toast(`已导入 ${asset.page_count} 页 PDF`);
+    await generateReaderExplanation();
+  } catch (error) {
+    setPdfStatus("PDF 导入失败", error.message);
+    toast(error.message, true);
+  } finally {
+    el("readerImportButton").disabled = false;
+    el("readerPdfInput").value = "";
+  }
+}
+
+async function archiveReaderPdf() {
+  const paper = state.readerPaper;
+  if (!paper || !state.storage?.configured) return;
+  const button = el("readerCloudButton");
+  button.disabled = true;
+  button.textContent = "正在上传";
+  try {
+    const asset = await api(`/api/papers/${encodeURIComponent(paper.id)}/archive`, {
+      method: "POST",
+      body: JSON.stringify({ remove_local: true }),
+    });
+    renderReaderAsset(paper, asset, false);
+    toast(`PDF 已保存到 ${asset.cloud_provider}`);
+  } catch (error) {
+    toast(error.message, true);
+    button.disabled = false;
+    button.textContent = "转存云端";
+  }
+}
+
+async function loadStorageStatus() {
+  state.storage = await api("/api/storage");
+  el("readerCloudButton").hidden = !state.storage.configured;
 }
 
 function renderChatHistory(items = []) {
@@ -657,6 +764,7 @@ async function openReader(paperId) {
     const institutionNames = paper.notable_institutions?.slice(0, 2).map((item) => item.name).join(" · ");
     el("readerMeta").textContent = `${paper.authors.join(" · ") || "作者信息缺失"} · ${paper.venue || paper.source} · ${formatDate(paper.published)}${institutionNames ? ` · ${institutionNames}` : ""}`;
     el("readerSourceLink").href = paper.source_url || paper.pdf_url || "#";
+    el("readerCloudButton").hidden = !state.storage?.configured;
     renderReaderScore(paper);
     el("readerExplanation").innerHTML = paper.explanation
       ? explanationMarkup(paper.explanation)
@@ -836,7 +944,9 @@ function clearFilters() {
   ["topicFilter", "tierFilter", "platformFilter", "venueFilter", "institutionFilter", "sourceFilter"].forEach((id) => { el(id).value = ""; });
   el("projectLanguageFilter").value = "";
   el("projectSortFilter").value = "updated";
+  el("projectSecondarySortFilter").value = "";
   el("sortFilter").value = "quality";
+  el("secondarySortFilter").value = "";
   applyViewMode();
   document.querySelectorAll(".rail-link").forEach((item) => item.classList.toggle("is-active", item.dataset.view === state.view));
   document.querySelectorAll(".status-tabs[data-status], .status-tabs button");
@@ -848,14 +958,22 @@ function bindEvents() {
   const reload = debounce(() => loadPapers({ preserveSelection: false }));
   el("searchInput").addEventListener("input", reload);
   el("authorFilter").addEventListener("input", reload);
-  ["topicFilter", "tierFilter", "platformFilter", "venueFilter", "institutionFilter", "sourceFilter", "dateFilter", "sortFilter"].forEach((id) => el(id).addEventListener("change", () => {
+  ["topicFilter", "tierFilter", "platformFilter", "venueFilter", "institutionFilter", "sourceFilter", "dateFilter", "sortFilter", "secondarySortFilter"].forEach((id) => el(id).addEventListener("change", () => {
     if (id === "topicFilter") state.topic = "";
     loadPapers({ preserveSelection: false });
   }));
-  ["projectLanguageFilter", "projectSortFilter"].forEach((id) => el(id).addEventListener("change", () => loadPapers({ preserveSelection: false })));
+  ["projectLanguageFilter", "projectSortFilter", "projectSecondarySortFilter"].forEach((id) => el(id).addEventListener("change", () => loadPapers({ preserveSelection: false })));
   el("clearFilters").addEventListener("click", clearFilters);
   el("emptyClear").addEventListener("click", clearFilters);
   el("refreshButton").addEventListener("click", triggerRefresh);
+  el("openConnectorButton").addEventListener("click", () => {
+    el("connectorQuery").value = "";
+    el("connectorResults").innerHTML = "";
+    el("connectorDialog").showModal();
+    el("connectorQuery").focus();
+  });
+  el("connectorClose").addEventListener("click", () => el("connectorDialog").close());
+  el("connectorForm").addEventListener("submit", (event) => { event.preventDefault(); searchConnector(); });
   el("loadMoreButton").addEventListener("click", () => loadPapers({ append: true }));
 
   document.querySelectorAll(".rail-link").forEach((button) => button.addEventListener("click", () => {
@@ -898,6 +1016,10 @@ function bindEvents() {
   });
   document.querySelectorAll("[data-reader-tab]").forEach((button) => button.addEventListener("click", () => setReaderTab(button.dataset.readerTab)));
   el("readerCacheButton").addEventListener("click", () => state.readerPaper && resolveReaderAsset(state.readerPaper, true));
+  el("readerImportButton").addEventListener("click", () => el("readerPdfInput").click());
+  el("pdfUnavailableImportButton").addEventListener("click", () => el("readerPdfInput").click());
+  el("readerPdfInput").addEventListener("change", () => importReaderPdf(el("readerPdfInput").files?.[0]));
+  el("readerCloudButton").addEventListener("click", archiveReaderPdf);
   el("translationPage").addEventListener("change", () => loadTranslationPage(Number(el("translationPage").value) || 1));
   el("translatePageButton").addEventListener("click", translateCurrentPage);
   el("chatForm").addEventListener("submit", async (event) => {
@@ -938,7 +1060,7 @@ async function init() {
   applyViewMode();
   document.querySelectorAll(".rail-link").forEach((item) => item.classList.toggle("is-active", item.dataset.view === state.view));
   try {
-    await Promise.all([loadOptions(), loadStats(), loadPapers({ preserveSelection: false })]);
+    await Promise.all([loadOptions(), loadStats(), loadStorageStatus(), loadPapers({ preserveSelection: false })]);
     if (initialPaperId) await openPaper(initialPaperId, false);
     if (initialProject) await openProject(initialProject, false);
   } catch (error) {

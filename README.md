@@ -61,6 +61,8 @@ When a public PDF is available, Paperfield extracts page-aware full text, builds
 
 Without a key, Paperfield generates a clearly labeled abstract-based Chinese reading guide. PDF reading and translation still work without GPT.
 
+You can also add a paper by DOI, arXiv identifier, URL, or title through the built-in connector. Any selected paper accepts a local PDF upload; Paperfield validates the file, extracts page-aware text, opens it in the reader, and can immediately generate a full-text Chinese analysis.
+
 For an explicit Paperfield-only override, use `PAPERFIELD_OPENAI_API_KEY`, `PAPERFIELD_OPENAI_BASE_URL`, and `PAPERFIELD_OPENAI_MODEL`.
 
 ## Translation without GPT tokens
@@ -91,6 +93,12 @@ docker compose up --build -d
 ```
 
 容器使用持久化数据卷，并通过 `/api/health` 提供健康检查。云端环境需要通过环境变量配置 AI Key，不能依赖本机 CC Switch 文件。
+
+## Optional cloud PDF archive
+
+Paperfield supports private S3-compatible storage for long-term PDF copies. Files can be moved from the workstation to Cloudflare R2, Backblaze B2, AWS S3, or another compatible provider and downloaded again when opened. A bounded local cache prevents recently opened cloud papers from filling the disk.
+
+Configuration and current price comparison: [`docs/CLOUD_STORAGE.md`](docs/CLOUD_STORAGE.md)
 
 ## GitHub project workflow
 

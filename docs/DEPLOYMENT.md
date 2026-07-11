@@ -35,6 +35,13 @@ docker compose down
 | `PAPERFIELD_OPENAI_API_KEY` | AI key for container/cloud deployment |
 | `PAPERFIELD_OPENAI_BASE_URL` | OpenAI-compatible base URL |
 | `PAPERFIELD_OPENAI_MODEL` | Explanation model |
+| `PAPERFIELD_S3_PROVIDER` | Display name for an optional S3-compatible archive |
+| `PAPERFIELD_S3_ENDPOINT` | S3-compatible endpoint; blank for AWS S3 |
+| `PAPERFIELD_S3_REGION` | Object-storage region |
+| `PAPERFIELD_S3_BUCKET` | Private PDF archive bucket |
+| `PAPERFIELD_S3_ACCESS_KEY_ID` | Server-side object-storage access key |
+| `PAPERFIELD_S3_SECRET_ACCESS_KEY` | Server-side object-storage secret |
+| `PAPERFIELD_LOCAL_CACHE_MAX_MB` | Maximum local PDF cache before old files are pruned |
 | `GITHUB_TOKEN` | Optional GitHub rate-limit increase |
 
 ## Cloud constraints
@@ -60,3 +67,5 @@ venues.json
 ```
 
 Do not store `.env` or API keys inside backups committed to GitHub.
+
+When cloud archiving is enabled, back up the SQLite database as well as the private object-storage bucket. The database contains the object keys used to restore each PDF.

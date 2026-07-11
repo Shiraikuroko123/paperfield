@@ -32,7 +32,7 @@ FULLTEXT_DIR = Path(os.environ.get("PAPERFIELD_FULLTEXT_DIR", DATA_DIR / "fullte
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
 INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", ROOT / "institutions.json")).expanduser().resolve()
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.6.0"
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
 
@@ -276,6 +276,9 @@ class PaperStore:
                     access_status TEXT NOT NULL DEFAULT 'unknown',
                     local_pdf_path TEXT NOT NULL DEFAULT '',
                     local_text_path TEXT NOT NULL DEFAULT '',
+                    cloud_pdf_key TEXT NOT NULL DEFAULT '',
+                    cloud_text_key TEXT NOT NULL DEFAULT '',
+                    storage_mode TEXT NOT NULL DEFAULT 'local',
                     page_count INTEGER NOT NULL DEFAULT 0,
                     text_chars INTEGER NOT NULL DEFAULT 0,
                     checked_at TEXT NOT NULL DEFAULT '',
@@ -310,6 +313,14 @@ class PaperStore:
             paper_columns = {row["name"] for row in db.execute("PRAGMA table_info(papers)").fetchall()}
             if "institutions_json" not in paper_columns:
                 db.execute("ALTER TABLE papers ADD COLUMN institutions_json TEXT NOT NULL DEFAULT '[]'")
+            asset_columns = {row["name"] for row in db.execute("PRAGMA table_info(paper_assets)").fetchall()}
+            for name, definition in (
+                ("cloud_pdf_key", "TEXT NOT NULL DEFAULT ''"),
+                ("cloud_text_key", "TEXT NOT NULL DEFAULT ''"),
+                ("storage_mode", "TEXT NOT NULL DEFAULT 'local'"),
+            ):
+                if name not in asset_columns:
+                    db.execute(f"ALTER TABLE paper_assets ADD COLUMN {name} {definition}")
 
     def count(self) -> int:
         with self.connect() as db:
@@ -549,6 +560,17 @@ class PaperStore:
         paper["projects"] = self.projects_for_paper(paper_id)
         return paper
 
+    def find_paper(self, doi: str = "", title: str = "") -> dict[str, Any] | None:
+        normalized_doi = compact_text(doi).lower()
+        normalized_title = compact_text(title).lower()
+        with self.connect() as db:
+            row = None
+            if normalized_doi:
+                row = db.execute("SELECT id FROM papers WHERE lower(doi) = ? LIMIT 1", (normalized_doi,)).fetchone()
+            if not row and normalized_title:
+                row = db.execute("SELECT id FROM papers WHERE lower(trim(title)) = ? LIMIT 1", (normalized_title,)).fetchone()
+        return self.get_paper(row["id"]) if row else None
+
     def update_state(self, paper_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
         current = self.get_paper(paper_id)
         if not current:
@@ -612,6 +634,9 @@ class PaperStore:
             "access_status": payload.get("access_status", current.get("access_status", "unknown")),
             "local_pdf_path": payload.get("local_pdf_path", current.get("local_pdf_path", "")),
             "local_text_path": payload.get("local_text_path", current.get("local_text_path", "")),
+            "cloud_pdf_key": payload.get("cloud_pdf_key", current.get("cloud_pdf_key", "")),
+            "cloud_text_key": payload.get("cloud_text_key", current.get("cloud_text_key", "")),
+            "storage_mode": payload.get("storage_mode", current.get("storage_mode", "local")),
             "page_count": int(payload.get("page_count", current.get("page_count", 0)) or 0),
             "text_chars": int(payload.get("text_chars", current.get("text_chars", 0)) or 0),
             "checked_at": payload.get("checked_at", utc_now().isoformat()),
@@ -622,8 +647,9 @@ class PaperStore:
                 """
                 INSERT INTO paper_assets (
                     paper_id, resolved_pdf_url, landing_url, provider, access_status,
-                    local_pdf_path, local_text_path, page_count, text_chars, checked_at, error_text
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    local_pdf_path, local_text_path, cloud_pdf_key, cloud_text_key, storage_mode,
+                    page_count, text_chars, checked_at, error_text
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(paper_id) DO UPDATE SET
                     resolved_pdf_url=excluded.resolved_pdf_url,
                     landing_url=excluded.landing_url,
@@ -631,6 +657,9 @@ class PaperStore:
                     access_status=excluded.access_status,
                     local_pdf_path=excluded.local_pdf_path,
                     local_text_path=excluded.local_text_path,
+                    cloud_pdf_key=excluded.cloud_pdf_key,
+                    cloud_text_key=excluded.cloud_text_key,
+                    storage_mode=excluded.storage_mode,
                     page_count=excluded.page_count,
                     text_chars=excluded.text_chars,
                     checked_at=excluded.checked_at,
@@ -639,6 +668,7 @@ class PaperStore:
                 (
                     paper_id, values["resolved_pdf_url"], values["landing_url"], values["provider"],
                     values["access_status"], values["local_pdf_path"], values["local_text_path"],
+                    values["cloud_pdf_key"], values["cloud_text_key"], values["storage_mode"],
                     values["page_count"], values["text_chars"], values["checked_at"], values["error_text"],
                 ),
             )
@@ -1608,6 +1638,172 @@ class PaperSources:
         return papers
 
 
+class PaperConnector:
+    def __init__(self, store: PaperStore, sources: PaperSources, classifier: PaperClassifier) -> None:
+        self.store = store
+        self.sources = sources
+        self.classifier = classifier
+
+    @staticmethod
+    def _doi(value: str) -> str:
+        match = re.search(r"(?:doi\.org/|doi:\s*)?(10\.\d{4,9}/[-._;()/:a-z0-9]+)", compact_text(value), flags=re.I)
+        return match.group(1).rstrip(".,") if match else ""
+
+    @staticmethod
+    def _arxiv_id(value: str) -> str:
+        match = re.search(r"(?:arxiv\.org/(?:abs|pdf)/|arxiv:\s*)?(\d{4}\.\d{4,5}(?:v\d+)?)", value, flags=re.I)
+        return match.group(1) if match else ""
+
+    def _crossref_paper(self, item: dict[str, Any]) -> dict[str, Any] | None:
+        doi = compact_text(item.get("DOI"))
+        title = compact_text(html.unescape(" ".join(item.get("title") or [])))
+        if not title:
+            return None
+        venue = compact_text(" ".join(item.get("container-title") or [])) or "Crossref"
+        links = item.get("link") or []
+        pdf_url = next((link.get("URL", "") for link in links if "pdf" in link.get("content-type", "").lower()), "")
+        authors = [
+            compact_text(f"{author.get('given', '')} {author.get('family', '')}")
+            for author in item.get("author", [])
+            if compact_text(f"{author.get('given', '')} {author.get('family', '')}")
+        ]
+        published = next(
+            (
+                iso_date(item.get(field))
+                for field in ("published-online", "created", "published-print", "published")
+                if iso_date(item.get(field))
+            ),
+            "",
+        )
+        paper = {
+            "id": f"doi:{doi.lower()}" if doi else f"connector:{hashlib.sha256(title.lower().encode('utf-8')).hexdigest()[:20]}",
+            "title": title,
+            "abstract": compact_text(re.sub(r"<[^>]+>", " ", html.unescape(item.get("abstract") or ""))),
+            "authors": authors,
+            "institutions": self.sources.crossref_institutions(item),
+            "venue": venue,
+            "published": published,
+            "updated": published,
+            "source": "Connector / Crossref",
+            "source_url": item.get("URL") or (f"https://doi.org/{doi}" if doi else ""),
+            "pdf_url": pdf_url,
+            "doi": doi,
+            "journal_ref": venue,
+            "citation_count": item.get("is-referenced-by-count") or 0,
+        }
+        self.classifier.enrich(paper)
+        paper["topics"] = self.classifier.classify(paper)
+        paper["quality_score"] = self.classifier.quality(paper)
+        return paper
+
+    def _arxiv_paper(self, arxiv_id: str) -> dict[str, Any] | None:
+        params = urllib.parse.urlencode({"id_list": arxiv_id, "max_results": 1})
+        root = ET.fromstring(self.sources.request_text(f"https://export.arxiv.org/api/query?{params}"))
+        namespace = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
+        entry = root.find("atom:entry", namespace)
+        if entry is None:
+            return None
+        title = compact_text(entry.findtext("atom:title", default="", namespaces=namespace))
+        if not title:
+            return None
+        authors = [compact_text(node.findtext("atom:name", default="", namespaces=namespace)) for node in entry.findall("atom:author", namespace)]
+        journal_ref = compact_text(entry.findtext("arxiv:journal_ref", default="", namespaces=namespace))
+        published = iso_date(entry.findtext("atom:published", default="", namespaces=namespace))
+        paper = {
+            "id": f"arxiv:{arxiv_id}",
+            "title": title,
+            "abstract": compact_text(entry.findtext("atom:summary", default="", namespaces=namespace)),
+            "authors": [author for author in authors if author],
+            "institutions": [],
+            "venue": journal_ref or "arXiv",
+            "published": published,
+            "updated": iso_date(entry.findtext("atom:updated", default="", namespaces=namespace)),
+            "source": "Connector / arXiv",
+            "source_url": f"https://arxiv.org/abs/{arxiv_id}",
+            "pdf_url": f"https://arxiv.org/pdf/{arxiv_id}",
+            "doi": compact_text(entry.findtext("arxiv:doi", default="", namespaces=namespace)),
+            "journal_ref": journal_ref,
+            "citation_count": 0,
+        }
+        self.classifier.enrich(paper)
+        paper["topics"] = self.classifier.classify(paper)
+        paper["quality_score"] = self.classifier.quality(paper)
+        return paper
+
+    def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
+        value = compact_text(query)
+        if not value:
+            return []
+        papers: list[dict[str, Any]] = []
+        arxiv_id = self._arxiv_id(value)
+        doi = self._doi(value)
+        if arxiv_id:
+            paper = self._arxiv_paper(arxiv_id)
+            if paper:
+                papers.append(paper)
+        else:
+            if doi:
+                payload = self.sources.request_json(f"https://api.crossref.org/works/{urllib.parse.quote(doi, safe='')}")
+                items = [payload.get("message") or {}]
+            else:
+                params = urllib.parse.urlencode(
+                    {
+                        "query.bibliographic": value,
+                        "rows": max(1, min(20, limit)),
+                        "select": "DOI,title,abstract,author,container-title,published,published-online,published-print,created,URL,link,is-referenced-by-count,type",
+                    }
+                )
+                payload = self.sources.request_json(f"https://api.crossref.org/works?{params}")
+                items = (payload.get("message") or {}).get("items", [])
+            for item in items:
+                paper = self._crossref_paper(item)
+                if paper:
+                    papers.append(paper)
+        results = []
+        seen = set()
+        for paper in papers:
+            key = paper.get("doi", "").lower() or VenueCatalog.normalize(paper["title"])
+            if key in seen:
+                continue
+            seen.add(key)
+            existing = self.store.find_paper(paper.get("doi", ""), paper["title"])
+            results.append({**paper, "already_saved": bool(existing), "existing_id": existing["id"] if existing else ""})
+        return results[:limit]
+
+    def import_paper(self, payload: dict[str, Any]) -> dict[str, Any]:
+        title = compact_text(str(payload.get("title", "")))
+        if not title:
+            raise ValueError("论文标题不能为空")
+        doi = compact_text(str(payload.get("doi", "")))
+        existing = self.store.find_paper(doi, title)
+        if existing:
+            return existing
+        paper_id = compact_text(str(payload.get("id", "")))
+        if not re.fullmatch(r"(?:doi|arxiv|connector):[a-zA-Z0-9._:/-]+", paper_id):
+            paper_id = f"connector:{hashlib.sha256(title.lower().encode('utf-8')).hexdigest()[:20]}"
+        paper = {
+            "id": paper_id,
+            "title": title,
+            "abstract": compact_text(str(payload.get("abstract", ""))),
+            "authors": [compact_text(str(value)) for value in payload.get("authors", []) if compact_text(str(value))][:100],
+            "institutions": [compact_text(str(value)) for value in payload.get("institutions", []) if compact_text(str(value))][:100],
+            "venue": compact_text(str(payload.get("venue", ""))) or "手动导入",
+            "published": iso_date(payload.get("published")),
+            "updated": iso_date(payload.get("updated")) or iso_date(payload.get("published")),
+            "source": compact_text(str(payload.get("source", ""))) or "Connector",
+            "source_url": compact_text(str(payload.get("source_url", ""))),
+            "pdf_url": compact_text(str(payload.get("pdf_url", ""))),
+            "doi": doi,
+            "journal_ref": compact_text(str(payload.get("journal_ref", ""))),
+            "citation_count": int(payload.get("citation_count", 0) or 0),
+        }
+        self.classifier.enrich(paper)
+        paper["topics"] = self.classifier.classify(paper)
+        paper["quality_score"] = self.classifier.quality(paper)
+        self.store.upsert(paper)
+        return self.store.find_paper(doi, title) or paper
+
+
 class GitHubSource:
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
@@ -1791,9 +1987,63 @@ def rebuild_project_links() -> int:
     return len(links)
 
 
+class S3ObjectStorage:
+    def __init__(self) -> None:
+        self.bucket = os.environ.get("PAPERFIELD_S3_BUCKET", "").strip()
+        self.endpoint = os.environ.get("PAPERFIELD_S3_ENDPOINT", "").strip() or None
+        self.region = os.environ.get("PAPERFIELD_S3_REGION", "auto").strip() or "auto"
+        self.access_key = os.environ.get("PAPERFIELD_S3_ACCESS_KEY_ID", "").strip()
+        self.secret_key = os.environ.get("PAPERFIELD_S3_SECRET_ACCESS_KEY", "").strip()
+        self.provider = os.environ.get("PAPERFIELD_S3_PROVIDER", "S3 兼容对象存储").strip()
+        self._client_value: Any = None
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.bucket and (self.access_key and self.secret_key or not self.endpoint))
+
+    def client(self) -> Any:
+        if not self.configured:
+            raise RuntimeError("尚未配置云端对象存储")
+        if self._client_value is None:
+            try:
+                import boto3
+            except ImportError as error:
+                raise RuntimeError("云端存储依赖未安装，请重新安装 requirements.txt") from error
+            options: dict[str, Any] = {"region_name": self.region}
+            if self.endpoint:
+                options["endpoint_url"] = self.endpoint
+            if self.access_key and self.secret_key:
+                options["aws_access_key_id"] = self.access_key
+                options["aws_secret_access_key"] = self.secret_key
+            self._client_value = boto3.client("s3", **options)
+        return self._client_value
+
+    def upload(self, path: Path, key: str, content_type: str) -> None:
+        self.client().upload_file(str(path), self.bucket, key, ExtraArgs={"ContentType": content_type})
+
+    def download(self, key: str, target: Path) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_suffix(target.suffix + ".cloudpart")
+        try:
+            self.client().download_file(self.bucket, key, str(temporary))
+            temporary.replace(target)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "configured": self.configured,
+            "provider": self.provider if self.configured else "",
+            "bucket": self.bucket if self.configured else "",
+            "local_cache_max_mb": int(os.environ.get("PAPERFIELD_LOCAL_CACHE_MAX_MB", "2048")),
+        }
+
+
 class PaperAssetService:
-    def __init__(self, store: PaperStore) -> None:
+    def __init__(self, store: PaperStore, cloud: S3ObjectStorage) -> None:
         self.store = store
+        self.cloud = cloud
         self._lock = threading.RLock()
         PDF_DIR.mkdir(parents=True, exist_ok=True)
         FULLTEXT_DIR.mkdir(parents=True, exist_ok=True)
@@ -1902,6 +2152,85 @@ class PaperAssetService:
     def _cache_key(paper_id: str) -> str:
         return hashlib.sha256(paper_id.encode("utf-8")).hexdigest()[:24]
 
+    def _cloud_key(self, paper_id: str, filename: str) -> str:
+        return f"papers/{self._cache_key(paper_id)}/{filename}"
+
+    def _prune_pdf_cache(self, exclude: Path | None = None) -> None:
+        limit = max(128, int(os.environ.get("PAPERFIELD_LOCAL_CACHE_MAX_MB", "2048"))) * 1024 * 1024
+        files = [path for path in PDF_DIR.glob("*.pdf") if path.is_file()]
+        total = sum(path.stat().st_size for path in files)
+        for path in sorted(files, key=lambda item: item.stat().st_mtime):
+            if total <= limit:
+                break
+            if exclude and path.resolve() == exclude.resolve():
+                continue
+            size = path.stat().st_size
+            path.unlink(missing_ok=True)
+            total -= size
+
+    def import_pdf(self, paper: dict[str, Any], content: bytes, filename: str = "") -> dict[str, Any]:
+        if not content or len(content) > MAX_PDF_BYTES:
+            raise ValueError("PDF 为空或超过大小限制")
+        if b"%PDF" not in content[:2048]:
+            raise ValueError("导入文件不是有效 PDF")
+        target = PDF_DIR / f"{self._cache_key(paper['id'])}.pdf"
+        temporary = target.with_suffix(".importpart")
+        temporary.write_bytes(content)
+        temporary.replace(target)
+        text_target = FULLTEXT_DIR / f"{self._cache_key(paper['id'])}.json"
+        try:
+            page_count, text_chars = self._extract(target, text_target, paper.get("title", ""))
+        except Exception as error:
+            target.unlink(missing_ok=True)
+            text_target.unlink(missing_ok=True)
+            raise ValueError(f"PDF 全文提取失败：{error}") from error
+        saved = self.store.save_asset(
+            paper["id"],
+            {
+                "provider": f"手动导入{f' · {filename}' if filename else ''}",
+                "access_status": "ready" if text_chars else "pdf_only",
+                "local_pdf_path": str(target),
+                "local_text_path": str(text_target),
+                "storage_mode": "local",
+                "page_count": page_count,
+                "text_chars": text_chars,
+                "error_text": "",
+            },
+        )
+        self._prune_pdf_cache(target)
+        return self.public_asset(paper["id"], saved)
+
+    def archive_to_cloud(self, paper_id: str, remove_local: bool = True) -> dict[str, Any]:
+        if not self.cloud.configured:
+            raise RuntimeError("尚未配置云端对象存储")
+        asset = self.store.get_asset(paper_id) or {}
+        pdf_path = Path(asset.get("local_pdf_path", "")) if asset.get("local_pdf_path") else None
+        text_path = Path(asset.get("local_text_path", "")) if asset.get("local_text_path") else None
+        if not pdf_path or not pdf_path.exists():
+            raise RuntimeError("本地没有可归档的 PDF")
+        pdf_key = self._cloud_key(paper_id, "paper.pdf")
+        self.cloud.upload(pdf_path, pdf_key, "application/pdf")
+        text_key = ""
+        if text_path and text_path.exists():
+            text_key = self._cloud_key(paper_id, "fulltext.json")
+            self.cloud.upload(text_path, text_key, "application/json")
+        local_pdf_path = str(pdf_path)
+        if remove_local:
+            pdf_path.unlink(missing_ok=True)
+            local_pdf_path = ""
+        saved = self.store.save_asset(
+            paper_id,
+            {
+                "cloud_pdf_key": pdf_key,
+                "cloud_text_key": text_key,
+                "storage_mode": "cloud" if remove_local else "hybrid",
+                "local_pdf_path": local_pdf_path,
+                "provider": f"{asset.get('provider', 'PDF')} · {self.cloud.provider}",
+                "error_text": "",
+            },
+        )
+        return self.public_asset(paper_id, saved)
+
     def _download(self, url: str, target: Path) -> str:
         request = urllib.request.Request(
             url,
@@ -1953,6 +2282,8 @@ class PaperAssetService:
     def prepare(self, paper: dict[str, Any], force: bool = False) -> dict[str, Any]:
         with self._lock:
             asset = self.store.get_asset(paper["id"]) or {}
+            if asset.get("cloud_pdf_key") and self.cloud.configured:
+                return self.public_asset(paper["id"], asset)
             if not force and asset.get("access_status") == "unavailable" and asset.get("checked_at"):
                 try:
                     checked = datetime.fromisoformat(asset["checked_at"])
@@ -2020,8 +2351,12 @@ class PaperAssetService:
         value = asset or self.store.get_asset(paper_id) or {}
         pdf_path = Path(value.get("local_pdf_path", "")) if value.get("local_pdf_path") else None
         text_path = Path(value.get("local_text_path", "")) if value.get("local_text_path") else None
-        pdf_available = bool(pdf_path and pdf_path.exists())
-        fulltext_available = bool(text_path and text_path.exists() and int(value.get("text_chars", 0) or 0) > 1000)
+        local_pdf = bool(pdf_path and pdf_path.exists())
+        local_text = bool(text_path and text_path.exists())
+        cloud_pdf = bool(value.get("cloud_pdf_key") and self.cloud.configured)
+        cloud_text = bool(value.get("cloud_text_key") and self.cloud.configured)
+        pdf_available = local_pdf or cloud_pdf
+        fulltext_available = bool((local_text or cloud_text) and int(value.get("text_chars", 0) or 0) > 1000)
         return {
             "paper_id": paper_id,
             "status": value.get("access_status", "unknown"),
@@ -2029,6 +2364,10 @@ class PaperAssetService:
             "landing_url": value.get("landing_url", ""),
             "pdf_available": pdf_available,
             "fulltext_available": fulltext_available,
+            "local_cached": local_pdf,
+            "cloud_available": cloud_pdf,
+            "storage_mode": value.get("storage_mode", "local"),
+            "cloud_provider": self.cloud.provider if cloud_pdf else "",
             "pdf_url": f"/api/papers/{urllib.parse.quote(paper_id, safe='')}/pdf" if pdf_available else "",
             "page_count": int(value.get("page_count", 0) or 0),
             "text_chars": int(value.get("text_chars", 0) or 0),
@@ -2039,11 +2378,32 @@ class PaperAssetService:
     def pdf_path(self, paper_id: str) -> Path | None:
         asset = self.store.get_asset(paper_id) or {}
         path = Path(asset.get("local_pdf_path", "")) if asset.get("local_pdf_path") else None
-        return path if path and path.exists() else None
+        if path and path.exists():
+            return path
+        cloud_key = asset.get("cloud_pdf_key", "")
+        if cloud_key and self.cloud.configured:
+            target = PDF_DIR / f"{self._cache_key(paper_id)}.pdf"
+            self.cloud.download(cloud_key, target)
+            self.store.save_asset(paper_id, {"local_pdf_path": str(target)})
+            self._prune_pdf_cache(target)
+            return target
+        return None
+
+    def _text_path(self, paper_id: str, asset: dict[str, Any]) -> Path | None:
+        path = Path(asset.get("local_text_path", "")) if asset.get("local_text_path") else None
+        if path and path.exists():
+            return path
+        cloud_key = asset.get("cloud_text_key", "")
+        if cloud_key and self.cloud.configured:
+            target = FULLTEXT_DIR / f"{self._cache_key(paper_id)}.json"
+            self.cloud.download(cloud_key, target)
+            self.store.save_asset(paper_id, {"local_text_path": str(target)})
+            return target
+        return None
 
     def fulltext(self, paper_id: str) -> str:
         asset = self.store.get_asset(paper_id) or {}
-        path = Path(asset.get("local_text_path", "")) if asset.get("local_text_path") else None
+        path = self._text_path(paper_id, asset)
         if not path or not path.exists():
             return ""
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -2051,7 +2411,7 @@ class PaperAssetService:
 
     def page(self, paper_id: str, page_number: int) -> dict[str, Any] | None:
         asset = self.store.get_asset(paper_id) or {}
-        path = Path(asset.get("local_text_path", "")) if asset.get("local_text_path") else None
+        path = self._text_path(paper_id, asset)
         if not path or not path.exists():
             return None
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -2465,9 +2825,11 @@ INSTITUTION_CATALOG = InstitutionCatalog(json.loads(INSTITUTIONS_PATH.read_text(
 STORE = PaperStore(DB_PATH)
 CLASSIFIER = PaperClassifier(CONFIG, VENUE_CATALOG)
 SOURCES = PaperSources(CONFIG, CLASSIFIER)
+CONNECTOR = PaperConnector(STORE, SOURCES, CLASSIFIER)
 GITHUB_SOURCE = GitHubSource(CONFIG)
 EXPLAINER = PaperExplainer()
-ASSETS = PaperAssetService(STORE)
+CLOUD = S3ObjectStorage()
+ASSETS = PaperAssetService(STORE, CLOUD)
 TRANSLATOR = TranslationService()
 REFRESH_STATE: dict[str, Any] = {"running": False, "message": "", "lock": threading.Lock()}
 
@@ -2811,6 +3173,7 @@ def filter_papers(papers: list[dict[str, Any]], params: dict[str, list[str]]) ->
     favorite = get("favorite")
     date_from = get("date_from")
     sort = get("sort", "quality")
+    sort_secondary = get("sort_secondary")
     latest_visible_date = (utc_now() + timedelta(days=1)).date().isoformat()
     result = []
     for paper in papers:
@@ -2855,12 +3218,15 @@ def filter_papers(papers: list[dict[str, Any]], params: dict[str, list[str]]) ->
         if date_from and paper["published"] and paper["published"] < date_from:
             continue
         result.append(paper)
-    if sort == "date":
-        result.sort(key=lambda item: (item["published"], item["quality_score"]), reverse=True)
-    elif sort == "citations":
-        result.sort(key=lambda item: (item["citation_count"], item["quality_score"]), reverse=True)
-    else:
-        result.sort(key=lambda item: (item["quality_score"], item["published"]), reverse=True)
+    paper_sorters = {
+        "quality": (lambda item: float(item.get("quality_score", 0) or 0), True),
+        "date": (lambda item: item.get("published", ""), True),
+        "citations": (lambda item: int(item.get("citation_count", 0) or 0), True),
+        "title": (lambda item: item.get("title", "").casefold(), False),
+        "venue": (lambda item: item.get("venue", "").casefold(), False),
+    }
+    fallback = {"quality": "date", "date": "quality", "citations": "quality", "title": "date", "venue": "date"}
+    apply_multi_sort(result, sort, sort_secondary or fallback.get(sort, "date"), paper_sorters)
     return result
 
 
@@ -2871,6 +3237,7 @@ def filter_projects(projects: list[dict[str, Any]], params: dict[str, list[str]]
     language = get("language")
     date_from = get("date_from")
     sort = get("sort", "updated")
+    sort_secondary = get("sort_secondary")
     result = []
     for project in projects:
         text = " ".join(
@@ -2885,13 +3252,32 @@ def filter_projects(projects: list[dict[str, Any]], params: dict[str, list[str]]
         if date_from and project["pushed_at"] and project["pushed_at"][:10] < date_from:
             continue
         result.append(project)
-    if sort == "stars":
-        result.sort(key=lambda item: (item["stars"], item["pushed_at"]), reverse=True)
-    elif sort == "links":
-        result.sort(key=lambda item: (item["linked_paper_count"], item["stars"]), reverse=True)
-    else:
-        result.sort(key=lambda item: (item["pushed_at"], item["stars"]), reverse=True)
+    project_sorters = {
+        "updated": (lambda item: item.get("pushed_at", ""), True),
+        "links": (lambda item: int(item.get("linked_paper_count", 0) or 0), True),
+        "stars": (lambda item: int(item.get("stars", 0) or 0), True),
+        "forks": (lambda item: int(item.get("forks", 0) or 0), True),
+        "issues": (lambda item: int(item.get("open_issues", 0) or 0), True),
+        "name": (lambda item: item.get("full_name", "").casefold(), False),
+    }
+    fallback = {"updated": "stars", "links": "stars", "stars": "updated", "forks": "stars", "issues": "stars", "name": "stars"}
+    apply_multi_sort(result, sort, sort_secondary or fallback.get(sort, "stars"), project_sorters)
     return result
+
+
+def apply_multi_sort(
+    items: list[dict[str, Any]],
+    primary: str,
+    secondary: str,
+    sorters: dict[str, tuple[Any, bool]],
+) -> None:
+    fields = []
+    for field in (primary, secondary):
+        if field in sorters and field not in fields:
+            fields.append(field)
+    for field in reversed(fields):
+        key, descending = sorters[field]
+        items.sort(key=key, reverse=descending)
 
 
 class AppHandler(SimpleHTTPRequestHandler):
@@ -2917,6 +3303,14 @@ class AppHandler(SimpleHTTPRequestHandler):
         if length <= 0:
             return {}
         return json.loads(self.rfile.read(length).decode("utf-8"))
+
+    def read_binary(self, maximum: int = MAX_PDF_BYTES) -> bytes:
+        length = int(self.headers.get("Content-Length", "0"))
+        if length <= 0:
+            raise ValueError("上传内容为空")
+        if length > maximum:
+            raise ValueError("上传文件超过大小限制")
+        return self.rfile.read(length)
 
     def send_pdf_file(self, path: Path) -> None:
         size = path.stat().st_size
@@ -3026,10 +3420,14 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json(ASSETS.public_asset(paper_id))
                 return
             if action == "pdf":
-                path = ASSETS.pdf_path(paper_id)
-                if not path:
-                    ASSETS.prepare(paper)
+                try:
                     path = ASSETS.pdf_path(paper_id)
+                    if not path:
+                        ASSETS.prepare(paper)
+                        path = ASSETS.pdf_path(paper_id)
+                except Exception as error:
+                    self.send_json({"error": f"PDF 读取失败：{error}"}, 503)
+                    return
                 if not path:
                     self.send_json({"error": "暂未找到可直接访问的公开 PDF 副本"}, 404)
                     return
@@ -3040,7 +3438,11 @@ class AppHandler(SimpleHTTPRequestHandler):
                     page_number = max(1, int((params.get("page") or ["1"])[0]))
                 except ValueError:
                     page_number = 1
-                page = ASSETS.page(paper_id, page_number)
+                try:
+                    page = ASSETS.page(paper_id, page_number)
+                except Exception as error:
+                    self.send_json({"error": f"全文读取失败：{error}"}, 503)
+                    return
                 self.send_json(page or {"error": "该页全文尚不可用"}, 200 if page else 404)
                 return
             self.send_json({"items": STORE.chat_history(paper_id), "paper_id": paper_id})
@@ -3078,6 +3480,20 @@ class AppHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/coverage":
             self.send_json(catalog_coverage())
+            return
+        if parsed.path == "/api/storage":
+            self.send_json(CLOUD.status())
+            return
+        if parsed.path == "/api/connectors/search":
+            query = (params.get("q") or [""])[0].strip()
+            if not query:
+                self.send_json({"items": [], "total": 0})
+                return
+            try:
+                items = CONNECTOR.search(query)
+                self.send_json({"items": items, "total": len(items)})
+            except Exception as error:
+                self.send_json({"error": f"论文连接器查询失败：{error}"}, 503)
             return
         if parsed.path == "/api/stats":
             papers = filter_papers(STORE.list_papers(), {})
@@ -3130,7 +3546,13 @@ class AppHandler(SimpleHTTPRequestHandler):
             started = refresh_in_background()
             self.send_json({"started": started, "message": "更新已开始" if started else "更新任务正在运行"}, 202)
             return
-        match = re.fullmatch(r"/api/papers/(.+)/(state|explain|resolve|chat)", parsed.path)
+        if parsed.path == "/api/connectors/import":
+            try:
+                self.send_json(CONNECTOR.import_paper(self.read_json()), 201)
+            except (TypeError, ValueError) as error:
+                self.send_json({"error": str(error)}, 400)
+            return
+        match = re.fullmatch(r"/api/papers/(.+)/(state|explain|resolve|chat|import|archive)", parsed.path)
         if match:
             paper_id = urllib.parse.unquote(match.group(1))
             action = match.group(2)
@@ -3142,6 +3564,20 @@ class AppHandler(SimpleHTTPRequestHandler):
                 updated = STORE.update_state(paper_id, self.read_json())
                 self.send_json(updated)
                 return
+            if action == "import":
+                try:
+                    filename = urllib.parse.unquote(self.headers.get("X-Paperfield-Filename", ""))[:240]
+                    self.send_json(ASSETS.import_pdf(paper, self.read_binary(), filename), 201)
+                except (OSError, TypeError, ValueError) as error:
+                    self.send_json({"error": str(error)}, 400)
+                return
+            if action == "archive":
+                payload = self.read_json()
+                try:
+                    self.send_json(ASSETS.archive_to_cloud(paper_id, bool(payload.get("remove_local", True))))
+                except Exception as error:
+                    self.send_json({"error": str(error)}, 503)
+                return
             if action == "resolve":
                 payload = self.read_json()
                 self.send_json(ASSETS.prepare(paper, bool(payload.get("force"))))
@@ -3152,11 +3588,11 @@ class AppHandler(SimpleHTTPRequestHandler):
                 if not question:
                     self.send_json({"error": "请输入关于论文的问题"}, 400)
                     return
-                ASSETS.prepare(paper)
-                fulltext = ASSETS.fulltext(paper_id)
-                notes = ASSETS.reading_notes(paper_id, fulltext) if fulltext else None
-                history = STORE.chat_history(paper_id)
                 try:
+                    ASSETS.prepare(paper)
+                    fulltext = ASSETS.fulltext(paper_id)
+                    notes = ASSETS.reading_notes(paper_id, fulltext) if fulltext else None
+                    history = STORE.chat_history(paper_id)
                     answer = EXPLAINER.ask(
                         paper,
                         question,
@@ -3172,15 +3608,19 @@ class AppHandler(SimpleHTTPRequestHandler):
                 STORE.add_chat_message(paper_id, "assistant", answer["answer"])
                 self.send_json(answer)
                 return
-            ASSETS.prepare(paper)
-            fulltext = ASSETS.fulltext(paper_id)
-            notes = ASSETS.reading_notes(paper_id, fulltext) if fulltext else None
-            explanation = EXPLAINER.explain(
-                paper,
-                fulltext,
-                notes,
-                (lambda value: ASSETS.save_reading_notes(paper_id, fulltext, value)) if fulltext else None,
-            )
+            try:
+                ASSETS.prepare(paper)
+                fulltext = ASSETS.fulltext(paper_id)
+                notes = ASSETS.reading_notes(paper_id, fulltext) if fulltext else None
+                explanation = EXPLAINER.explain(
+                    paper,
+                    fulltext,
+                    notes,
+                    (lambda value: ASSETS.save_reading_notes(paper_id, fulltext, value)) if fulltext else None,
+                )
+            except Exception as error:
+                self.send_json({"error": str(error)}, 503)
+                return
             STORE.save_explanation(paper_id, explanation)
             self.send_json(explanation)
             return
