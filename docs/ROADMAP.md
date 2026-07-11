@@ -4,7 +4,9 @@
 
 - Split the monolithic backend into importable modules.
 - Add parser fixtures for PMLR, CVF, Crossref and GitHub.
-- Add HTTP integration tests and browser workflow tests.
+- Add persistent background jobs and progress reporting for first-time full-text analysis.
+- Add optional layout-preserving bilingual PDF export through a plugin boundary.
+- Add local embeddings and page-level retrieval when the paper library grows beyond simple cached-note search.
 - Add saved searches and configurable research profiles.
 
 ## Multi-user foundation

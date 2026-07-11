@@ -46,7 +46,7 @@ Use `Segoe UI Variable`, `Segoe UI`, and system sans-serif fallbacks. Use a comp
 
 ## Layout
 
-Desktop uses three stable regions: navigation, paper stream, reading pane. Information is grouped with spacing and dividers rather than repeated cards. Below 980px the reading pane becomes a full-screen sheet; below 720px navigation collapses into a compact top bar.
+Desktop discovery uses navigation, a dense paper stream, and an optional detail pane. Recommended papers open a focused full-screen reader with PDF on the left and explanation, chat, or translation on the right. Information is grouped with spacing and dividers rather than repeated cards. Below 980px the reader becomes a two-row workspace; below 720px navigation collapses into a compact top bar.
 
 ## Motion
 
@@ -59,6 +59,7 @@ Use 150-220ms ease-out transitions for selection, pane opening, filter changes, 
 - Persistent filter strip with native controls.
 - Dense paper rows with venue, authors, topic, recency, and reading state.
 - Reading pane with source metadata, abstract, generated explanation, and actions.
+- Full-screen PDF reader with score evidence, full-text explanation, grounded chat, and page translation tabs.
 - Skeleton rows, educational empty states, inline errors, and non-blocking status messages.
 
 ## Content Rules

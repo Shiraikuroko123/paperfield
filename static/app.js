@@ -3,9 +3,11 @@ const state = {
   projects: [],
   selectedId: null,
   selectedProject: null,
+  readerPaper: null,
+  readerAsset: null,
   status: "",
   topic: "",
-  view: "all",
+  view: "recommended",
   refreshPoll: null,
   total: 0,
   pageSize: 100,
@@ -95,19 +97,23 @@ function projectParams() {
 
 function applyViewMode() {
   const projectMode = state.view === "projects";
-  document.querySelectorAll(".paper-only-filter").forEach((item) => { item.hidden = projectMode; });
+  const recommendedMode = state.view === "recommended";
+  document.querySelector(".content-grid").classList.toggle("is-recommended", recommendedMode);
+  document.querySelectorAll(".paper-only-filter").forEach((item) => { item.hidden = projectMode || recommendedMode; });
   document.querySelectorAll(".project-only-filter").forEach((item) => { item.hidden = !projectMode; });
-  el("streamTitle").textContent = projectMode ? "GitHub 项目" : "论文流";
+  el("dateFilter").closest("label").hidden = recommendedMode;
+  document.querySelector(".score-guide").hidden = projectMode;
+  el("streamTitle").textContent = projectMode ? "GitHub 项目" : recommendedMode ? "每日精选" : "论文流";
   el("loadMoreButton").textContent = projectMode ? "加载更多项目" : "加载更多论文";
-  document.querySelector(".stream-head .status-tabs").hidden = projectMode;
-  el("overviewTitle").textContent = projectMode ? "今天有哪些项目在更新" : "今天值得读什么";
-  el("overviewMessage").textContent = projectMode ? "跟踪具身智能与大模型开源仓库，并连接对应论文。" : "从公开论文源中筛出与你方向最接近的工作。";
-  el("statTotalLabel").textContent = projectMode ? "GitHub 项目" : "收录论文";
-  el("statUnreadLabel").textContent = projectMode ? "今日更新" : "未读";
+  document.querySelector(".stream-head .status-tabs").hidden = projectMode || recommendedMode;
+  el("overviewTitle").textContent = projectMode ? "今天有哪些项目在更新" : recommendedMode ? "今天先读这几篇" : "今天值得读什么";
+  el("overviewMessage").textContent = projectMode ? "跟踪具身智能与大模型开源仓库，并连接对应论文。" : recommendedMode ? "从完整候选池中按领域、刊物、时效、全文证据与复现线索二次筛选。" : "浏览全部公开论文元数据与来源。";
+  el("statTotalLabel").textContent = projectMode ? "GitHub 项目" : recommendedMode ? "今日精选" : "收录论文";
+  el("statUnreadLabel").textContent = projectMode ? "今日更新" : recommendedMode ? "候选池" : "未读";
   el("statFavoriteLabel").textContent = projectMode ? "论文关联" : "已收藏";
   if (state.stats) {
-    el("statTotal").textContent = projectMode ? state.stats.project_total : state.stats.total;
-    el("statUnread").textContent = projectMode ? state.stats.project_updated_today : state.stats.unread;
+    el("statTotal").textContent = projectMode ? state.stats.project_total : recommendedMode ? state.total : state.stats.total;
+    el("statUnread").textContent = projectMode ? state.stats.project_updated_today : recommendedMode ? state.stats.total : state.stats.unread;
     el("statFavorite").textContent = projectMode ? state.stats.project_link_count : state.stats.favorites;
     if (!state.stats.refresh.running) el("refreshButton").textContent = projectMode ? "更新全部" : "更新论文";
   }
@@ -249,6 +255,20 @@ async function loadPapers({ preserveSelection = true, append = false } = {}) {
   if (state.view === "projects") return loadProjects({ append });
   if (!append) renderSkeleton();
   try {
+    if (state.view === "recommended") {
+      const params = new URLSearchParams();
+      const topic = state.topic || el("topicFilter").value;
+      if (topic) params.set("topic", topic);
+      const payload = await api(`/api/recommendations?${params.toString()}`);
+      state.papers = payload.items;
+      state.total = payload.total;
+      renderPapers();
+      el("resultCount").textContent = `${payload.total} 篇 · 每领域最多 ${payload.per_topic} 篇`;
+      el("loadMoreWrap").hidden = true;
+      el("navRecommendedCount").textContent = payload.total;
+      if (state.stats) el("statTotal").textContent = payload.total;
+      return;
+    }
     const params = currentParams();
     params.set("limit", state.pageSize);
     params.set("offset", append ? state.papers.length : 0);
@@ -282,9 +302,17 @@ function renderPapers() {
   const list = el("paperList");
   list.innerHTML = "";
   el("emptyState").hidden = state.papers.length > 0;
+  let currentGroup = "";
   for (const paper of state.papers) {
+    if (state.view === "recommended" && paper.recommendation_topic !== currentGroup) {
+      currentGroup = paper.recommendation_topic;
+      const group = document.createElement("div");
+      group.className = "recommendation-group";
+      group.innerHTML = `<strong>${escapeHtml(currentGroup)}</strong><span>今日优先阅读</span>`;
+      list.append(group);
+    }
     const row = document.createElement("article");
-    row.className = `paper-row${paper.id === state.selectedId ? " is-selected" : ""}`;
+    row.className = `paper-row${paper.id === state.selectedId ? " is-selected" : ""}${paper.is_recommended ? " is-recommended" : ""}`;
     row.tabIndex = 0;
     row.dataset.id = paper.id;
     row.setAttribute("aria-label", `打开论文：${paper.title}`);
@@ -302,17 +330,20 @@ function renderPapers() {
       </div>
       <div class="paper-score">
         <button class="favorite-toggle${paper.favorite ? " is-active" : ""}" type="button" aria-label="${paper.favorite ? "取消收藏" : "收藏论文"}" data-favorite>${paper.favorite ? "★" : "☆"}</button>
-        <strong>${Math.round(paper.quality_score)}</strong>
-        <span>推荐分</span>
+        <strong>${Math.round(paper.recommendation_score ?? paper.quality_score)}</strong>
+        <span>${paper.is_recommended ? "精选分" : "推荐分"}</span>
+        ${paper.is_recommended ? `<b class="pdf-state ${paper.fulltext_cached ? "is-ready" : ""}">${paper.fulltext_cached ? "全文已缓存" : paper.pdf_cached ? "PDF 已缓存" : "点击查找 PDF"}</b>` : ""}
       </div>`;
     row.addEventListener("click", (event) => {
       if (event.target.closest("[data-favorite]")) return;
-      openPaper(paper.id);
+      if (paper.is_recommended) openReader(paper.id);
+      else openPaper(paper.id);
     });
     row.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        openPaper(paper.id);
+        if (paper.is_recommended) openReader(paper.id);
+        else openPaper(paper.id);
       }
     });
     row.querySelector("[data-favorite]").addEventListener("click", (event) => toggleFavorite(event, paper));
@@ -363,6 +394,7 @@ function renderDetail(paper) {
       <div class="detail-actions">
         <button type="button" data-close-detail>返回列表</button>
         <button type="button" data-favorite-detail>${paper.favorite ? "★ 已收藏" : "☆ 收藏"}</button>
+        <button type="button" data-open-reader>打开精读工作台</button>
         <a href="${escapeHtml(paper.source_url || paper.pdf_url)}" target="_blank" rel="noreferrer">查看原文</a>
         ${paper.pdf_url ? `<a href="${escapeHtml(paper.pdf_url)}" target="_blank" rel="noreferrer">PDF</a>` : ""}
       </div>
@@ -418,6 +450,7 @@ function renderDetail(paper) {
     </div>`;
 
   el("paperDetail").querySelector("[data-close-detail]").addEventListener("click", showReadingEmpty);
+  el("paperDetail").querySelector("[data-open-reader]").addEventListener("click", () => openReader(paper.id));
   el("paperDetail").querySelectorAll("[data-linked-project]").forEach((button) => button.addEventListener("click", async () => {
     state.view = "projects";
     applyViewMode();
@@ -453,21 +486,27 @@ function explanationMarkup(explanation) {
     <div class="explain-head">
       <h3>中文讲解</h3>
       <div class="explain-actions">
-        <span class="explain-mode">${explanation.mode === "ai" ? `AI 讲解${explanation.model ? ` · ${escapeHtml(explanation.model)}` : ""}` : "摘要导读"}</span>
+        <span class="explain-mode">${explanation.mode === "ai" ? `${explanation.reading_basis === "fulltext" ? "全文精读" : "摘要讲解"}${explanation.model ? ` · ${escapeHtml(explanation.model)}` : ""}` : "摘要导读"}</span>
         <button class="text-button" type="button" data-explain>重新生成</button>
       </div>
     </div>
     ${explanation.notice ? `<p style="color:var(--warning);margin-bottom:12px">${escapeHtml(explanation.notice)}</p>` : ""}
     <div class="explain-grid">
       <div class="explain-block"><h4>一句话理解</h4>${list(explanation.one_sentence)}</div>
+      <div class="explain-block"><h4>论文结构</h4>${list(explanation.paper_structure)}</div>
       <div class="explain-block"><h4>研究背景</h4>${list(explanation.background)}</div>
       <div class="explain-block"><h4>解决的问题</h4>${list(explanation.problem)}</div>
       <div class="explain-block"><h4>方法路线</h4>${list(explanation.method)}</div>
+      <div class="explain-block"><h4>算法流程</h4>${list(explanation.algorithm_flow)}</div>
+      <div class="explain-block"><h4>公式与推导</h4>${list(explanation.derivation)}</div>
       <div class="explain-block"><h4>实验怎么看</h4>${list(explanation.experiments)}</div>
+      <div class="explain-block"><h4>结论链条</h4>${list(explanation.conclusions)}</div>
       <div class="explain-block"><h4>主要贡献</h4>${list(explanation.contributions)}</div>
       <div class="explain-block"><h4>局限与核查点</h4>${list(explanation.limitations)}</div>
       <div class="explain-block"><h4>阅读前置</h4>${list(explanation.prerequisites)}</div>
       <div class="explain-block"><h4>是否适合你</h4>${list(explanation.fit)}</div>
+      ${Array.isArray(explanation.evidence) && explanation.evidence.length ? `
+        <div class="explain-block"><h4>原文证据</h4><ul>${explanation.evidence.map((item) => `<li>${escapeHtml(item.claim || "")}${item.pages ? ` <b>${escapeHtml(Array.isArray(item.pages) ? item.pages.join("、") : item.pages)}</b>` : ""}</li>`).join("")}</ul></div>` : ""}
       ${Array.isArray(explanation.glossary) && explanation.glossary.length ? `
         <div class="explain-block"><h4>术语表</h4><dl class="glossary">${explanation.glossary.map((item) => `<div><dt>${escapeHtml(item.term)}</dt><dd>${escapeHtml(item.explanation)}</dd></div>`).join("")}</dl></div>` : ""}
     </div>`;
@@ -484,6 +523,211 @@ async function generateExplanation(paperId) {
   } catch (error) {
     section.innerHTML = `<div class="explain-head"><h3>中文讲解</h3><span class="explain-mode">生成失败</span></div><p>${escapeHtml(error.message)}</p><button class="button button-secondary" type="button" data-retry-explain style="margin-top:12px">重试</button>`;
     section.querySelector("[data-retry-explain]").addEventListener("click", () => generateExplanation(paperId));
+  }
+}
+
+function recommendationFor(paperId) {
+  return state.papers.find((paper) => paper.id === paperId && paper.is_recommended) || null;
+}
+
+function renderReaderScore(paper) {
+  const recommendation = recommendationFor(paper.id);
+  if (!recommendation?.score_breakdown?.length) {
+    el("readerScore").innerHTML = "";
+    return;
+  }
+  el("readerScore").innerHTML = `
+    <section class="reader-score-block">
+      <div class="reader-score-total"><strong>${Math.round(recommendation.recommendation_score)}</strong><span>${escapeHtml(recommendation.recommendation_topic)}精选分</span></div>
+      <div class="score-components">${recommendation.score_breakdown.map((item) => `
+        <div title="${escapeHtml(item.reason)}"><span>${escapeHtml(item.name)}</span><b>${item.score}/${item.max}</b><i style="--score-width:${Math.max(0, Math.min(100, item.score / item.max * 100))}%"></i></div>`).join("")}</div>
+    </section>`;
+}
+
+function setReaderTab(tab) {
+  document.querySelectorAll("[data-reader-tab]").forEach((button) => {
+    const active = button.dataset.readerTab === tab;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  ["explain", "chat", "translate"].forEach((name) => {
+    const panel = el(`reader${name[0].toUpperCase()}${name.slice(1)}Panel`);
+    const active = name === tab;
+    panel.hidden = !active;
+    panel.classList.toggle("is-active", active);
+  });
+}
+
+function setPdfStatus(title, detail = "") {
+  el("pdfStatus").hidden = false;
+  el("pdfStatus").innerHTML = `<strong>${escapeHtml(title)}</strong>${detail ? `<span>${escapeHtml(detail)}</span>` : ""}`;
+  el("pdfFrame").hidden = true;
+  el("pdfUnavailable").hidden = true;
+}
+
+async function resolveReaderAsset(paper, force = false) {
+  setPdfStatus("正在寻找公开 PDF", "检查论文源、OpenAlex、Semantic Scholar、arXiv 与公开机构仓储");
+  el("readerCacheButton").disabled = true;
+  try {
+    const asset = await api(`/api/papers/${encodeURIComponent(paper.id)}/resolve`, { method: "POST", body: JSON.stringify({ force }) });
+    state.readerAsset = asset;
+    el("translationPage").max = Math.max(1, asset.page_count || 1);
+    el("translationPageCount").textContent = `/ ${asset.page_count || 0}`;
+    if (asset.pdf_available) {
+      el("pdfStatus").hidden = true;
+      el("pdfUnavailable").hidden = true;
+      el("pdfFrame").src = `${asset.pdf_url}#view=FitH`;
+      el("pdfFrame").hidden = false;
+      el("readerCacheButton").textContent = "PDF 已缓存";
+      if (asset.fulltext_available) loadTranslationPage(1);
+    } else {
+      el("pdfStatus").hidden = true;
+      el("pdfFrame").hidden = true;
+      el("pdfUnavailable").hidden = false;
+      el("pdfUnavailableReason").textContent = asset.error || "公开学术源中没有发现可直接访问的副本。";
+      el("pdfFallbackLink").href = paper.source_url || paper.pdf_url || "#";
+      el("readerCacheButton").textContent = "重新查找 PDF";
+    }
+  } catch (error) {
+    setPdfStatus("PDF 解析失败", error.message);
+  } finally {
+    el("readerCacheButton").disabled = false;
+  }
+}
+
+function renderChatHistory(items = []) {
+  const history = el("chatHistory");
+  history.innerHTML = "";
+  if (!items.length) {
+    const empty = document.createElement("p");
+    empty.className = "chat-empty";
+    empty.textContent = "还没有针对这篇论文的提问。";
+    history.append(empty);
+    return;
+  }
+  items.forEach((item) => {
+    const message = document.createElement("div");
+    message.className = `chat-message is-${item.role}`;
+    const label = document.createElement("strong");
+    label.textContent = item.role === "user" ? "你" : "论文导师";
+    const content = document.createElement("p");
+    content.textContent = item.content;
+    message.append(label, content);
+    history.append(message);
+  });
+  history.scrollTop = history.scrollHeight;
+}
+
+async function loadChatHistory(paperId) {
+  try {
+    const payload = await api(`/api/papers/${encodeURIComponent(paperId)}/chat`);
+    renderChatHistory(payload.items);
+  } catch (error) {
+    renderChatHistory([]);
+  }
+}
+
+async function openReader(paperId) {
+  const dialog = el("readerDialog");
+  state.selectedId = paperId;
+  state.readerPaper = null;
+  state.readerAsset = null;
+  setReaderTab("explain");
+  setPdfStatus("正在载入论文", "读取元数据与本地缓存状态");
+  el("readerTitle").textContent = "论文阅读工作台";
+  el("readerMeta").textContent = "";
+  el("readerExplanation").innerHTML = `<div class="skeleton-line"></div><div class="skeleton-line"></div><div class="skeleton-line"></div>`;
+  el("readerScore").innerHTML = "";
+  el("translationSource").textContent = "";
+  el("translationResult").textContent = "";
+  renderChatHistory([]);
+  if (!dialog.open) dialog.showModal();
+  try {
+    const paper = await api(`/api/papers/${encodeURIComponent(paperId)}`);
+    state.readerPaper = paper;
+    el("readerTitle").textContent = paper.title;
+    el("readerMeta").textContent = `${paper.authors.join(" · ") || "作者信息缺失"} · ${paper.venue || paper.source} · ${formatDate(paper.published)}`;
+    el("readerSourceLink").href = paper.source_url || paper.pdf_url || "#";
+    renderReaderScore(paper);
+    el("readerExplanation").innerHTML = paper.explanation
+      ? explanationMarkup(paper.explanation)
+      : `<div class="reader-explain-empty"><strong>尚未生成全文精读</strong><p>生成时会优先读取缓存全文，并按页标注关键证据。</p><button class="button button-primary" type="button" data-reader-explain>生成全文精读</button></div>`;
+    el("readerExplanation").querySelector("[data-reader-explain]")?.addEventListener("click", generateReaderExplanation);
+    el("readerExplanation").querySelector("[data-explain]")?.addEventListener("click", generateReaderExplanation);
+    await Promise.all([resolveReaderAsset(paper), loadChatHistory(paperId)]);
+  } catch (error) {
+    setPdfStatus("论文载入失败", error.message);
+    el("readerExplanation").innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+  }
+}
+
+async function generateReaderExplanation() {
+  const paper = state.readerPaper;
+  if (!paper) return;
+  const container = el("readerExplanation");
+  container.innerHTML = `<div class="explain-head"><h3>全文精读</h3><span class="explain-mode">正在读取并分析</span></div><div class="skeleton-line"></div><div class="skeleton-line"></div><div class="skeleton-line"></div>`;
+  try {
+    const explanation = await api(`/api/papers/${encodeURIComponent(paper.id)}/explain`, { method: "POST", body: "{}" });
+    paper.explanation = explanation;
+    container.innerHTML = explanationMarkup(explanation);
+    container.querySelector("[data-explain]")?.addEventListener("click", generateReaderExplanation);
+    toast(explanation.reading_basis === "fulltext" ? "全文精读已生成" : "仅找到摘要，已生成摘要讲解");
+  } catch (error) {
+    container.innerHTML = `<div class="reader-explain-empty"><strong>精读生成失败</strong><p>${escapeHtml(error.message)}</p><button class="button button-secondary" type="button" data-reader-explain>重试</button></div>`;
+    container.querySelector("[data-reader-explain]").addEventListener("click", generateReaderExplanation);
+  }
+}
+
+async function loadTranslationPage(pageNumber) {
+  const paper = state.readerPaper;
+  if (!paper || !state.readerAsset?.fulltext_available) return;
+  try {
+    const page = await api(`/api/papers/${encodeURIComponent(paper.id)}/text?page=${pageNumber}`);
+    el("translationPage").value = page.page;
+    el("translationPageCount").textContent = `/ ${page.page_count}`;
+    el("translationSource").textContent = page.text || "该页没有提取到可翻译文本。";
+    el("translationResult").textContent = "";
+  } catch (error) {
+    el("translationSource").textContent = error.message;
+  }
+}
+
+async function localBrowserTranslate(text) {
+  if (!globalThis.Translator?.create) return null;
+  const options = { sourceLanguage: "en", targetLanguage: "zh" };
+  const availability = globalThis.Translator.availability ? await globalThis.Translator.availability(options) : "available";
+  if (availability === "unavailable") return null;
+  const translator = await globalThis.Translator.create(options);
+  const chunks = [];
+  for (let index = 0; index < text.length; index += 2500) chunks.push(text.slice(index, index + 2500));
+  const translated = [];
+  for (const chunk of chunks) translated.push(await translator.translate(chunk));
+  return translated.join("\n\n");
+}
+
+async function translateCurrentPage() {
+  const source = el("translationSource").textContent.trim();
+  if (!source) {
+    await loadTranslationPage(Number(el("translationPage").value) || 1);
+  }
+  const text = el("translationSource").textContent.trim();
+  if (!text) return;
+  el("translatePageButton").disabled = true;
+  el("translationResult").textContent = "正在翻译…";
+  try {
+    const local = await localBrowserTranslate(text);
+    if (local) {
+      el("translationResult").textContent = local;
+      el("translationProvider").textContent = "浏览器本机翻译 · 未使用 GPT";
+    } else {
+      const payload = await api("/api/translate", { method: "POST", body: JSON.stringify({ text, source: "en", target: "zh" }) });
+      el("translationResult").textContent = payload.text;
+      el("translationProvider").textContent = `${payload.provider} · 未使用 GPT`;
+    }
+  } catch (error) {
+    el("translationResult").textContent = error.message;
+  } finally {
+    el("translatePageButton").disabled = false;
   }
 }
 
@@ -555,8 +799,9 @@ async function triggerRefresh() {
 
 function clearFilters() {
   const projectMode = state.view === "projects";
+  const recommendedMode = state.view === "recommended";
   state.topic = "";
-  state.view = projectMode ? "projects" : "all";
+  state.view = projectMode ? "projects" : recommendedMode ? "recommended" : "all";
   state.status = "";
   ["searchInput", "authorFilter", "dateFilter"].forEach((id) => { el(id).value = ""; });
   ["topicFilter", "tierFilter", "platformFilter", "venueFilter", "sourceFilter"].forEach((id) => { el(id).value = ""; });
@@ -586,7 +831,7 @@ function bindEvents() {
 
   document.querySelectorAll(".rail-link").forEach((button) => button.addEventListener("click", () => {
     state.topic = button.dataset.topic || "";
-    state.view = button.dataset.view || "topic";
+    state.view = button.dataset.view || "recommended";
     applyViewMode();
     document.querySelectorAll(".rail-link").forEach((item) => item.classList.toggle("is-active", item === button));
     loadPapers({ preserveSelection: false });
@@ -599,6 +844,7 @@ function bindEvents() {
   }));
 
   document.addEventListener("keydown", (event) => {
+    if (el("readerDialog").open) return;
     if (event.key === "/" && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) {
       event.preventDefault();
       el("searchInput").focus();
@@ -612,6 +858,42 @@ function bindEvents() {
       const next = event.key === "j" ? Math.min(activeItems.length - 1, current + 1) : Math.max(0, current - 1);
       if (state.view === "projects") openProject(activeItems[next].full_name);
       else openPaper(activeItems[next].id);
+    }
+  });
+
+  el("readerClose").addEventListener("click", () => el("readerDialog").close());
+  el("readerDialog").addEventListener("close", () => {
+    el("pdfFrame").src = "about:blank";
+    state.readerPaper = null;
+    state.readerAsset = null;
+  });
+  document.querySelectorAll("[data-reader-tab]").forEach((button) => button.addEventListener("click", () => setReaderTab(button.dataset.readerTab)));
+  el("readerCacheButton").addEventListener("click", () => state.readerPaper && resolveReaderAsset(state.readerPaper, true));
+  el("translationPage").addEventListener("change", () => loadTranslationPage(Number(el("translationPage").value) || 1));
+  el("translatePageButton").addEventListener("click", translateCurrentPage);
+  el("chatForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const paper = state.readerPaper;
+    const question = el("chatQuestion").value.trim();
+    if (!paper || !question) return;
+    const button = event.submitter || el("chatForm").querySelector("button[type=submit]");
+    button.disabled = true;
+    el("chatQuestion").value = "";
+    const history = el("chatHistory");
+    if (history.querySelector(".chat-empty")) history.innerHTML = "";
+    const pending = document.createElement("div");
+    pending.className = "chat-message is-user";
+    pending.innerHTML = `<strong>你</strong><p>${escapeHtml(question)}</p>`;
+    history.append(pending);
+    try {
+      await api(`/api/papers/${encodeURIComponent(paper.id)}/chat`, { method: "POST", body: JSON.stringify({ question }) });
+      await loadChatHistory(paper.id);
+    } catch (error) {
+      toast(error.message, true);
+      await loadChatHistory(paper.id);
+    } finally {
+      button.disabled = false;
+      el("chatQuestion").focus();
     }
   });
 }

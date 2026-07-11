@@ -2,12 +2,14 @@
 
 ## Current deployment model
 
-Paperfield 0.3 is a single-process, single-user application:
+Paperfield 0.4 is a single-process, single-user application:
 
 ```mermaid
 flowchart LR
     Sources["Paper and GitHub sources"] --> Refresh["Refresh services"]
     Refresh --> SQLite["SQLite database"]
+    OA["Open-access resolvers"] --> Cache["Local PDF and page-text cache"]
+    Cache --> API
     SQLite --> API["Local HTTP JSON API"]
     API --> UI["Desktop web interface"]
     AI["CC Switch or OpenAI-compatible API"] --> API
@@ -22,6 +24,8 @@ This model is appropriate for a personal workstation. It is intentionally not ex
 - `PaperStore`: persistence boundary.
 - `PaperSources` and `GitHubSource`: external-source adapters.
 - `PaperExplainer`: AI-provider adapter.
+- `PaperAssetService`: open-access resolution, PDF cache, page extraction, and cached reading notes.
+- `TranslationService`: non-GPT browser/LibreTranslate/Google translation path.
 - `AppHandler`: HTTP boundary.
 - `static/`: browser client.
 
@@ -94,5 +98,6 @@ Use an established OpenID Connect provider rather than implementing passwords di
 - Keep `/api/health` unauthenticated and free of private information.
 - Version public APIs before introducing breaking changes.
 - Preserve source metadata separately from generated explanations.
+- Store downloaded PDFs in private object storage for cloud deployment; never make publisher files public by default.
 - Never place authentication secrets or provider keys in browser JavaScript.
 - Add an explicit database migration for every persistent schema change.

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
+import hashlib
 import html
 import http.client
+import ipaddress
 import json
 import os
 import re
@@ -24,10 +27,13 @@ ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
 DATA_DIR = Path(os.environ.get("PAPERFIELD_DATA_DIR", ROOT / "data")).expanduser().resolve()
 DB_PATH = Path(os.environ.get("PAPERFIELD_DB_PATH", DATA_DIR / "papers.db")).expanduser().resolve()
+PDF_DIR = Path(os.environ.get("PAPERFIELD_PDF_DIR", DATA_DIR / "pdfs")).expanduser().resolve()
+FULLTEXT_DIR = Path(os.environ.get("PAPERFIELD_FULLTEXT_DIR", DATA_DIR / "fulltext")).expanduser().resolve()
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
+MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
 
 
 def utc_now() -> datetime:
@@ -210,12 +216,36 @@ class PaperStore:
                     FOREIGN KEY(paper_id) REFERENCES papers(id),
                     FOREIGN KEY(project_full_name) REFERENCES github_projects(full_name)
                 );
+                CREATE TABLE IF NOT EXISTS paper_assets (
+                    paper_id TEXT PRIMARY KEY,
+                    resolved_pdf_url TEXT NOT NULL DEFAULT '',
+                    landing_url TEXT NOT NULL DEFAULT '',
+                    provider TEXT NOT NULL DEFAULT '',
+                    access_status TEXT NOT NULL DEFAULT 'unknown',
+                    local_pdf_path TEXT NOT NULL DEFAULT '',
+                    local_text_path TEXT NOT NULL DEFAULT '',
+                    page_count INTEGER NOT NULL DEFAULT 0,
+                    text_chars INTEGER NOT NULL DEFAULT 0,
+                    checked_at TEXT NOT NULL DEFAULT '',
+                    error_text TEXT NOT NULL DEFAULT '',
+                    FOREIGN KEY(paper_id) REFERENCES papers(id)
+                );
+                CREATE TABLE IF NOT EXISTS paper_chat_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    paper_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(paper_id) REFERENCES papers(id)
+                );
                 CREATE INDEX IF NOT EXISTS idx_papers_title_normalized
                     ON papers(lower(trim(title)));
                 CREATE INDEX IF NOT EXISTS idx_github_projects_pushed_at
                     ON github_projects(pushed_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_paper_project_links_project
                     ON paper_project_links(project_full_name);
+                CREATE INDEX IF NOT EXISTS idx_paper_chat_messages_paper
+                    ON paper_chat_messages(paper_id, id);
                 """
             )
 
@@ -496,6 +526,94 @@ class PaperStore:
                 ),
             )
 
+    def get_asset(self, paper_id: str) -> dict[str, Any] | None:
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM paper_assets WHERE paper_id = ?", (paper_id,)).fetchone()
+        return dict(row) if row else None
+
+    def assets_for_papers(self, paper_ids: list[str]) -> dict[str, dict[str, Any]]:
+        if not paper_ids:
+            return {}
+        placeholders = ",".join("?" for _ in paper_ids)
+        with self.connect() as db:
+            rows = db.execute(f"SELECT * FROM paper_assets WHERE paper_id IN ({placeholders})", paper_ids).fetchall()
+        return {row["paper_id"]: dict(row) for row in rows}
+
+    def save_asset(self, paper_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        current = self.get_asset(paper_id) or {}
+        values = {
+            "resolved_pdf_url": payload.get("resolved_pdf_url", current.get("resolved_pdf_url", "")),
+            "landing_url": payload.get("landing_url", current.get("landing_url", "")),
+            "provider": payload.get("provider", current.get("provider", "")),
+            "access_status": payload.get("access_status", current.get("access_status", "unknown")),
+            "local_pdf_path": payload.get("local_pdf_path", current.get("local_pdf_path", "")),
+            "local_text_path": payload.get("local_text_path", current.get("local_text_path", "")),
+            "page_count": int(payload.get("page_count", current.get("page_count", 0)) or 0),
+            "text_chars": int(payload.get("text_chars", current.get("text_chars", 0)) or 0),
+            "checked_at": payload.get("checked_at", utc_now().isoformat()),
+            "error_text": str(payload.get("error_text", current.get("error_text", "")))[:2000],
+        }
+        with self.connect() as db:
+            db.execute(
+                """
+                INSERT INTO paper_assets (
+                    paper_id, resolved_pdf_url, landing_url, provider, access_status,
+                    local_pdf_path, local_text_path, page_count, text_chars, checked_at, error_text
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(paper_id) DO UPDATE SET
+                    resolved_pdf_url=excluded.resolved_pdf_url,
+                    landing_url=excluded.landing_url,
+                    provider=excluded.provider,
+                    access_status=excluded.access_status,
+                    local_pdf_path=excluded.local_pdf_path,
+                    local_text_path=excluded.local_text_path,
+                    page_count=excluded.page_count,
+                    text_chars=excluded.text_chars,
+                    checked_at=excluded.checked_at,
+                    error_text=excluded.error_text
+                """,
+                (
+                    paper_id, values["resolved_pdf_url"], values["landing_url"], values["provider"],
+                    values["access_status"], values["local_pdf_path"], values["local_text_path"],
+                    values["page_count"], values["text_chars"], values["checked_at"], values["error_text"],
+                ),
+            )
+        return self.get_asset(paper_id) or {"paper_id": paper_id, **values}
+
+    def has_project(self, paper_id: str) -> bool:
+        with self.connect() as db:
+            row = db.execute("SELECT 1 FROM paper_project_links WHERE paper_id = ? LIMIT 1", (paper_id,)).fetchone()
+        return bool(row)
+
+    def paper_ids_with_projects(self, paper_ids: list[str]) -> set[str]:
+        if not paper_ids:
+            return set()
+        placeholders = ",".join("?" for _ in paper_ids)
+        with self.connect() as db:
+            rows = db.execute(
+                f"SELECT DISTINCT paper_id FROM paper_project_links WHERE paper_id IN ({placeholders})",
+                paper_ids,
+            ).fetchall()
+        return {row["paper_id"] for row in rows}
+
+    def add_chat_message(self, paper_id: str, role: str, content: str) -> None:
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO paper_chat_messages (paper_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+                (paper_id, role, content[:20000], utc_now().isoformat()),
+            )
+
+    def chat_history(self, paper_id: str, limit: int = 12) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            rows = db.execute(
+                """
+                SELECT role, content, created_at FROM paper_chat_messages
+                WHERE paper_id = ? ORDER BY id DESC LIMIT ?
+                """,
+                (paper_id, limit),
+            ).fetchall()
+        return [dict(row) for row in reversed(rows)]
+
     def begin_sync(self) -> int:
         with self.connect() as db:
             cursor = db.execute(
@@ -546,6 +664,7 @@ class PaperStore:
 
 class PaperClassifier:
     def __init__(self, config: dict[str, Any], venue_catalog: VenueCatalog) -> None:
+        self.config = config
         self.topics: dict[str, list[str]] = config["topics"]
         self.top_venues = [item.lower() for item in config["top_venues"]]
         self.venue_catalog = venue_catalog
@@ -584,6 +703,75 @@ class PaperClassifier:
         except ValueError:
             pass
         return round(min(100, venue_bonus + citation_bonus + topic_bonus + date_bonus), 1)
+
+    def recommendation(
+        self,
+        paper: dict[str, Any],
+        topic: str,
+        asset: dict[str, Any] | None = None,
+        has_project: bool = False,
+    ) -> dict[str, Any]:
+        weights = self.config.get("recommendation_weights") or {
+            "academic": 30,
+            "relevance": 25,
+            "freshness": 20,
+            "evidence": 15,
+            "impact_reproducibility": 10,
+        }
+        tier_ratio = {
+            "顶级会议": 1.0,
+            "顶级期刊": 1.0,
+            "重要会议": 0.82,
+            "重要期刊": 0.82,
+            "预印本": 0.52,
+            "其他相关": 0.34,
+        }.get(paper.get("venue_tier", ""), 0.34)
+        academic = weights["academic"] * tier_ratio
+
+        topics = paper.get("topics", [])
+        if topics and topics[0] == topic:
+            relevance_ratio = 1.0
+        elif topic in topics:
+            relevance_ratio = 0.84
+        else:
+            relevance_ratio = 0.35
+        relevance_ratio = min(1.0, relevance_ratio + max(0, len(topics) - 1) * 0.04)
+        relevance = weights["relevance"] * relevance_ratio
+
+        age_days = 365
+        try:
+            published = datetime.fromisoformat(paper.get("published", "")[:10]).replace(tzinfo=timezone.utc)
+            age_days = max(0, (utc_now() - published).days)
+        except ValueError:
+            pass
+        freshness_ratio = max(0.15, 1 - min(age_days, 90) / 106)
+        freshness = weights["freshness"] * freshness_ratio
+
+        local_text = bool(asset and int(asset.get("text_chars", 0) or 0) > 1000)
+        local_pdf = bool(asset and asset.get("local_pdf_path"))
+        direct_pdf = bool(paper.get("pdf_url"))
+        abstract = bool(compact_text(paper.get("abstract")))
+        evidence_ratio = 1.0 if local_text else 0.86 if local_pdf else 0.68 if direct_pdf else 0.34 if abstract else 0.1
+        evidence = weights["evidence"] * evidence_ratio
+
+        citations = int(paper.get("citation_count", 0) or 0)
+        impact_ratio = min(0.5, citations ** 0.5 / 20) + (0.5 if has_project else 0)
+        impact = weights["impact_reproducibility"] * impact_ratio
+
+        components = [
+            ("学术质量", academic, weights["academic"], "刊物层级与正式发表状态"),
+            ("方向匹配", relevance, weights["relevance"], f"与“{topic}”及相邻主题的关键词匹配"),
+            ("时效性", freshness, weights["freshness"], f"发表距今约 {age_days} 天"),
+            ("证据完整度", evidence, weights["evidence"], "公开 PDF、全文缓存与摘要可用性"),
+            ("影响与复现", impact, weights["impact_reproducibility"], "引用线索与高置信度代码关联"),
+        ]
+        return {
+            "total": round(sum(value for _, value, _, _ in components), 1),
+            "components": [
+                {"name": name, "score": round(value, 1), "max": maximum, "reason": reason}
+                for name, value, maximum, reason in components
+            ],
+        }
 
 
 class PaperSources:
@@ -1172,6 +1360,335 @@ def rebuild_project_links() -> int:
     return len(links)
 
 
+class PaperAssetService:
+    def __init__(self, store: PaperStore) -> None:
+        self.store = store
+        self._lock = threading.RLock()
+        PDF_DIR.mkdir(parents=True, exist_ok=True)
+        FULLTEXT_DIR.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _safe_remote_url(url: str) -> bool:
+        try:
+            parsed = urllib.parse.urlparse(url)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                return False
+            host = parsed.hostname.lower()
+            if host in {"localhost", "localhost.localdomain"} or host.endswith(".local"):
+                return False
+            try:
+                address = ipaddress.ip_address(host)
+                if address.is_private or address.is_loopback or address.is_link_local or address.is_reserved:
+                    return False
+            except ValueError:
+                pass
+            return True
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _request_json(url: str) -> Any:
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
+        with urllib.request.urlopen(request, timeout=25) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    @staticmethod
+    def _arxiv_id(paper: dict[str, Any]) -> str:
+        if str(paper.get("id", "")).startswith("arxiv:"):
+            return str(paper["id"]).removeprefix("arxiv:")
+        for value in (paper.get("source_url", ""), paper.get("pdf_url", "")):
+            match = re.search(r"arxiv\.org/(?:abs|pdf)/([^?#/]+)", value)
+            if match:
+                return match.group(1).removesuffix(".pdf")
+        return ""
+
+    def candidate_urls(self, paper: dict[str, Any]) -> list[tuple[str, str]]:
+        candidates: list[tuple[str, str]] = []
+
+        def add(url: str | None, provider: str) -> None:
+            value = compact_text(url)
+            if value and self._safe_remote_url(value) and all(existing != value for existing, _ in candidates):
+                candidates.append((value, provider))
+
+        asset = self.store.get_asset(paper["id"])
+        if asset:
+            add(asset.get("resolved_pdf_url"), asset.get("provider") or "已解析公开副本")
+        add(paper.get("pdf_url"), paper.get("source") or "来源提供")
+
+        arxiv_id = self._arxiv_id(paper)
+        if arxiv_id:
+            add(f"https://arxiv.org/pdf/{arxiv_id}", "arXiv")
+        source_url = paper.get("source_url", "")
+        if "openreview.net" in source_url:
+            parsed = urllib.parse.urlparse(source_url)
+            review_id = (urllib.parse.parse_qs(parsed.query).get("id") or [""])[0]
+            if review_id:
+                add(f"https://openreview.net/pdf?id={urllib.parse.quote(review_id)}", "OpenReview")
+
+        doi = compact_text(paper.get("doi"))
+        try:
+            if doi:
+                query = urllib.parse.urlencode({"filter": f"doi:https://doi.org/{doi}", "per-page": 1})
+            else:
+                query = urllib.parse.urlencode({"search": paper.get("title", ""), "per-page": 5})
+            openalex = self._request_json(f"https://api.openalex.org/works?{query}")
+            for work in (openalex.get("results") or [])[:5]:
+                if not doi:
+                    expected = VenueCatalog.normalize(paper.get("title"))
+                    actual = VenueCatalog.normalize(work.get("display_name"))
+                    if expected != actual:
+                        continue
+                locations = [work.get("best_oa_location"), work.get("primary_location"), *(work.get("locations") or [])]
+                for location in locations:
+                    if location:
+                        add(location.get("pdf_url"), "OpenAlex 公开版本")
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError, json.JSONDecodeError):
+            pass
+
+        identifier = f"DOI:{doi}" if doi else f"ARXIV:{arxiv_id}" if arxiv_id else ""
+        if identifier:
+            try:
+                encoded = urllib.parse.quote(identifier, safe=":")
+                fields = urllib.parse.urlencode({"fields": "title,openAccessPdf,url,externalIds"})
+                semantic = self._request_json(f"https://api.semanticscholar.org/graph/v1/paper/{encoded}?{fields}")
+                add((semantic.get("openAccessPdf") or {}).get("url"), "Semantic Scholar 公开版本")
+            except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError, json.JSONDecodeError):
+                pass
+
+        if doi:
+            try:
+                query = urllib.parse.urlencode({"query": f"DOI:{doi}", "format": "json", "pageSize": 3})
+                europe = self._request_json(f"https://www.ebi.ac.uk/europepmc/webservices/rest/search?{query}")
+                for item in ((europe.get("resultList") or {}).get("result") or []):
+                    pmcid = compact_text(item.get("pmcid"))
+                    if pmcid:
+                        add(f"https://europepmc.org/articles/{pmcid}?pdf=render", "Europe PMC")
+            except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError, json.JSONDecodeError):
+                pass
+        return candidates
+
+    @staticmethod
+    def _cache_key(paper_id: str) -> str:
+        return hashlib.sha256(paper_id.encode("utf-8")).hexdigest()[:24]
+
+    def _download(self, url: str, target: Path) -> str:
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": USER_AGENT, "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.2"},
+        )
+        temporary = target.with_suffix(".part")
+        try:
+            with urllib.request.urlopen(request, timeout=75) as response:
+                final_url = response.geturl()
+                if not self._safe_remote_url(final_url):
+                    raise ValueError("PDF 重定向地址不安全")
+                content_length = int(response.headers.get("Content-Length", "0") or 0)
+                if content_length > MAX_PDF_BYTES:
+                    raise ValueError("PDF 超过本地缓存大小限制")
+                total = 0
+                prefix = b""
+                with temporary.open("wb") as handle:
+                    while True:
+                        chunk = response.read(1024 * 256)
+                        if not chunk:
+                            break
+                        if total < 2048:
+                            prefix += chunk[: 2048 - total]
+                        total += len(chunk)
+                        if total > MAX_PDF_BYTES:
+                            raise ValueError("PDF 超过本地缓存大小限制")
+                        handle.write(chunk)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
+        if b"%PDF" not in prefix:
+            temporary.unlink(missing_ok=True)
+            raise ValueError("下载内容不是有效 PDF")
+        temporary.replace(target)
+        return final_url
+
+    @staticmethod
+    def _extract(pdf_path: Path, text_path: Path, title: str) -> tuple[int, int]:
+        import fitz
+
+        pages = []
+        with fitz.open(pdf_path) as document:
+            for index, page in enumerate(document):
+                pages.append({"page": index + 1, "text": page.get_text("text").strip()})
+        payload = {"title": title, "pages": pages}
+        text_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return len(pages), sum(len(page["text"]) for page in pages)
+
+    def prepare(self, paper: dict[str, Any], force: bool = False) -> dict[str, Any]:
+        with self._lock:
+            asset = self.store.get_asset(paper["id"]) or {}
+            if not force and asset.get("access_status") == "unavailable" and asset.get("checked_at"):
+                try:
+                    checked = datetime.fromisoformat(asset["checked_at"])
+                    if (utc_now() - checked).total_seconds() < 12 * 3600:
+                        return self.public_asset(paper["id"], asset)
+                except ValueError:
+                    pass
+            pdf_path = Path(asset.get("local_pdf_path", "")) if asset.get("local_pdf_path") else None
+            text_path = Path(asset.get("local_text_path", "")) if asset.get("local_text_path") else None
+            if pdf_path and pdf_path.exists():
+                if not text_path or not text_path.exists():
+                    text_path = FULLTEXT_DIR / f"{self._cache_key(paper['id'])}.json"
+                    try:
+                        page_count, text_chars = self._extract(pdf_path, text_path, paper.get("title", ""))
+                        asset = self.store.save_asset(
+                            paper["id"],
+                            {"local_text_path": str(text_path), "page_count": page_count, "text_chars": text_chars, "access_status": "ready", "error_text": ""},
+                        )
+                    except Exception as error:
+                        asset = self.store.save_asset(paper["id"], {"access_status": "pdf_only", "error_text": f"全文提取失败：{error}"})
+                return self.public_asset(paper["id"], asset)
+
+            errors = []
+            target = PDF_DIR / f"{self._cache_key(paper['id'])}.pdf"
+            for url, provider in self.candidate_urls(paper):
+                try:
+                    final_url = self._download(url, target)
+                    text_target = FULLTEXT_DIR / f"{self._cache_key(paper['id'])}.json"
+                    page_count = 0
+                    text_chars = 0
+                    extract_error = ""
+                    try:
+                        page_count, text_chars = self._extract(target, text_target, paper.get("title", ""))
+                    except Exception as error:
+                        extract_error = f"全文提取失败：{error}"
+                    saved = self.store.save_asset(
+                        paper["id"],
+                        {
+                            "resolved_pdf_url": final_url,
+                            "landing_url": paper.get("source_url", ""),
+                            "provider": provider,
+                            "access_status": "ready" if text_chars else "pdf_only",
+                            "local_pdf_path": str(target),
+                            "local_text_path": str(text_target) if text_target.exists() else "",
+                            "page_count": page_count,
+                            "text_chars": text_chars,
+                            "error_text": extract_error,
+                        },
+                    )
+                    return self.public_asset(paper["id"], saved)
+                except Exception as error:
+                    target.unlink(missing_ok=True)
+                    errors.append(f"{provider}: {error}")
+            saved = self.store.save_asset(
+                paper["id"],
+                {
+                    "landing_url": paper.get("source_url", ""),
+                    "access_status": "unavailable",
+                    "error_text": "；".join(errors[-4:]) or "没有找到可直接访问的公开 PDF 副本",
+                },
+            )
+            return self.public_asset(paper["id"], saved)
+
+    def public_asset(self, paper_id: str, asset: dict[str, Any] | None = None) -> dict[str, Any]:
+        value = asset or self.store.get_asset(paper_id) or {}
+        pdf_path = Path(value.get("local_pdf_path", "")) if value.get("local_pdf_path") else None
+        text_path = Path(value.get("local_text_path", "")) if value.get("local_text_path") else None
+        pdf_available = bool(pdf_path and pdf_path.exists())
+        fulltext_available = bool(text_path and text_path.exists() and int(value.get("text_chars", 0) or 0) > 1000)
+        return {
+            "paper_id": paper_id,
+            "status": value.get("access_status", "unknown"),
+            "provider": value.get("provider", ""),
+            "landing_url": value.get("landing_url", ""),
+            "pdf_available": pdf_available,
+            "fulltext_available": fulltext_available,
+            "pdf_url": f"/api/papers/{urllib.parse.quote(paper_id, safe='')}/pdf" if pdf_available else "",
+            "page_count": int(value.get("page_count", 0) or 0),
+            "text_chars": int(value.get("text_chars", 0) or 0),
+            "checked_at": value.get("checked_at", ""),
+            "error": value.get("error_text", ""),
+        }
+
+    def pdf_path(self, paper_id: str) -> Path | None:
+        asset = self.store.get_asset(paper_id) or {}
+        path = Path(asset.get("local_pdf_path", "")) if asset.get("local_pdf_path") else None
+        return path if path and path.exists() else None
+
+    def fulltext(self, paper_id: str) -> str:
+        asset = self.store.get_asset(paper_id) or {}
+        path = Path(asset.get("local_text_path", "")) if asset.get("local_text_path") else None
+        if not path or not path.exists():
+            return ""
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return "\n\n".join(f"--- 第 {page['page']} 页 ---\n{page['text']}" for page in payload.get("pages", []) if page.get("text"))
+
+    def page(self, paper_id: str, page_number: int) -> dict[str, Any] | None:
+        asset = self.store.get_asset(paper_id) or {}
+        path = Path(asset.get("local_text_path", "")) if asset.get("local_text_path") else None
+        if not path or not path.exists():
+            return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        pages = payload.get("pages", [])
+        if page_number < 1 or page_number > len(pages):
+            return None
+        return {"page": page_number, "page_count": len(pages), "text": pages[page_number - 1].get("text", "")}
+
+    def reading_notes(self, paper_id: str, fulltext: str) -> list[dict[str, Any]] | None:
+        path = FULLTEXT_DIR / f"{self._cache_key(paper_id)}.notes.json"
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            fingerprint = hashlib.sha256(fulltext.encode("utf-8")).hexdigest()
+            return payload.get("notes") if payload.get("fingerprint") == fingerprint else None
+        except (OSError, ValueError, json.JSONDecodeError):
+            return None
+
+    def save_reading_notes(self, paper_id: str, fulltext: str, notes: list[dict[str, Any]]) -> None:
+        path = FULLTEXT_DIR / f"{self._cache_key(paper_id)}.notes.json"
+        path.write_text(
+            json.dumps(
+                {"fingerprint": hashlib.sha256(fulltext.encode("utf-8")).hexdigest(), "notes": notes},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+
+class TranslationService:
+    def translate(self, text: str, source: str = "en", target: str = "zh") -> dict[str, Any]:
+        endpoint = os.environ.get("PAPERFIELD_TRANSLATE_ENDPOINT", "").strip().rstrip("/")
+        content = text[:16000]
+        if endpoint:
+            payload = {"q": content, "source": source, "target": target, "format": "text"}
+            api_key = os.environ.get("PAPERFIELD_TRANSLATE_API_KEY", "").strip()
+            if api_key:
+                payload["api_key"] = api_key
+            request = urllib.request.Request(
+                f"{endpoint}/translate",
+                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=60) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            translated = result.get("translatedText") or result.get("translation") or ""
+            if not translated:
+                raise RuntimeError("翻译服务没有返回结果")
+            return {"text": translated, "provider": "LibreTranslate", "uses_gpt": False}
+
+        chunks = [content[index:index + 3500] for index in range(0, len(content), 3500)]
+        translated_chunks = []
+        for chunk in chunks:
+            params = urllib.parse.urlencode(
+                {"client": "gtx", "sl": source, "tl": "zh-CN" if target == "zh" else target, "dt": "t", "q": chunk}
+            )
+            request = urllib.request.Request(
+                f"https://translate.googleapis.com/translate_a/single?{params}",
+                headers={"User-Agent": USER_AGENT},
+            )
+            with urllib.request.urlopen(request, timeout=45) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            translated_chunks.append("".join(item[0] for item in (result[0] or []) if item and item[0]))
+        return {"text": "\n\n".join(translated_chunks), "provider": "Google 免费翻译端点", "uses_gpt": False}
+
+
 class PaperExplainer:
     @staticmethod
     def connection() -> dict[str, str] | None:
@@ -1226,31 +1743,55 @@ class PaperExplainer:
             }
         return None
 
-    def explain(self, paper: dict[str, Any]) -> dict[str, Any]:
+    @staticmethod
+    def _paper_context(fulltext: str, limit: int = 115000) -> str:
+        if len(fulltext) <= limit:
+            return fulltext
+        middle_start = max(0, len(fulltext) // 2 - 12500)
+        return "\n\n".join(
+            [
+                fulltext[:65000],
+                "--- 中段抽样 ---",
+                fulltext[middle_start:middle_start + 25000],
+                "--- 末段 ---",
+                fulltext[-25000:],
+            ]
+        )
+
+    @staticmethod
+    def _fulltext_chunks(fulltext: str, limit: int = 12000) -> list[str]:
+        pages = [item for item in re.split(r"(?=--- 第 \d+ 页 ---)", fulltext) if item.strip()]
+        chunks: list[str] = []
+        current = ""
+        for page in pages:
+            if current and len(current) + len(page) > limit:
+                chunks.append(current)
+                current = page
+            else:
+                current = f"{current}\n\n{page}".strip()
+        if current:
+            chunks.append(current)
+        return chunks or [fulltext[:limit]]
+
+    def explain(
+        self,
+        paper: dict[str, Any],
+        fulltext: str = "",
+        reading_notes: list[dict[str, Any]] | None = None,
+        notes_callback: Any = None,
+    ) -> dict[str, Any]:
         connection = self.connection()
         if connection:
             try:
-                return self._openai_explain(paper, connection)
+                return self._openai_explain(paper, connection, fulltext, reading_notes, notes_callback)
             except Exception as error:
                 fallback = self._fallback(paper)
                 fallback["notice"] = f"AI 服务暂时不可用，已返回摘要导读：{error}"
                 return fallback
         return self._fallback(paper)
 
-    def _openai_explain(self, paper: dict[str, Any], connection: dict[str, str]) -> dict[str, Any]:
+    def _request_text(self, prompt: str, connection: dict[str, str], timeout: int = 180) -> str:
         model = connection["model"]
-        prompt = f"""你是一名耐心的中文研究导师。请根据论文元数据和摘要生成严谨、详细但易懂的中文讲解。
-不要虚构论文没有提到的实验数字。将推断明确标为推断。返回严格 JSON，不要 Markdown。
-字段必须包括：one_sentence, background, problem, method, experiments, contributions, limitations, prerequisites, fit, glossary。
-其中 glossary 是包含 term 和 explanation 的对象数组，其余字段为中文字符串或中文字符串数组。
-
-标题：{paper['title']}
-作者：{', '.join(paper.get('authors', []))}
-刊物：{paper.get('venue', '')}
-日期：{paper.get('published', '')}
-主题：{', '.join(paper.get('topics', []))}
-摘要：{paper.get('abstract', '')}
-"""
         wire_api = connection.get("wire_api", "responses").lower()
         if wire_api in {"chat", "chat_completions", "chat-completions"}:
             endpoint = "chat/completions"
@@ -1268,7 +1809,7 @@ class PaperExplainer:
             headers={"Authorization": f"Bearer {connection['key']}", "Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=90) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
         if endpoint == "chat/completions":
             choices = payload.get("choices") or []
@@ -1282,16 +1823,176 @@ class PaperExplainer:
                         if content.get("type") in {"output_text", "text"}:
                             pieces.append(content.get("text", ""))
                 output_text = "".join(pieces)
-        match = re.search(r"\{.*\}", output_text, flags=re.S)
-        if not match:
-            raise ValueError("模型没有返回可解析的 JSON")
-        explanation = json.loads(match.group(0))
+        if not output_text:
+            raise ValueError("模型没有返回文本")
+        return output_text
+
+    def _openai_explain(
+        self,
+        paper: dict[str, Any],
+        connection: dict[str, str],
+        fulltext: str = "",
+        reading_notes: list[dict[str, Any]] | None = None,
+        notes_callback: Any = None,
+    ) -> dict[str, Any]:
+        basis = "全文" if fulltext else "摘要"
+        source_material = paper.get("abstract", "")
+        if fulltext and not reading_notes:
+            chunks = self._fulltext_chunks(fulltext)
+            reading_notes = [None] * len(chunks)
+
+            def extract_note(item: tuple[int, str]) -> tuple[int, dict[str, Any]]:
+                index, chunk = item
+                note_prompt = f"""你正在分段精读论文《{paper['title']}》的第 {index}/{len(chunks)} 个页块。
+请只依据当前页块提取可供最终讲解使用的中文研究笔记。保留所有重要页码、公式编号、数据集、指标和实验数字。
+返回严格 JSON，不要 Markdown，字段为：structure, problem, method, algorithm, equations, experiments, conclusions, limitations, evidence。
+除 evidence 外字段均为中文字符串数组；evidence 为包含 claim 和 pages 的对象数组。没有信息的字段返回空数组，不得猜测。
+每个字段最多 3 条，每条尽量简洁，总输出不超过 1200 个中文字符。
+
+当前页块：
+{chunk}
+"""
+                output = self._request_text(note_prompt, connection, timeout=120)
+                match = re.search(r"\{.*\}", output, flags=re.S)
+                return index - 1, json.loads(match.group(0)) if match else {"raw_notes": output}
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(3, len(chunks))) as executor:
+                futures = [executor.submit(extract_note, (index, chunk)) for index, chunk in enumerate(chunks, start=1)]
+                for future in concurrent.futures.as_completed(futures):
+                    note_index, note = future.result()
+                    reading_notes[note_index] = note
+            reading_notes = [note for note in reading_notes if note]
+            if notes_callback:
+                notes_callback(reading_notes)
+        if fulltext:
+            source_material = json.dumps(reading_notes, ensure_ascii=False)
+        metadata = f"""标题：{paper['title']}
+作者：{', '.join(paper.get('authors', []))}
+刊物：{paper.get('venue', '')}
+日期：{paper.get('published', '')}
+主题：{', '.join(paper.get('topics', []))}
+材料来源：{basis}{'分段阅读笔记（由带页码的全文逐块提取）' if fulltext else ''}"""
+
+        def parse_json_output(output: str) -> dict[str, Any]:
+            match = re.search(r"\{.*\}", output, flags=re.S)
+            if not match:
+                raise ValueError("模型没有返回可解析的 JSON")
+            return json.loads(match.group(0))
+
+        if fulltext:
+            method_material = [
+                {key: note.get(key, []) for key in ("structure", "problem", "method", "algorithm", "equations", "conclusions")}
+                for note in (reading_notes or [])
+            ]
+            experiment_material = [
+                {key: note.get(key, []) for key in ("method", "experiments", "conclusions", "limitations", "evidence")}
+                for note in (reading_notes or [])
+            ]
+
+            def generate_part(kind: str) -> tuple[str, dict[str, Any]]:
+                if kind == "method":
+                    fields = "one_sentence, paper_structure, background, problem, method, algorithm_flow, derivation"
+                    instructions = "algorithm_flow 按输入、表示、核心模块、训练目标、推理输出展开；derivation 解释公式、损失项或设计逻辑。"
+                    material = method_material
+                else:
+                    fields = "experiments, conclusions, contributions, limitations, evidence"
+                    instructions = "experiments 覆盖数据集、基线、指标、主结果、消融和失败案例；evidence 为包含 claim 和 pages 的对象数组。"
+                    material = experiment_material
+                prompt = f"""你是一名严谨的中文论文导师。只依据提供的全文阅读笔记生成讲解，不得补写没有证据的事实。
+返回严格 JSON，不要 Markdown，仅包含字段：{fields}。
+除 evidence 外，字段使用中文字符串或字符串数组；不能确认时明确写“正文未明确说明”。
+{instructions}
+总输出不超过 2600 个中文字符，但要让研究生能复述方法与结论。
+
+{metadata}
+全文阅读笔记：
+{json.dumps(material, ensure_ascii=False)}
+"""
+                return kind, parse_json_output(self._request_text(prompt, connection, timeout=120))
+
+            parts: dict[str, dict[str, Any]] = {}
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                futures = [executor.submit(generate_part, kind) for kind in ("method", "experiments")]
+                for future in concurrent.futures.as_completed(futures):
+                    kind, result = future.result()
+                    parts[kind] = result
+            learning_prompt = f"""你是一名中文研究导师。根据下面已经核对全文得到的方法与实验讲解，补充学习路径。
+返回严格 JSON，不要 Markdown，仅包含 prerequisites, fit, glossary。
+prerequisites 是从基础到进阶的字符串数组；fit 说明论文适合怎样的研究方向与阅读优先级；
+glossary 是包含 term 和 explanation 的对象数组，最多 10 个关键术语。不得引入材料之外的论文结论。
+
+{metadata}
+已核对讲解：
+{json.dumps(parts, ensure_ascii=False)}
+"""
+            learning = parse_json_output(self._request_text(learning_prompt, connection, timeout=120))
+            explanation = {**parts.get("method", {}), **parts.get("experiments", {}), **learning}
+        else:
+            prompt = f"""你是一名严谨、耐心的中文研究导师。请只根据论文摘要生成中文导读，不得凭标题猜测。
+返回严格 JSON，不要 Markdown。字段包括 one_sentence, paper_structure, background, problem, method, algorithm_flow,
+derivation, experiments, conclusions, contributions, limitations, prerequisites, fit, evidence, glossary。
+无法从摘要确认的字段要明确说明“摘要未提供”。
+
+{metadata}
+摘要：{source_material}
+"""
+            explanation = parse_json_output(self._request_text(prompt, connection, timeout=120))
         explanation["mode"] = "ai"
+        explanation["reading_basis"] = "fulltext" if fulltext else "abstract"
         explanation["provider"] = connection["provider"]
-        explanation["model"] = model
-        explanation["wire_api"] = wire_api
+        explanation["model"] = connection["model"]
+        explanation["wire_api"] = connection.get("wire_api", "responses")
         explanation["generated_at"] = utc_now().isoformat()
         return explanation
+
+    def ask(
+        self,
+        paper: dict[str, Any],
+        question: str,
+        fulltext: str,
+        history: list[dict[str, Any]],
+        selected_text: str = "",
+        reading_notes: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        connection = self.connection()
+        if not connection:
+            raise RuntimeError("当前没有可用的大模型配置")
+        if reading_notes:
+            material = json.dumps(reading_notes, ensure_ascii=False)
+            basis = "带页码的全文阅读笔记"
+        elif fulltext:
+            material = self._paper_context(fulltext, limit=12000)
+            basis = "全文抽样页块"
+        else:
+            material = paper.get("abstract", "")
+            basis = "摘要"
+        history_text = "\n".join(
+            f"{('用户' if item.get('role') == 'user' else '导师')}：{item.get('content', '')}"
+            for item in history[-8:]
+        )
+        prompt = f"""你是论文精读导师。请回答用户关于当前论文的问题。
+优先使用论文材料，关键判断附上 [第N页]；如果材料不足，直接说明，不得凭标题猜测。
+请用中文回答，先给直接结论，再给推理过程、论文证据和需要核查的边界。不要返回 JSON。
+
+论文：{paper['title']}
+材料基础：{basis}
+选中文本：{selected_text[:8000] or '无'}
+最近对话：
+{history_text or '无'}
+
+用户问题：{question}
+
+论文材料：
+{material}
+"""
+        answer = self._request_text(prompt, connection, timeout=180).strip()
+        return {
+            "answer": answer,
+            "reading_basis": "fulltext" if reading_notes else "fulltext_excerpt" if fulltext else "abstract",
+            "provider": connection["provider"],
+            "model": connection["model"],
+            "generated_at": utc_now().isoformat(),
+        }
 
     def _fallback(self, paper: dict[str, Any]) -> dict[str, Any]:
         abstract = compact_text(paper.get("abstract"))
@@ -1303,16 +2004,22 @@ class PaperExplainer:
         results = " ".join(sentences[-2:]) if len(sentences) > 2 else "需要阅读论文实验部分确认数据集、基线和指标。"
         return {
             "mode": "abstract",
+            "reading_basis": "abstract",
             "generated_at": utc_now().isoformat(),
             "one_sentence": f"这是一篇与{topic_text}相关的工作，核心线索是：{first}",
+            "paper_structure": "未读取全文，无法可靠还原章节结构。",
             "background": f"论文被系统归入{topic_text}。当前导读只依据标题、刊物和公开摘要生成，不替代全文阅读。",
             "problem": first,
             "method": method,
+            "algorithm_flow": "未读取全文，无法可靠拆解算法输入、模块、训练目标与输出。",
+            "derivation": "未读取全文，无法核对公式、损失函数和推导过程。",
             "experiments": results,
+            "conclusions": results,
             "contributions": ["提出或验证了摘要中描述的核心方法。", "为相关主题提供了可继续追踪的研究线索。"],
             "limitations": ["未调用大模型时无法可靠翻译和解释全文细节。", "需要核对正文中的实验设置、消融实验和失败案例。"],
             "prerequisites": ["先理解标题中的主要任务和输入输出。", "阅读方法总览图、主结果表和结论。"],
             "fit": "如果你对这篇论文的任务场景、方法类型和实验方式都感兴趣，可以将其加入精读列表。",
+            "evidence": [],
             "glossary": [{"term": topic, "explanation": f"系统根据关键词识别出的研究主题：{topic}"} for topic in topics[:4]],
         }
 
@@ -1328,6 +2035,8 @@ CLASSIFIER = PaperClassifier(CONFIG, VENUE_CATALOG)
 SOURCES = PaperSources(CONFIG, CLASSIFIER)
 GITHUB_SOURCE = GitHubSource(CONFIG)
 EXPLAINER = PaperExplainer()
+ASSETS = PaperAssetService(STORE)
+TRANSLATOR = TranslationService()
 REFRESH_STATE: dict[str, Any] = {"running": False, "message": "", "lock": threading.Lock()}
 
 
@@ -1477,6 +2186,67 @@ def scheduler_loop() -> None:
         time.sleep(300)
 
 
+def daily_recommendations(topic: str = "", per_topic: int | None = None) -> dict[str, Any]:
+    papers = filter_papers(STORE.list_papers(), {})
+    topics = [topic] if topic else CONFIG.get("daily_topics", list(CLASSIFIER.topics))
+    limit = max(1, min(10, per_topic or int(CONFIG.get("daily_recommendations_per_topic", 5))))
+    window_days = max(7, int(CONFIG.get("recommendation_window_days", 45)))
+    cutoff = (utc_now() - timedelta(days=window_days)).date().isoformat()
+    groups = []
+    items = []
+    seen: set[str] = set()
+    for current_topic in topics:
+        candidates = [paper for paper in papers if current_topic in paper.get("topics", [])]
+        recent = [paper for paper in candidates if not paper.get("published") or paper["published"] >= cutoff]
+        pool = recent if len(recent) >= limit else candidates
+        pool.sort(
+            key=lambda paper: (
+                bool(paper.get("topics")) and paper["topics"][0] == current_topic,
+                paper.get("quality_score", 0),
+                paper.get("published", ""),
+            ),
+            reverse=True,
+        )
+        shortlist = pool[:80]
+        shortlist_ids = [paper["id"] for paper in shortlist]
+        assets = STORE.assets_for_papers(shortlist_ids)
+        linked_papers = STORE.paper_ids_with_projects(shortlist_ids)
+        ranked = []
+        for paper in shortlist:
+            asset = assets.get(paper["id"])
+            score = CLASSIFIER.recommendation(paper, current_topic, asset, paper["id"] in linked_papers)
+            ranked.append((score["total"], paper, score, asset))
+        ranked.sort(key=lambda item: (item[0], item[1].get("published", "")), reverse=True)
+        selected = []
+        for _, paper, score, asset in ranked:
+            if paper["id"] in seen:
+                continue
+            item = {
+                **paper,
+                "is_recommended": True,
+                "recommendation_topic": current_topic,
+                "recommendation_score": score["total"],
+                "score_breakdown": score["components"],
+                "pdf_cached": bool(asset and asset.get("local_pdf_path")),
+                "fulltext_cached": bool(asset and int(asset.get("text_chars", 0) or 0) > 1000),
+            }
+            selected.append(item)
+            items.append(item)
+            seen.add(paper["id"])
+            if len(selected) >= limit:
+                break
+        groups.append({"topic": current_topic, "items": selected, "count": len(selected)})
+    return {
+        "items": items,
+        "groups": groups,
+        "total": len(items),
+        "per_topic": limit,
+        "window_days": window_days,
+        "weights": CONFIG.get("recommendation_weights", {}),
+        "generated_at": utc_now().isoformat(),
+    }
+
+
 def filter_papers(papers: list[dict[str, Any]], params: dict[str, list[str]]) -> list[dict[str, Any]]:
     get = lambda name, default="": (params.get(name) or [default])[0].strip()
     query = get("q").lower()
@@ -1586,6 +2356,44 @@ class AppHandler(SimpleHTTPRequestHandler):
             return {}
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
+    def send_pdf_file(self, path: Path) -> None:
+        size = path.stat().st_size
+        start = 0
+        end = size - 1
+        status = HTTPStatus.OK
+        range_header = self.headers.get("Range", "")
+        match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip()) if range_header else None
+        if match:
+            if match.group(1):
+                start = int(match.group(1))
+            if match.group(2):
+                end = min(end, int(match.group(2)))
+            if start > end or start >= size:
+                self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return
+            status = HTTPStatus.PARTIAL_CONTENT
+        length = end - start + 1
+        self.send_response(status)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Content-Disposition", f'inline; filename="{path.name}"')
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(length))
+        if status == HTTPStatus.PARTIAL_CONTENT:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("Cache-Control", "private, max-age=3600")
+        self.end_headers()
+        with path.open("rb") as handle:
+            handle.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = handle.read(min(1024 * 256, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
+
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         if not parsed.path.startswith("/api/"):
@@ -1617,6 +2425,14 @@ class AppHandler(SimpleHTTPRequestHandler):
                 }
             )
             return
+        if parsed.path == "/api/recommendations":
+            topic = (params.get("topic") or [""])[0].strip()
+            try:
+                per_topic = int((params.get("per_topic") or [str(CONFIG.get("daily_recommendations_per_topic", 5))])[0])
+            except ValueError:
+                per_topic = int(CONFIG.get("daily_recommendations_per_topic", 5))
+            self.send_json(daily_recommendations(topic, per_topic))
+            return
         if parsed.path == "/api/projects":
             projects = filter_projects(STORE.list_projects(), params)
             limit = max(1, min(500, int((params.get("limit") or ["100"])[0])))
@@ -1636,9 +2452,42 @@ class AppHandler(SimpleHTTPRequestHandler):
             project = STORE.get_project(full_name)
             self.send_json(project or {"error": "项目不存在"}, 200 if project else 404)
             return
+        paper_action = re.fullmatch(r"/api/papers/(.+)/(asset|pdf|text|chat)", parsed.path)
+        if paper_action:
+            paper_id = urllib.parse.unquote(paper_action.group(1))
+            action = paper_action.group(2)
+            paper = STORE.get_paper(paper_id)
+            if not paper:
+                self.send_json({"error": "论文不存在"}, 404)
+                return
+            if action == "asset":
+                self.send_json(ASSETS.public_asset(paper_id))
+                return
+            if action == "pdf":
+                path = ASSETS.pdf_path(paper_id)
+                if not path:
+                    ASSETS.prepare(paper)
+                    path = ASSETS.pdf_path(paper_id)
+                if not path:
+                    self.send_json({"error": "暂未找到可直接访问的公开 PDF 副本"}, 404)
+                    return
+                self.send_pdf_file(path)
+                return
+            if action == "text":
+                try:
+                    page_number = max(1, int((params.get("page") or ["1"])[0]))
+                except ValueError:
+                    page_number = 1
+                page = ASSETS.page(paper_id, page_number)
+                self.send_json(page or {"error": "该页全文尚不可用"}, 200 if page else 404)
+                return
+            self.send_json({"items": STORE.chat_history(paper_id), "paper_id": paper_id})
+            return
         if parsed.path.startswith("/api/papers/"):
             paper_id = urllib.parse.unquote(parsed.path.removeprefix("/api/papers/"))
             paper = STORE.get_paper(paper_id)
+            if paper:
+                paper["asset"] = ASSETS.public_asset(paper_id)
             self.send_json(paper or {"error": "论文不存在"}, 200 if paper else 404)
             return
         if parsed.path == "/api/options":
@@ -1697,11 +2546,22 @@ class AppHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/translate":
+            payload = self.read_json()
+            text = str(payload.get("text", "")).strip()
+            if not text:
+                self.send_json({"error": "没有需要翻译的文本"}, 400)
+                return
+            try:
+                self.send_json(TRANSLATOR.translate(text, str(payload.get("source", "en")), str(payload.get("target", "zh"))))
+            except Exception as error:
+                self.send_json({"error": str(error)}, 503)
+            return
         if parsed.path == "/api/refresh":
             started = refresh_in_background()
             self.send_json({"started": started, "message": "更新已开始" if started else "更新任务正在运行"}, 202)
             return
-        match = re.fullmatch(r"/api/papers/(.+)/(state|explain)", parsed.path)
+        match = re.fullmatch(r"/api/papers/(.+)/(state|explain|resolve|chat)", parsed.path)
         if match:
             paper_id = urllib.parse.unquote(match.group(1))
             action = match.group(2)
@@ -1713,7 +2573,45 @@ class AppHandler(SimpleHTTPRequestHandler):
                 updated = STORE.update_state(paper_id, self.read_json())
                 self.send_json(updated)
                 return
-            explanation = EXPLAINER.explain(paper)
+            if action == "resolve":
+                payload = self.read_json()
+                self.send_json(ASSETS.prepare(paper, bool(payload.get("force"))))
+                return
+            if action == "chat":
+                payload = self.read_json()
+                question = str(payload.get("question", "")).strip()[:4000]
+                if not question:
+                    self.send_json({"error": "请输入关于论文的问题"}, 400)
+                    return
+                ASSETS.prepare(paper)
+                fulltext = ASSETS.fulltext(paper_id)
+                notes = ASSETS.reading_notes(paper_id, fulltext) if fulltext else None
+                history = STORE.chat_history(paper_id)
+                try:
+                    answer = EXPLAINER.ask(
+                        paper,
+                        question,
+                        fulltext,
+                        history,
+                        str(payload.get("selected_text", "")),
+                        notes,
+                    )
+                except Exception as error:
+                    self.send_json({"error": str(error)}, 503)
+                    return
+                STORE.add_chat_message(paper_id, "user", question)
+                STORE.add_chat_message(paper_id, "assistant", answer["answer"])
+                self.send_json(answer)
+                return
+            ASSETS.prepare(paper)
+            fulltext = ASSETS.fulltext(paper_id)
+            notes = ASSETS.reading_notes(paper_id, fulltext) if fulltext else None
+            explanation = EXPLAINER.explain(
+                paper,
+                fulltext,
+                notes,
+                (lambda value: ASSETS.save_reading_notes(paper_id, fulltext, value)) if fulltext else None,
+            )
             STORE.save_explanation(paper_id, explanation)
             self.send_json(explanation)
             return

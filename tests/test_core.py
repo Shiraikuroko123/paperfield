@@ -37,6 +37,23 @@ class ClassifierTests(unittest.TestCase):
         }
         self.assertGreaterEqual(self.classifier.quality(paper), 60)
 
+    def test_recommendation_score_is_explainable(self):
+        paper = {
+            "id": "paper",
+            "title": "Vision-Language-Action Robot",
+            "abstract": "robot learning",
+            "venue": "CoRL",
+            "venue_tier": "顶级会议",
+            "citation_count": 16,
+            "published": APP.utc_now().date().isoformat(),
+            "topics": ["具身智能", "多模态大模型"],
+            "pdf_url": "https://example.com/paper.pdf",
+        }
+        score = self.classifier.recommendation(paper, "具身智能", has_project=True)
+        self.assertEqual(len(score["components"]), 5)
+        self.assertAlmostEqual(score["total"], sum(item["score"] for item in score["components"]), places=1)
+        self.assertLessEqual(score["total"], 100)
+
 
 class ExplanationTests(unittest.TestCase):
     def test_fallback_is_labeled(self):
@@ -49,6 +66,13 @@ class ExplanationTests(unittest.TestCase):
         )
         self.assertEqual(explanation["mode"], "abstract")
         self.assertIn("具身智能", explanation["one_sentence"])
+
+    def test_long_fulltext_context_keeps_beginning_middle_and_end(self):
+        text = "BEGIN" + "a" * 70000 + "MIDDLE" + "b" * 70000 + "END"
+        context = APP.PaperExplainer._paper_context(text)
+        self.assertIn("BEGIN", context)
+        self.assertIn("MIDDLE", context)
+        self.assertIn("END", context)
 
 
 class FeedTests(unittest.TestCase):
@@ -129,6 +153,22 @@ class FeedTests(unittest.TestCase):
         match = APP.paper_project_match(paper, project)
         self.assertIsNotNone(match)
         self.assertGreaterEqual(match[0], 90)
+
+    def test_asset_state_round_trip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = APP.PaperStore(Path(directory) / "papers.db")
+            saved = store.save_asset(
+                "paper",
+                {"provider": "arXiv", "access_status": "ready", "page_count": 12, "text_chars": 42000},
+            )
+            self.assertEqual(saved["provider"], "arXiv")
+            self.assertEqual(saved["page_count"], 12)
+            self.assertEqual(store.assets_for_papers(["paper"])["paper"]["text_chars"], 42000)
+
+    def test_pdf_url_safety_rejects_local_networks(self):
+        self.assertFalse(APP.PaperAssetService._safe_remote_url("http://127.0.0.1/private.pdf"))
+        self.assertFalse(APP.PaperAssetService._safe_remote_url("file:///tmp/paper.pdf"))
+        self.assertTrue(APP.PaperAssetService._safe_remote_url("https://arxiv.org/pdf/1234.5678"))
 
 
 if __name__ == "__main__":

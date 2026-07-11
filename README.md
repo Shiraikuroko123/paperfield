@@ -2,7 +2,15 @@
 
 一个面向具身智能、大模型和开源项目追踪的个人研究工作台。
 
-Paperfield is a local research client for daily embodied-intelligence and large-model paper discovery. It combines official proceedings with public scholarly metadata, classifies papers by topic and venue level, stores reading state locally, and provides Chinese explanations through an optional OpenAI API key.
+Paperfield is a local research client for daily embodied-intelligence and large-model paper discovery. It keeps a broad candidate pool, selects a small daily reading list, resolves legal open-access PDF copies, caches full text locally, and provides page-grounded Chinese explanations and paper chat.
+
+## Daily reading workflow
+
+- `每日精选` is the default view: 5 papers per configured research field, selected from the full local collection.
+- The score is transparent and editable in `config.json`: academic quality 30, topic relevance 25, freshness 20, evidence completeness 15, impact and reproducibility 10.
+- Clicking a recommended paper opens a focused workstation with PDF on the left and explanation, chat, and translation on the right.
+- Recommended PDFs are resolved from existing source links, OpenAlex, Semantic Scholar, arXiv, OpenReview, and Europe PMC, then cached under ignored `data/` paths.
+- Paperfield never bypasses a paywall or institutional login. When no public copy exists, it keeps the publisher/source page available and labels the PDF as unavailable.
 
 ## Coverage
 
@@ -33,7 +41,7 @@ Open `http://127.0.0.1:8765`.
 
 The first launch seeds a small offline dataset so the interface is usable immediately. Click `更新论文` to fetch current public metadata.
 
-## Optional AI explanations
+## Full-text explanations and paper chat
 
 Paperfield automatically detects the active CC Switch/Codex provider from `~/.codex/config.toml` and its key from `~/.codex/auth.json`. This supports Responses-compatible custom providers without copying the key into the project.
 The active provider's `wire_api` is respected; both Responses API and Chat Completions-compatible providers are supported.
@@ -44,9 +52,21 @@ $env:OPENAI_MODEL="gpt-5-mini"
 python app.py
 ```
 
-Without a key, Paperfield generates a clearly labeled abstract-based Chinese reading guide.
+When a public PDF is available, Paperfield extracts page-aware full text, builds cached reading notes in bounded chunks, and asks the model to produce method, derivation, experiment, conclusion, limitation, and evidence sections. Answers cite page numbers where the source material supports them.
+
+Without a key, Paperfield generates a clearly labeled abstract-based Chinese reading guide. PDF reading and translation still work without GPT.
 
 For an explicit Paperfield-only override, use `PAPERFIELD_OPENAI_API_KEY`, `PAPERFIELD_OPENAI_BASE_URL`, and `PAPERFIELD_OPENAI_MODEL`.
+
+## Translation without GPT tokens
+
+The reader translates extracted pages without calling the GPT provider:
+
+1. Chrome/Edge built-in Translator API when available.
+2. A configured LibreTranslate-compatible endpoint.
+3. A best-effort no-key Google Translate endpoint.
+
+Configure a private LibreTranslate service with `PAPERFIELD_TRANSLATE_ENDPOINT` and optional `PAPERFIELD_TRANSLATE_API_KEY`. Free endpoints can rate-limit or change behavior, so local browser translation or a self-hosted service is more reliable.
 
 ## Refresh from the command line
 
@@ -84,5 +104,6 @@ docker compose up --build -d
 - 当前架构与多用户演进：[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Docker 和云端部署：[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
 - 后续路线：[`docs/ROADMAP.md`](docs/ROADMAP.md)
+- 同类开源项目调研：[`docs/READER_RESEARCH.md`](docs/READER_RESEARCH.md)
 
 当前版本仍是单用户本地应用。实现认证和 PostgreSQL 迁移前，不应直接暴露到公网。

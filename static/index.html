@@ -19,7 +19,10 @@
       </div>
 
       <nav class="rail-nav" id="railNav">
-        <button class="rail-link is-active" data-view="all">
+        <button class="rail-link is-active" data-view="recommended">
+          <span>每日精选</span><b id="navRecommendedCount">0</b>
+        </button>
+        <button class="rail-link" data-view="all">
           <span>今日视野</span><b id="navAllCount">0</b>
         </button>
         <button class="rail-link" data-view="top">
@@ -92,7 +95,13 @@
       <div class="content-grid">
         <section class="paper-stream" aria-labelledby="streamTitle">
           <div class="stream-head">
-            <div><h2 id="streamTitle">论文流</h2><span id="resultCount">正在载入</span></div>
+            <div class="stream-identity">
+              <div><h2 id="streamTitle">每日精选</h2><span id="resultCount">正在载入</span></div>
+              <details class="score-guide">
+                <summary>评分标准</summary>
+                <div id="scoreGuideContent">学术质量 30 · 方向匹配 25 · 时效性 20 · 证据完整度 15 · 影响与复现 10</div>
+              </details>
+            </div>
             <div class="status-tabs" role="group" aria-label="阅读状态">
               <button class="is-active" data-status="">全部</button>
               <button data-status="unread">未读</button>
@@ -122,6 +131,73 @@
       </div>
     </main>
   </div>
+
+  <dialog class="reader-dialog" id="readerDialog" aria-labelledby="readerTitle">
+    <div class="reader-shell">
+      <header class="reader-header">
+        <button class="reader-close" id="readerClose" type="button" aria-label="关闭阅读工作台" title="关闭">×</button>
+        <div class="reader-heading">
+          <h2 id="readerTitle">论文阅读工作台</h2>
+          <p id="readerMeta"></p>
+        </div>
+        <div class="reader-header-actions">
+          <a id="readerSourceLink" href="#" target="_blank" rel="noreferrer">来源页</a>
+          <button class="button button-secondary" id="readerCacheButton" type="button">重新解析 PDF</button>
+        </div>
+      </header>
+
+      <div class="reader-grid">
+        <section class="pdf-workspace" aria-label="论文 PDF">
+          <div class="pdf-status" id="pdfStatus">
+            <strong>正在寻找公开 PDF</strong>
+            <span>依次检查公开来源与作者存档</span>
+          </div>
+          <iframe id="pdfFrame" title="论文 PDF 阅读器" hidden></iframe>
+          <div class="pdf-unavailable" id="pdfUnavailable" hidden>
+            <strong>暂未找到公开 PDF 副本</strong>
+            <p id="pdfUnavailableReason"></p>
+            <a id="pdfFallbackLink" href="#" target="_blank" rel="noreferrer">查看论文来源页</a>
+          </div>
+        </section>
+
+        <aside class="reader-assistant" aria-label="论文精读助手">
+          <div class="reader-tabs" role="tablist" aria-label="阅读工具">
+            <button class="is-active" id="readerExplainTab" role="tab" aria-selected="true" data-reader-tab="explain">精读</button>
+            <button id="readerChatTab" role="tab" aria-selected="false" data-reader-tab="chat">问答</button>
+            <button id="readerTranslateTab" role="tab" aria-selected="false" data-reader-tab="translate">翻译</button>
+          </div>
+
+          <section class="reader-panel is-active" id="readerExplainPanel" role="tabpanel">
+            <div id="readerScore"></div>
+            <div id="readerExplanation"></div>
+          </section>
+
+          <section class="reader-panel" id="readerChatPanel" role="tabpanel" hidden>
+            <div class="chat-history" id="chatHistory"></div>
+            <form class="chat-form" id="chatForm">
+              <label for="chatQuestion">向论文提问</label>
+              <textarea id="chatQuestion" rows="3" placeholder="例如：方法中的训练目标如何推导？"></textarea>
+              <button class="button button-primary" type="submit">发送问题</button>
+            </form>
+          </section>
+
+          <section class="reader-panel" id="readerTranslatePanel" role="tabpanel" hidden>
+            <div class="translation-toolbar">
+              <label for="translationPage">页码</label>
+              <input id="translationPage" type="number" min="1" value="1">
+              <span id="translationPageCount">/ 0</span>
+              <button class="button button-secondary" id="translatePageButton" type="button">翻译本页</button>
+            </div>
+            <p class="translation-provider" id="translationProvider">优先使用浏览器本机翻译，不消耗 GPT。</p>
+            <div class="translation-columns">
+              <section><h3>原文</h3><div class="translation-text" id="translationSource"></div></section>
+              <section><h3>中文</h3><div class="translation-text" id="translationResult"></div></section>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </div>
+  </dialog>
 
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
   <script src="/app.js" defer></script>

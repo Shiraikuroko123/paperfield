@@ -2,6 +2,24 @@
   "refresh_hours": 24,
   "days_back": 90,
   "max_results_per_source": 100,
+  "daily_recommendations_per_topic": 5,
+  "recommendation_window_days": 45,
+  "daily_topics": [
+    "具身智能",
+    "触觉与灵巧操作",
+    "大语言模型",
+    "多模态大模型",
+    "智能体",
+    "检索与知识增强",
+    "模型效率"
+  ],
+  "recommendation_weights": {
+    "academic": 30,
+    "relevance": 25,
+    "freshness": 20,
+    "evidence": 15,
+    "impact_reproducibility": 10
+  },
   "source_queries": [
     "embodied robot learning",
     "vision language action robot",

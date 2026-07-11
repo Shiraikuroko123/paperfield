@@ -13,7 +13,10 @@ RUN useradd --create-home --uid 10001 paperfield \
     && chown -R paperfield:paperfield /data /app
 
 COPY --chown=paperfield:paperfield app.py config.json venues.json ./
+COPY --chown=paperfield:paperfield requirements.txt ./
 COPY --chown=paperfield:paperfield static ./static
+
+RUN pip install --no-cache-dir -r requirements.txt
 
 USER paperfield
 
