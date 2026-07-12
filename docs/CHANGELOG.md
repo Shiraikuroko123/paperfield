@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.1
+
+- Filled the weekly explanation quota from papers with successfully extracted full text instead of consuming slots on papers without public PDFs.
+
 ## 0.11.0
 
 - Added a natural-week preparation queue that resolves public PDFs for weekly picks and pre-generates a configurable number of full-text readings.

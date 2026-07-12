@@ -59,7 +59,7 @@ SETTINGS_PATH = Path(os.environ.get("PAPERFIELD_SETTINGS_PATH", DATA_DIR / "sett
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
 INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", ROOT / "institutions.json")).expanduser().resolve()
-APP_VERSION = "0.11.0"
+APP_VERSION = "0.11.1"
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
 
@@ -5049,6 +5049,7 @@ class WeeklySelectionService:
 
 
 class WeeklyPreparationService:
+    SCHEMA_VERSION = 2
     TERMINAL_PDF = {"ready", "unavailable"}
     TERMINAL_EXPLANATION = {"ready", "skipped_no_fulltext"}
 
@@ -5102,7 +5103,7 @@ class WeeklyPreparationService:
 
     def _week_payload(self, recommendations: dict[str, Any]) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": self.SCHEMA_VERSION,
             "week_start": recommendations["rotation_week_start"],
             "week_end": recommendations["rotation_week_end"],
             "status": "scheduled",
@@ -5118,20 +5119,24 @@ class WeeklyPreparationService:
     def _summary(self, state: dict[str, Any], recommendations: dict[str, Any]) -> dict[str, Any]:
         candidates = self.candidates(recommendations)
         pdf_limit = min(len(candidates), max(0, int(self.config.get("weekly_pdf_preparation_max_papers", 35))))
+        items = state.get("items", {}) if state.get("week_start") == recommendations.get("rotation_week_start") else {}
+        explanation_candidates = [
+            paper for paper in candidates[:pdf_limit]
+            if items.get(paper["id"], {}).get("fulltext_available")
+        ]
         explanation_limit = min(
-            pdf_limit,
+            len(explanation_candidates),
             max(0, int(self.config.get("weekly_explanation_preparation_max_papers", 10))),
         )
-        items = state.get("items", {}) if state.get("week_start") == recommendations.get("rotation_week_start") else {}
         pdf_ready = sum(items.get(paper["id"], {}).get("pdf_status") == "ready" for paper in candidates[:pdf_limit])
         pdf_checked = sum(items.get(paper["id"], {}).get("pdf_status") in self.TERMINAL_PDF for paper in candidates[:pdf_limit])
         explanation_ready = sum(
             items.get(paper["id"], {}).get("explanation_status") == "ready"
-            for paper in candidates[:explanation_limit]
+            for paper in explanation_candidates[:explanation_limit]
         )
         explanation_checked = sum(
             items.get(paper["id"], {}).get("explanation_status") in self.TERMINAL_EXPLANATION
-            for paper in candidates[:explanation_limit]
+            for paper in explanation_candidates[:explanation_limit]
         )
         return {
             "enabled": bool(self.config.get("weekly_preparation_enabled", True)),
@@ -5160,6 +5165,8 @@ class WeeklyPreparationService:
         if not self.config.get("weekly_preparation_enabled", True):
             return False
         state = self._read()
+        if int(state.get("schema_version", 0) or 0) != self.SCHEMA_VERSION:
+            return True
         if state.get("week_start") != recommendations.get("rotation_week_start"):
             return True
         if state.get("status") == "running":
@@ -5201,17 +5208,13 @@ class WeeklyPreparationService:
         payload = recommendations or self.recommendation_loader()
         candidates = self.candidates(payload)
         pdf_limit = min(len(candidates), max(0, int(self.config.get("weekly_pdf_preparation_max_papers", 35))))
-        explanation_limit = min(
-            pdf_limit,
-            max(0, int(self.config.get("weekly_explanation_preparation_max_papers", 10))),
-        )
         delay = max(0, int(self.config.get("weekly_preparation_delay_seconds", 3)))
         with self._lock:
             state = self._read()
             if state.get("week_start") != payload.get("rotation_week_start"):
                 state = self._week_payload(payload)
             now = utc_now().isoformat()
-            state.update({"status": "running", "started_at": state.get("started_at") or now, "last_attempt_at": now, "updated_at": now, "error": ""})
+            state.update({"schema_version": self.SCHEMA_VERSION, "status": "running", "started_at": state.get("started_at") or now, "last_attempt_at": now, "updated_at": now, "error": ""})
             self._write(state)
 
         for paper in candidates[:pdf_limit]:
@@ -5239,7 +5242,15 @@ class WeeklyPreparationService:
             if delay:
                 time.sleep(delay)
 
-        for paper in candidates[:explanation_limit]:
+        explanation_candidates = [
+            paper for paper in candidates[:pdf_limit]
+            if state.get("items", {}).get(paper["id"], {}).get("fulltext_available")
+        ]
+        explanation_limit = min(
+            len(explanation_candidates),
+            max(0, int(self.config.get("weekly_explanation_preparation_max_papers", 10))),
+        )
+        for paper in explanation_candidates[:explanation_limit]:
             paper_id = paper["id"]
             item = state.setdefault("items", {}).setdefault(paper_id, {"title": paper.get("title", "")})
             current = self.store.get_paper(paper_id) or paper
