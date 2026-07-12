@@ -60,7 +60,7 @@ SETTINGS_PATH = Path(os.environ.get("PAPERFIELD_SETTINGS_PATH", DATA_DIR / "sett
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
 INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", ROOT / "institutions.json")).expanduser().resolve()
-APP_VERSION = "0.12.5"
+APP_VERSION = "0.12.6"
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
 RECOMMENDATION_WEIGHT_KEYS = (
@@ -4021,6 +4021,7 @@ class PaperAssetService:
         self.cloud = cloud
         self.settings = settings or RuntimeSettings()
         self._lock = threading.RLock()
+        self._pdf_restore_locks: dict[str, threading.Lock] = {}
         self.settings.pdf_dir.mkdir(parents=True, exist_ok=True)
         FULLTEXT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -4433,19 +4434,43 @@ class PaperAssetService:
             "error": value.get("error_text", ""),
         }
 
+    def _pdf_restore_lock(self, paper_id: str) -> threading.Lock:
+        cache_key = self._cache_key(paper_id)
+        with self._lock:
+            lock = self._pdf_restore_locks.get(cache_key)
+            if lock is None:
+                lock = threading.Lock()
+                self._pdf_restore_locks[cache_key] = lock
+            return lock
+
     def pdf_path(self, paper_id: str) -> Path | None:
         asset = self.store.get_asset(paper_id) or {}
         path = Path(asset.get("local_pdf_path", "")) if asset.get("local_pdf_path") else None
         if path and path.exists():
             return path
         cloud_key = asset.get("cloud_pdf_key", "")
-        if cloud_key and self.cloud.configured:
+        if not cloud_key or not self.cloud.configured:
+            return None
+
+        # Multiple range requests can arrive before a cloud-only PDF reaches the cache.
+        # Restore it once, then let every request share the completed local file.
+        with self._pdf_restore_lock(paper_id):
+            asset = self.store.get_asset(paper_id) or {}
+            path = Path(asset.get("local_pdf_path", "")) if asset.get("local_pdf_path") else None
+            if path and path.exists():
+                return path
+            cloud_key = asset.get("cloud_pdf_key", "")
+            if not cloud_key or not self.cloud.configured:
+                return None
             target = self.settings.pdf_dir / f"{self._cache_key(paper_id)}.pdf"
+            if target.exists() and target.stat().st_size > 4:
+                self.store.save_asset(paper_id, {"local_pdf_path": str(target)})
+                self._prune_pdf_cache(target)
+                return target
             self.cloud.download(cloud_key, target)
             self.store.save_asset(paper_id, {"local_pdf_path": str(target)})
             self._prune_pdf_cache(target)
             return target
-        return None
 
     def _text_path(self, paper_id: str, asset: dict[str, Any]) -> Path | None:
         path = Path(asset.get("local_text_path", "")) if asset.get("local_text_path") else None

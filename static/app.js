@@ -12,6 +12,7 @@ const state = {
   readerAsset: null,
   readerPdfObjectUrl: "",
   readerPdfDocument: null,
+  readerPdfLoadingTask: null,
   readerPdfObserver: null,
   readerPdfToken: 0,
   status: "",
@@ -61,6 +62,7 @@ const SCORE_WEIGHT_PRESETS = {
 
 const el = (id) => document.getElementById(id);
 const NGROK_BYPASS_HEADERS = { "ngrok-skip-browser-warning": "paperfield" };
+const PDF_LOAD_TIMEOUT_MS = 90000;
 if (globalThis.pdfjsLib) globalThis.pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.min.js?v=3.11.174";
 
 const escapeHtml = (value = "") => String(value)
@@ -1324,9 +1326,10 @@ function setReaderTab(tab) {
   });
 }
 
-function setPdfStatus(title, detail = "") {
+function setPdfStatus(title, detail = "", retry = false) {
   el("pdfStatus").hidden = false;
   el("pdfStatus").innerHTML = `<strong>${escapeHtml(title)}</strong>${detail ? `<span>${escapeHtml(detail)}</span>` : ""}`;
+  el("pdfRetryButton").hidden = !retry;
   el("pdfFrame").hidden = true;
   el("pdfActions").hidden = true;
   el("pdfUnavailable").hidden = true;
@@ -1336,6 +1339,9 @@ function releaseReaderPdf() {
   state.readerPdfToken += 1;
   state.readerPdfObserver?.disconnect();
   state.readerPdfObserver = null;
+  const loadingTask = state.readerPdfLoadingTask;
+  state.readerPdfLoadingTask = null;
+  if (loadingTask?.destroy) Promise.resolve(loadingTask.destroy()).catch(() => {});
   const documentTask = state.readerPdfDocument;
   state.readerPdfDocument = null;
   if (documentTask?.destroy) Promise.resolve(documentTask.destroy()).catch(() => {});
@@ -1344,6 +1350,7 @@ function releaseReaderPdf() {
   el("pdfFrame").src = "about:blank";
   el("pdfFrame").hidden = true;
   el("pdfActions").hidden = true;
+  el("pdfRetryButton").hidden = true;
   el("pdfOpenButton").href = "#";
   if (state.readerPdfObjectUrl) URL.revokeObjectURL(state.readerPdfObjectUrl);
   state.readerPdfObjectUrl = "";
@@ -1379,10 +1386,30 @@ async function renderPdfPage(pdfDocument, pageNumber, shell, token) {
   }
 }
 
-async function renderPdfDocument(blob, token) {
+async function renderPdfDocument(url, token) {
   if (!globalThis.pdfjsLib) return false;
-  const loadingTask = globalThis.pdfjsLib.getDocument({ data: new Uint8Array(await blob.arrayBuffer()) });
-  const pdfDocument = await loadingTask.promise;
+  const loadingTask = globalThis.pdfjsLib.getDocument({
+    url,
+    httpHeaders: NGROK_BYPASS_HEADERS,
+    withCredentials: true,
+    rangeChunkSize: 256 * 1024,
+  });
+  state.readerPdfLoadingTask = loadingTask;
+  let timedOut = false;
+  const timeout = window.setTimeout(() => {
+    timedOut = true;
+    if (state.readerPdfLoadingTask === loadingTask) loadingTask.destroy();
+  }, PDF_LOAD_TIMEOUT_MS);
+  let pdfDocument;
+  try {
+    pdfDocument = await loadingTask.promise;
+  } catch (error) {
+    if (timedOut) throw new Error("从云端读取 PDF 超时，请检查网络后重试。");
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+    if (state.readerPdfLoadingTask === loadingTask) state.readerPdfLoadingTask = null;
+  }
   if (state.readerPdfToken !== token) {
     await pdfDocument.destroy();
     return true;
@@ -1412,51 +1439,38 @@ async function renderPdfDocument(blob, token) {
   return true;
 }
 
+function pdfLoadErrorMessage(error) {
+  const message = String(error?.message || error || "未知错误");
+  if (/401/.test(message)) {
+    const next = `${window.location.pathname}${window.location.search}`;
+    window.location.replace(`/login?next=${encodeURIComponent(next)}`);
+    return "登录已失效，正在返回登录页。";
+  }
+  if (/timeout|超时/i.test(message)) return "从云端读取超时。网络稳定后可点击重试。";
+  if (/503|network|fetch|unexpected server response/i.test(message)) {
+    return "云端 PDF 暂时无法读取。请稍后重试；服务会自动复用已恢复的本地缓存。";
+  }
+  return `PDF 载入失败：${message.slice(0, 160)}`;
+}
+
 async function loadReaderPdf(asset) {
   const requestedPaperId = asset.paper_id;
   releaseReaderPdf();
   const token = state.readerPdfToken;
   setPdfStatus("正在载入 PDF", asset.cloud_available && !asset.local_cached ? "正在从云端读取" : "正在读取已缓存文件");
   try {
-    const response = await fetch(asset.pdf_url, {
-      credentials: "same-origin",
-      headers: { Accept: "application/pdf", ...NGROK_BYPASS_HEADERS },
-    });
-    if (response.status === 401) {
-      const next = `${window.location.pathname}${window.location.search}`;
-      window.location.replace(`/login?next=${encodeURIComponent(next)}`);
-      return;
-    }
-    if (!response.ok) {
-      const raw = await response.text();
-      let message = `PDF 读取失败：${response.status}`;
-      try { message = JSON.parse(raw).error || message; } catch {
-        if (raw.includes("ERR_NGROK_6024")) message = "ngrok 访问确认页拦截了 PDF 请求";
-      }
-      throw new Error(message);
-    }
-    const blob = await response.blob();
-    const signature = new TextDecoder("ascii").decode(await blob.slice(0, 5).arrayBuffer());
-    if (!signature.startsWith("%PDF")) throw new Error("服务返回的内容不是有效 PDF");
     if (!el("readerDialog").open || state.readerPaper?.id !== requestedPaperId || state.readerPdfToken !== token) return;
-    const pdfBlob = blob.type === "application/pdf" ? blob : new Blob([blob], { type: "application/pdf" });
-    state.readerPdfObjectUrl = URL.createObjectURL(pdfBlob);
-    el("pdfOpenButton").href = state.readerPdfObjectUrl;
-    let renderedWithPdfJs = false;
-    try {
-      renderedWithPdfJs = await renderPdfDocument(pdfBlob, token);
-    } catch (error) {
-      console.warn("PDF.js rendering failed, using the browser viewer", error);
-    }
-    if (!renderedWithPdfJs) {
-      el("pdfFrame").src = `${state.readerPdfObjectUrl}#view=FitH`;
-      el("pdfFrame").hidden = false;
-    }
+    el("pdfOpenButton").href = asset.pdf_url;
+    const renderedWithPdfJs = await renderPdfDocument(asset.pdf_url, token);
+    if (!renderedWithPdfJs) throw new Error("当前浏览器无法启动 PDF 阅读器");
+    if (!el("readerDialog").open || state.readerPaper?.id !== requestedPaperId || state.readerPdfToken !== token) return;
     el("pdfStatus").hidden = true;
+    el("pdfRetryButton").hidden = true;
     el("pdfUnavailable").hidden = true;
     el("pdfActions").hidden = false;
   } catch (error) {
-    setPdfStatus("PDF 载入失败", error.message);
+    if (!el("readerDialog").open || state.readerPdfToken !== token) return;
+    setPdfStatus("PDF 载入失败", pdfLoadErrorMessage(error), true);
   }
 }
 
@@ -2142,6 +2156,7 @@ function bindEvents() {
   });
   document.querySelectorAll("[data-reader-tab]").forEach((button) => button.addEventListener("click", () => setReaderTab(button.dataset.readerTab)));
   el("readerCacheButton").addEventListener("click", () => state.readerPaper && resolveReaderAsset(state.readerPaper, true));
+  el("pdfRetryButton").addEventListener("click", () => state.readerAsset && loadReaderPdf(state.readerAsset));
   el("readerImportButton").addEventListener("click", () => confirmSharedPdfUpload() && el("readerPdfInput").click());
   el("pdfUnavailableImportButton").addEventListener("click", () => confirmSharedPdfUpload() && el("readerPdfInput").click());
   el("readerPdfInput").addEventListener("change", () => importReaderPdf(el("readerPdfInput").files?.[0]));

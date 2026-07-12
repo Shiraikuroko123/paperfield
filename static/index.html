@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="具身智能与大模型论文、开源项目每周研究工作台">
   <title>Paperfield</title>
-  <link rel="stylesheet" href="/styles.css?v=0.12.5">
+  <link rel="stylesheet" href="/styles.css?v=0.12.6">
 </head>
 <body>
   <div class="app-shell">
@@ -210,6 +210,7 @@
             <strong>正在寻找公开 PDF</strong>
             <span>依次检查公开来源与作者存档</span>
           </div>
+          <button class="pdf-retry-button" id="pdfRetryButton" type="button" hidden>重试读取</button>
           <div class="pdf-canvas-viewer" id="pdfCanvasViewer" hidden></div>
           <iframe id="pdfFrame" title="论文 PDF 阅读器" hidden></iframe>
           <div class="pdf-unavailable" id="pdfUnavailable" hidden>
@@ -375,6 +376,6 @@
 
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
   <script src="/vendor/pdfjs/pdf.min.js?v=3.11.174"></script>
-  <script src="/app.js?v=0.12.5" defer></script>
+  <script src="/app.js?v=0.12.6" defer></script>
 </body>
 </html>

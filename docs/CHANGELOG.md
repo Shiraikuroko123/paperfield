@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.6
+
+- Fixed shared cloud-PDF reading for the beta service: legacy cache paths are migrated into the active profile at startup, and concurrent reader requests now share one cloud restore instead of competing for the same temporary file.
+- Switched the embedded PDF reader to authenticated PDF.js range loading, so remote clients can render the first page without waiting for a full cloud PDF download; added a timeout and an explicit retry action.
+
 ## 0.12.5
 
 - Fixed topic navigation so 具身智能、大语言模型 and 多模态 open their complete filtered paper streams rather than the small weekly recommendation subset.

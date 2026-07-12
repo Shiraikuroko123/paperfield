@@ -537,6 +537,54 @@ class FeedTests(unittest.TestCase):
         self.assertTrue(APP.PaperAssetService._try_remove(removable))
         removable.unlink.assert_called_once_with(missing_ok=True)
 
+    def test_cloud_pdf_restore_is_single_flight_for_concurrent_reader_requests(self):
+        class FakeCloud:
+            configured = True
+
+            def __init__(self):
+                self.calls = 0
+                self.started = threading.Event()
+                self.release = threading.Event()
+
+            def download(self, key, target):
+                self.calls += 1
+                self.started.set()
+                self.release.wait(3)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"%PDF-restored")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = APP.PaperStore(root / "papers.db")
+            settings = APP.RuntimeSettings(root / "settings.json")
+            settings.update({"local_pdf_dir": str(root / "pdfs")}, cloud_configured=True)
+            cloud = FakeCloud()
+            assets = APP.PaperAssetService(store, cloud, settings)
+            store.save_asset("paper", {"cloud_pdf_key": "papers/paper.pdf", "storage_mode": "cloud"})
+            results = []
+            errors = []
+
+            def restore():
+                try:
+                    results.append(assets.pdf_path("paper"))
+                except Exception as error:
+                    errors.append(error)
+
+            first = threading.Thread(target=restore)
+            second = threading.Thread(target=restore)
+            first.start()
+            self.assertTrue(cloud.started.wait(2))
+            second.start()
+            time.sleep(0.05)
+            cloud.release.set()
+            first.join(3)
+            second.join(3)
+
+            self.assertFalse(errors)
+            self.assertEqual(cloud.calls, 1)
+            self.assertEqual(len(results), 2)
+            self.assertTrue(all(path and path.exists() for path in results))
+
     def test_cloud_operations_are_counted_and_inventory_is_recorded(self):
         class FakeBody(io.BytesIO):
             pass
