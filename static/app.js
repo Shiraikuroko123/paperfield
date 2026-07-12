@@ -91,10 +91,25 @@ function escapedTextMarkup(value = "") {
 function normalizedLegacyEquation(expression) {
   return expression
     .trim()
+    .replaceAll("−", "-")
+    .replaceAll("–", "-")
+    .replaceAll("…", "\\ldots ")
+    .replaceAll("∏", "\\prod ")
+    .replaceAll("∑", "\\sum ")
+    .replaceAll("∫", "\\int ")
+    .replaceAll("×", "\\times ")
+    .replaceAll("÷", "\\div ")
+    .replaceAll("ᵀ", "^{\\mathsf{T}}")
+    .replaceAll("⊤", "^{\\mathsf{T}}")
     .replace(/([A-Za-zΑ-Ωα-ω])_([A-Za-z0-9]+)/g, "$1_{$2}")
+    .replace(/(^|[^_{A-Za-z0-9])([A-Za-z])([ijk]{2})(?=[^A-Za-z0-9]|$)/g, "$1$2_{$3}")
+    .replace(/(^|[^_{A-Za-z0-9])([A-Za-z])([ijk])(?=[^A-Za-z0-9]|$)/g, "$1$2_{$3}")
+    .replace(/\b([A-Za-z])(\d)(?=[^A-Za-z0-9]|$)/g, "$1_{$2}")
     .replace(/log(\d+)/g, "\\log_{$1}")
     .replace(/\bmax\b/g, "\\max")
-    .replaceAll("·", "\\cdot ");
+    .replaceAll("·", "\\cdot ")
+    .replace(/\\prod\s*([A-Za-z0-9])/g, "\\prod_{$1}")
+    .replace(/\\sum\s*([A-Za-z0-9])/g, "\\sum_{$1}");
 }
 
 function findUnescapedDelimiter(text, delimiter, from) {
@@ -130,14 +145,16 @@ function mathExpressionMarkup(expression, displayMode) {
 
 function legacyEquationTextMarkup(value = "") {
   const text = String(value);
-  const pattern = /([A-Za-zΑ-Ωα-ωΔλρπτθΩ][A-Za-z0-9_{}^\\α-ωΑ-ΩΔλρπτθΩ()|,+\-*/=·. ]*\s*(?:=|≈|≠|≤|≥|∈|∝|→|←)\s*[A-Za-z0-9_{}^\\α-ωΑ-ΩΔλρπτθΩ()|,+\-*/=·. ]+)/g;
+  const pattern = /([A-Za-z0-9Α-ω\\∏∑∫√∞∂∇][^\u3400-\u9fff，。；、！？\r\n]*?(?:=|≈|≠|≤|≥|∈|∉|∝|→|←)[^\u3400-\u9fff，。；、！？\r\n]+)/g;
   let markup = "";
   let textStart = 0;
 
   for (const match of text.matchAll(pattern)) {
     const index = match.index || 0;
+    const equation = normalizedLegacyEquation(match[0]);
+    const displayMode = equation.length > 34 || /\\(?:prod|sum|int)\b/.test(equation) || equation.includes("|");
     markup += escapedTextMarkup(text.slice(textStart, index));
-    markup += mathExpressionMarkup(normalizedLegacyEquation(match[0]), false);
+    markup += mathExpressionMarkup(equation, displayMode);
     textStart = index + match[0].length;
   }
   return `${markup}${escapedTextMarkup(text.slice(textStart))}`;
