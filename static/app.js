@@ -4,6 +4,8 @@ const state = {
   weeklyProjects: [],
   weeklyProjectCandidateTotal: 0,
   weeklyKind: "papers",
+  weeklyPreparation: null,
+  weeklyPreparationPoll: null,
   selectedId: null,
   selectedProject: null,
   readerPaper: null,
@@ -191,6 +193,7 @@ function applyViewMode() {
   el("streamTitle").textContent = projectMode ? "GitHub 项目" : recommendedMode ? "每周精选" : "论文流";
   el("loadMoreButton").textContent = projectMode ? "加载更多项目" : "加载更多论文";
   el("weeklyKindTabs").hidden = !recommendedMode;
+  el("weeklyPreparation").hidden = !recommendedMode || state.weeklyKind !== "papers" || !state.weeklyPreparation;
   el("readingStatusTabs").hidden = projectMode || recommendedMode;
   document.querySelectorAll("[data-weekly-kind]").forEach((button) => {
     const active = button.dataset.weeklyKind === state.weeklyKind;
@@ -198,7 +201,7 @@ function applyViewMode() {
     button.setAttribute("aria-selected", String(active));
   });
   el("overviewTitle").textContent = projectMode ? "今天有哪些项目在更新" : recommendedMode ? "本周先读与复现" : "今天值得读什么";
-  el("overviewMessage").textContent = projectMode ? "跟踪具身智能与大模型开源仓库，并连接对应论文。" : recommendedMode ? "按自然周筛选论文与开源项目，同一周保持稳定。" : "浏览全部公开论文元数据与来源。";
+  el("overviewMessage").textContent = projectMode ? "开源仓库变更与论文关联信号" : recommendedMode ? "自然周研究队列 · 资料后台预处理" : "公开论文元数据与阅读状态";
   el("statTotalLabel").textContent = projectMode ? "GitHub 项目" : recommendedMode ? "论文精选" : "收录论文";
   el("statUnreadLabel").textContent = projectMode ? "今日更新" : recommendedMode ? "候选论文" : "未读";
   el("statFavoriteLabel").textContent = projectMode ? "论文关联" : recommendedMode ? "项目精选" : "已收藏";
@@ -680,6 +683,7 @@ async function loadPapers({ preserveSelection = true, append = false } = {}) {
       state.papers = payload.items;
       state.weeklyProjects = projectPayload.items;
       state.weeklyProjectCandidateTotal = projectPayload.candidate_total;
+      updateWeeklyPreparation(payload.preparation);
       el("weeklyPaperCount").textContent = payload.total;
       el("weeklyProjectCount").textContent = projectPayload.total;
       state.total = payload.total;
@@ -717,6 +721,43 @@ async function loadPapers({ preserveSelection = true, append = false } = {}) {
     el("emptyState").querySelector("strong").textContent = "论文列表加载失败";
     el("emptyState").querySelector("p").textContent = error.message;
     toast(error.message, true);
+  }
+}
+
+function weeklyPreparationText(preparation) {
+  if (!preparation?.enabled) return { label: "自动备课已关闭", detail: "" };
+  const pdf = `${preparation.pdf_ready}/${preparation.pdf_target} PDF`;
+  const explanations = `${preparation.explanation_ready}/${preparation.explanation_target} 精读`;
+  if (preparation.running) return { label: "本周资料准备中", detail: `${pdf} · ${explanations}` };
+  if (preparation.status === "completed") return { label: "本周资料已就绪", detail: `${pdf} · ${explanations}` };
+  if (preparation.status === "partial") return { label: "本周资料部分就绪", detail: `${pdf} · ${explanations}` };
+  return { label: "本周资料已排队", detail: `${pdf} · ${explanations}` };
+}
+
+function updateWeeklyPreparation(preparation, rerender = false) {
+  state.weeklyPreparation = preparation || null;
+  const status = el("weeklyPreparation");
+  status.hidden = state.view !== "recommended" || state.weeklyKind !== "papers" || !preparation;
+  if (!preparation) return;
+  const text = weeklyPreparationText(preparation);
+  status.dataset.state = preparation.running ? "running" : preparation.status || "scheduled";
+  el("weeklyPreparationLabel").textContent = text.label;
+  el("weeklyPreparationDetail").textContent = text.detail;
+  status.title = preparation.current_title ? `正在处理：${preparation.current_title}` : `更新于 ${preparation.updated_at || "尚未开始"}`;
+  for (const paper of state.papers) paper.weekly_preparation = preparation.items?.[paper.id] || paper.weekly_preparation || {};
+  if (rerender && state.view === "recommended" && state.weeklyKind === "papers") renderPapers();
+  if (state.weeklyPreparationPoll) window.clearInterval(state.weeklyPreparationPoll);
+  state.weeklyPreparationPoll = null;
+  if (preparation.running) {
+    state.weeklyPreparationPoll = window.setInterval(async () => {
+      try {
+        const next = await api("/api/weekly-preparation");
+        updateWeeklyPreparation(next, true);
+      } catch (error) {
+        window.clearInterval(state.weeklyPreparationPoll);
+        state.weeklyPreparationPoll = null;
+      }
+    }, 5000);
   }
 }
 
@@ -761,7 +802,7 @@ function renderPapers() {
         <button class="favorite-toggle${paper.favorite ? " is-active" : ""}" type="button" aria-label="${paper.favorite ? "取消收藏" : "收藏论文"}" data-favorite>${paper.favorite ? "★" : "☆"}</button>
         <strong>${Math.round(paper.recommendation_score ?? paper.quality_score)}</strong>
         <span>${paper.is_recommended ? "精选分" : "推荐分"}</span>
-        ${paper.is_recommended ? `<b class="pdf-state ${paper.fulltext_cached ? "is-ready" : ""}">${paper.fulltext_cached ? "全文已缓存" : paper.pdf_cached ? "PDF 已缓存" : "点击查找 PDF"}</b>` : ""}
+        ${paper.is_recommended ? weeklyPaperAssetStatus(paper) : ""}
       </div>`;
     row.addEventListener("click", (event) => {
       if (event.target.closest("[data-favorite]")) return;
@@ -785,6 +826,29 @@ function renderPapers() {
     list.append(group);
     state.weeklyProjects.forEach((project) => list.append(createProjectRow(project, true)));
   }
+}
+
+function weeklyPaperAssetStatus(paper) {
+  const preparation = paper.weekly_preparation || {};
+  let label = "等待预处理";
+  let stateClass = "";
+  if (preparation.explanation_status === "ready") {
+    label = "全文精读已就绪";
+    stateClass = "is-ready";
+  } else if (preparation.fulltext_available || paper.fulltext_cached) {
+    label = "全文已缓存";
+    stateClass = "is-cached";
+  } else if (preparation.pdf_status === "ready" || paper.pdf_cached) {
+    label = "PDF 已缓存";
+    stateClass = "is-cached";
+  } else if (preparation.pdf_status === "unavailable") {
+    label = "暂无公开 PDF";
+    stateClass = "is-unavailable";
+  } else if (state.weeklyPreparation?.running && state.weeklyPreparation.current_paper_id === paper.id) {
+    label = "后台准备中";
+    stateClass = "is-running";
+  }
+  return `<b class="pdf-state ${stateClass}">${label}</b>`;
 }
 
 async function toggleFavorite(event, paper) {

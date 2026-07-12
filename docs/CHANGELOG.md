@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.0
+
+- Added a natural-week preparation queue that resolves public PDFs for weekly picks and pre-generates a configurable number of full-text readings.
+- Added persistent preparation progress, retry backoff, per-paper readiness states, and automatic rotation when the next week begins.
+- Redesigned the research workspace around graphite operational surfaces, cold neutral reading fields, signal-green states, and denser technical typography.
+- Clarified that active CC Switch changes affect new model requests while existing generated readings and chats remain unchanged.
+
 ## 0.10.4
 
 - Separated private runtime state into the ignored `local/` directory while retaining legacy `.env` and `data/` compatibility.

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="具身智能与大模型论文、开源项目每周研究工作台">
   <title>Paperfield</title>
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=0.11.0">
 </head>
 <body>
   <div class="app-shell">
@@ -14,7 +14,7 @@
         <div class="brand-mark" aria-hidden="true">P</div>
         <div>
           <strong>Paperfield</strong>
-          <span>研究工作台</span>
+          <span>RESEARCH OS</span>
         </div>
       </div>
 
@@ -53,7 +53,7 @@
           <span class="sync-dot" id="syncDot"></span>
           <div><strong id="syncTitle">等待更新</strong><small id="syncTime">尚未同步</small></div>
         </div>
-        <p>数据来自公开学术元数据，AI 讲解与原摘要分开展示。</p>
+        <p>OPEN ACCESS · LOCAL FIRST</p>
       </div>
     </aside>
 
@@ -118,6 +118,11 @@
               <button class="is-active" data-weekly-kind="papers" role="tab" aria-selected="true">论文精选 <b id="weeklyPaperCount">0</b></button>
               <button data-weekly-kind="projects" role="tab" aria-selected="false">项目精选 <b id="weeklyProjectCount">0</b></button>
             </div>
+            <div class="weekly-preparation" id="weeklyPreparation" aria-live="polite" hidden>
+              <span class="weekly-preparation-signal"></span>
+              <strong id="weeklyPreparationLabel">本周资料待准备</strong>
+              <small id="weeklyPreparationDetail"></small>
+            </div>
             <div class="status-tabs" id="readingStatusTabs" role="group" aria-label="阅读状态">
               <button class="is-active" data-status="">全部</button>
               <button data-status="unread">未读</button>
@@ -140,7 +145,7 @@
           <div class="reading-empty" id="readingEmpty">
             <span class="reading-monogram">Pf</span>
             <h2>选择一篇论文开始阅读</h2>
-            <p>这里会显示摘要、作者、刊物、来源链接和中文讲解。使用 J / K 可以切换论文。</p>
+            <p>摘要、证据、全文精读与讨论记录会汇集在这里。</p>
           </div>
           <article id="paperDetail" hidden></article>
         </aside>
@@ -339,6 +344,6 @@
   </dialog>
 
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
-  <script src="/app.js" defer></script>
+  <script src="/app.js?v=0.11.0" defer></script>
 </body>
 </html>

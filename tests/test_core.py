@@ -232,6 +232,125 @@ class FeedTests(unittest.TestCase):
         self.assertEqual([item[1]["id"] for item in first], [item[1]["id"] for item in repeated])
         self.assertTrue({item[1]["id"] for item in first}.isdisjoint({item[1]["id"] for item in next_week}))
 
+    def test_weekly_preparation_round_robins_topics_and_generates_fulltext_explanations(self):
+        recommendations = {
+            "rotation_week_start": "2026-07-06",
+            "rotation_week_end": "2026-07-12",
+            "groups": [
+                {"items": [{"id": "a1", "title": "A1"}, {"id": "a2", "title": "A2"}]},
+                {"items": [{"id": "b1", "title": "B1"}, {"id": "b2", "title": "B2"}]},
+            ],
+        }
+
+        class FakeStore:
+            def __init__(self):
+                self.papers = {paper_id: {"id": paper_id, "title": paper_id, "explanation": None} for paper_id in ("a1", "b1")}
+
+            def get_paper(self, paper_id):
+                return self.papers[paper_id]
+
+            def save_explanation(self, paper_id, explanation):
+                self.papers[paper_id]["explanation"] = explanation
+
+        class FakeAssets:
+            def prepare(self, paper):
+                return {"pdf_available": True, "fulltext_available": True, "provider": "arXiv", "page_count": 12}
+
+            def fulltext(self, paper_id):
+                return f"full text for {paper_id}"
+
+            def reading_notes(self, paper_id, fulltext):
+                return None
+
+            def save_reading_notes(self, paper_id, fulltext, notes):
+                pass
+
+        class FakeExplainer:
+            def connection(self):
+                return {"provider": "test"}
+
+            def explain(self, paper, fulltext, notes, callback):
+                callback([{"method": [paper["id"]]}])
+                return {"mode": "ai", "reading_basis": "fulltext", "provider": "test", "model": "test-model"}
+
+        class FakeArchive:
+            def __init__(self):
+                self.paper_ids = []
+
+            def backup_paper_async(self, paper_id):
+                self.paper_ids.append(paper_id)
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = FakeStore()
+            archive = FakeArchive()
+            service = APP.WeeklyPreparationService(
+                store,
+                FakeAssets(),
+                FakeExplainer(),
+                archive,
+                {
+                    "weekly_preparation_enabled": True,
+                    "weekly_pdf_preparation_max_papers": 2,
+                    "weekly_explanation_preparation_max_papers": 2,
+                    "weekly_preparation_delay_seconds": 0,
+                },
+                Path(directory) / "weekly.json",
+                lambda: recommendations,
+            )
+            result = service.run(recommendations)
+
+        self.assertEqual([paper["id"] for paper in service.candidates(recommendations)], ["a1", "b1", "a2", "b2"])
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["pdf_ready"], 2)
+        self.assertEqual(result["explanation_ready"], 2)
+        self.assertEqual(archive.paper_ids, ["a1", "b1"])
+
+    def test_weekly_selection_stays_frozen_when_asset_scores_change(self):
+        today = APP.utc_now().date()
+        week_start = today - timedelta(days=today.weekday())
+        calls = []
+
+        class FakeStore:
+            def list_papers(self):
+                return [{"id": paper_id, "title": paper_id, "topics": ["topic"]} for paper_id in ("a", "b", "c")]
+
+            def assets_for_papers(self, paper_ids):
+                return {"a": {"local_pdf_path": "cached.pdf", "text_chars": 10000}}
+
+        def ranking_loader(topic, per_topic):
+            calls.append(len(calls))
+            ids = ("a", "b") if len(calls) == 1 else ("c", "b")
+            items = [
+                {
+                    "id": paper_id,
+                    "recommendation_topic": "topic",
+                    "recommendation_score": 90 - index,
+                    "score_breakdown": [],
+                }
+                for index, paper_id in enumerate(ids)
+            ]
+            return {
+                "groups": [{"topic": "topic", "items": items}],
+                "window_days": 45,
+                "rotation_week_start": week_start.isoformat(),
+                "rotation_week_end": (week_start + timedelta(days=6)).isoformat(),
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            service = APP.WeeklySelectionService(
+                FakeStore(),
+                {"daily_recommendations_per_topic": 2, "recommendation_window_days": 45},
+                Path(directory) / "selection.json",
+                ranking_loader,
+            )
+            first = service.get()
+            repeated = service.get()
+
+        self.assertEqual([paper["id"] for paper in first["items"]], ["a", "b"])
+        self.assertEqual([paper["id"] for paper in repeated["items"]], ["a", "b"])
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(first["items"][0]["fulltext_cached"])
+
     def test_runtime_settings_persist_pdf_directory_cache_and_billing_day(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

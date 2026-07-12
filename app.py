@@ -59,7 +59,7 @@ SETTINGS_PATH = Path(os.environ.get("PAPERFIELD_SETTINGS_PATH", DATA_DIR / "sett
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
 INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", ROOT / "institutions.json")).expanduser().resolve()
-APP_VERSION = "0.10.4"
+APP_VERSION = "0.11.0"
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
 
@@ -4863,6 +4863,7 @@ def scheduler_loop() -> None:
                 due = True
         if due:
             refresh_in_background()
+        WEEKLY_PREPARATION.start()
         time.sleep(300)
 
 
@@ -4947,6 +4948,376 @@ def daily_recommendations(topic: str = "", per_topic: int | None = None) -> dict
         "weights": CONFIG.get("recommendation_weights", {}),
         "generated_at": utc_now().isoformat(),
     }
+
+
+class WeeklySelectionService:
+    def __init__(self, store: PaperStore, config: dict[str, Any], path: Path, ranking_loader: Any) -> None:
+        self.store = store
+        self.config = config
+        self.path = path
+        self.ranking_loader = ranking_loader
+        self._lock = threading.RLock()
+
+    def _read(self) -> dict[str, Any]:
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except (OSError, ValueError, json.JSONDecodeError):
+            return {}
+
+    def _write(self, payload: dict[str, Any]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(self.path)
+
+    def _select(self, per_topic: int) -> dict[str, Any]:
+        ranked = self.ranking_loader("", per_topic)
+        state = {
+            "schema_version": 1,
+            "week_start": ranked["rotation_week_start"],
+            "week_end": ranked["rotation_week_end"],
+            "per_topic": per_topic,
+            "window_days": ranked["window_days"],
+            "selected_at": utc_now().isoformat(),
+            "groups": [],
+        }
+        for group in ranked["groups"]:
+            state["groups"].append(
+                {
+                    "topic": group["topic"],
+                    "items": [
+                        {
+                            "id": paper["id"],
+                            "recommendation_topic": paper["recommendation_topic"],
+                            "recommendation_score": paper["recommendation_score"],
+                            "score_breakdown": paper["score_breakdown"],
+                        }
+                        for paper in group["items"]
+                    ],
+                }
+            )
+        self._write(state)
+        return state
+
+    def get(self, topic: str = "", per_topic: int | None = None) -> dict[str, Any]:
+        configured_limit = max(1, min(10, int(self.config.get("daily_recommendations_per_topic", 5))))
+        requested_limit = max(1, min(configured_limit, per_topic or configured_limit))
+        today = utc_now().date()
+        week_start = (today - timedelta(days=today.weekday())).isoformat()
+        with self._lock:
+            state = self._read()
+            if state.get("week_start") != week_start or int(state.get("per_topic", 0) or 0) != configured_limit:
+                state = self._select(configured_limit)
+
+        papers = {paper["id"]: paper for paper in self.store.list_papers()}
+        ids = [item["id"] for group in state.get("groups", []) for item in group.get("items", [])]
+        assets = self.store.assets_for_papers(ids)
+        groups = []
+        items = []
+        for saved_group in state.get("groups", []):
+            if topic and saved_group.get("topic") != topic:
+                continue
+            selected = []
+            for saved in saved_group.get("items", [])[:requested_limit]:
+                paper = papers.get(saved["id"])
+                if not paper:
+                    continue
+                asset = assets.get(saved["id"])
+                item = {
+                    **paper,
+                    **saved,
+                    "is_recommended": True,
+                    "pdf_cached": bool(asset and asset.get("local_pdf_path")),
+                    "fulltext_cached": bool(asset and int(asset.get("text_chars", 0) or 0) > 1000),
+                }
+                selected.append(item)
+                items.append(item)
+            groups.append({"topic": saved_group.get("topic", ""), "items": selected, "count": len(selected)})
+        return {
+            "items": items,
+            "groups": groups,
+            "total": len(items),
+            "per_topic": requested_limit,
+            "window_days": int(state.get("window_days", self.config.get("recommendation_window_days", 45))),
+            "rotation_week_start": state.get("week_start", week_start),
+            "rotation_week_end": state.get("week_end", ""),
+            "rotation_policy": "同一自然周冻结入选名单，下周重新排名",
+            "weights": self.config.get("recommendation_weights", {}),
+            "generated_at": state.get("selected_at", ""),
+        }
+
+
+class WeeklyPreparationService:
+    TERMINAL_PDF = {"ready", "unavailable"}
+    TERMINAL_EXPLANATION = {"ready", "skipped_no_fulltext"}
+
+    def __init__(
+        self,
+        store: PaperStore,
+        assets: PaperAssetService,
+        explainer: PaperExplainer,
+        archive: ReadingArchiveService,
+        config: dict[str, Any],
+        path: Path,
+        recommendation_loader: Any,
+    ) -> None:
+        self.store = store
+        self.assets = assets
+        self.explainer = explainer
+        self.archive = archive
+        self.config = config
+        self.path = path
+        self.recommendation_loader = recommendation_loader
+        self._lock = threading.RLock()
+        self._running = False
+
+    @staticmethod
+    def candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
+        groups = [group.get("items", []) for group in payload.get("groups", [])]
+        ordered: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for index in range(max((len(group) for group in groups), default=0)):
+            for group in groups:
+                if index >= len(group):
+                    continue
+                paper = group[index]
+                if paper.get("id") and paper["id"] not in seen:
+                    ordered.append(paper)
+                    seen.add(paper["id"])
+        return ordered
+
+    def _read(self) -> dict[str, Any]:
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except (OSError, ValueError, json.JSONDecodeError):
+            return {}
+
+    def _write(self, payload: dict[str, Any]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(self.path)
+
+    def _week_payload(self, recommendations: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "week_start": recommendations["rotation_week_start"],
+            "week_end": recommendations["rotation_week_end"],
+            "status": "scheduled",
+            "started_at": "",
+            "last_attempt_at": "",
+            "finished_at": "",
+            "updated_at": utc_now().isoformat(),
+            "current_paper_id": "",
+            "current_title": "",
+            "items": {},
+        }
+
+    def _summary(self, state: dict[str, Any], recommendations: dict[str, Any]) -> dict[str, Any]:
+        candidates = self.candidates(recommendations)
+        pdf_limit = min(len(candidates), max(0, int(self.config.get("weekly_pdf_preparation_max_papers", 35))))
+        explanation_limit = min(
+            pdf_limit,
+            max(0, int(self.config.get("weekly_explanation_preparation_max_papers", 10))),
+        )
+        items = state.get("items", {}) if state.get("week_start") == recommendations.get("rotation_week_start") else {}
+        pdf_ready = sum(items.get(paper["id"], {}).get("pdf_status") == "ready" for paper in candidates[:pdf_limit])
+        pdf_checked = sum(items.get(paper["id"], {}).get("pdf_status") in self.TERMINAL_PDF for paper in candidates[:pdf_limit])
+        explanation_ready = sum(
+            items.get(paper["id"], {}).get("explanation_status") == "ready"
+            for paper in candidates[:explanation_limit]
+        )
+        explanation_checked = sum(
+            items.get(paper["id"], {}).get("explanation_status") in self.TERMINAL_EXPLANATION
+            for paper in candidates[:explanation_limit]
+        )
+        return {
+            "enabled": bool(self.config.get("weekly_preparation_enabled", True)),
+            "running": self._running,
+            "status": state.get("status", "scheduled") if items else "scheduled",
+            "week_start": recommendations.get("rotation_week_start", ""),
+            "week_end": recommendations.get("rotation_week_end", ""),
+            "pdf_target": pdf_limit,
+            "pdf_ready": pdf_ready,
+            "pdf_checked": pdf_checked,
+            "explanation_target": explanation_limit,
+            "explanation_ready": explanation_ready,
+            "explanation_checked": explanation_checked,
+            "current_paper_id": state.get("current_paper_id", "") if items else "",
+            "current_title": state.get("current_title", "") if items else "",
+            "updated_at": state.get("updated_at", "") if items else "",
+            "items": items,
+        }
+
+    def status(self, recommendations: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = recommendations or self.recommendation_loader()
+        with self._lock:
+            return self._summary(self._read(), payload)
+
+    def _due(self, recommendations: dict[str, Any]) -> bool:
+        if not self.config.get("weekly_preparation_enabled", True):
+            return False
+        state = self._read()
+        if state.get("week_start") != recommendations.get("rotation_week_start"):
+            return True
+        if state.get("status") == "running":
+            return True
+        if state.get("status") == "completed":
+            return False
+        last_attempt = state.get("last_attempt_at", "")
+        if not last_attempt:
+            return True
+        try:
+            retry_hours = max(1, int(self.config.get("weekly_preparation_retry_hours", 6)))
+            return (utc_now() - datetime.fromisoformat(last_attempt)).total_seconds() >= retry_hours * 3600
+        except ValueError:
+            return True
+
+    def start(self, recommendations: dict[str, Any] | None = None, force: bool = False) -> bool:
+        payload = recommendations or self.recommendation_loader()
+        with self._lock:
+            if self._running or (not force and not self._due(payload)):
+                return False
+            self._running = True
+
+        def run() -> None:
+            try:
+                self.run(payload)
+            except Exception as error:
+                with self._lock:
+                    state = self._read() or self._week_payload(payload)
+                    state.update({"status": "partial", "error": str(error)[:1200], "updated_at": utc_now().isoformat()})
+                    self._write(state)
+            finally:
+                with self._lock:
+                    self._running = False
+
+        threading.Thread(target=run, daemon=True, name="weekly-paper-preparation").start()
+        return True
+
+    def run(self, recommendations: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = recommendations or self.recommendation_loader()
+        candidates = self.candidates(payload)
+        pdf_limit = min(len(candidates), max(0, int(self.config.get("weekly_pdf_preparation_max_papers", 35))))
+        explanation_limit = min(
+            pdf_limit,
+            max(0, int(self.config.get("weekly_explanation_preparation_max_papers", 10))),
+        )
+        delay = max(0, int(self.config.get("weekly_preparation_delay_seconds", 3)))
+        with self._lock:
+            state = self._read()
+            if state.get("week_start") != payload.get("rotation_week_start"):
+                state = self._week_payload(payload)
+            now = utc_now().isoformat()
+            state.update({"status": "running", "started_at": state.get("started_at") or now, "last_attempt_at": now, "updated_at": now, "error": ""})
+            self._write(state)
+
+        for paper in candidates[:pdf_limit]:
+            paper_id = paper["id"]
+            item = state.setdefault("items", {}).setdefault(paper_id, {"title": paper.get("title", "")})
+            if item.get("pdf_status") in self.TERMINAL_PDF:
+                continue
+            state.update({"current_paper_id": paper_id, "current_title": paper.get("title", ""), "updated_at": utc_now().isoformat()})
+            self._write(state)
+            try:
+                asset = self.assets.prepare(paper)
+                item.update(
+                    {
+                        "pdf_status": "ready" if asset.get("pdf_available") else "unavailable",
+                        "fulltext_available": bool(asset.get("fulltext_available")),
+                        "pdf_provider": asset.get("provider", ""),
+                        "page_count": int(asset.get("page_count", 0) or 0),
+                        "error": asset.get("error", ""),
+                        "updated_at": utc_now().isoformat(),
+                    }
+                )
+            except Exception as error:
+                item.update({"pdf_status": "failed", "error": str(error)[:1200], "updated_at": utc_now().isoformat()})
+            self._write(state)
+            if delay:
+                time.sleep(delay)
+
+        for paper in candidates[:explanation_limit]:
+            paper_id = paper["id"]
+            item = state.setdefault("items", {}).setdefault(paper_id, {"title": paper.get("title", "")})
+            current = self.store.get_paper(paper_id) or paper
+            existing = current.get("explanation") or {}
+            if existing.get("reading_basis") == "fulltext":
+                item.update({"explanation_status": "ready", "explanation_provider": existing.get("provider", ""), "updated_at": utc_now().isoformat()})
+                self._write(state)
+                continue
+            fulltext = self.assets.fulltext(paper_id)
+            if not fulltext:
+                item.update({"explanation_status": "skipped_no_fulltext", "updated_at": utc_now().isoformat()})
+                self._write(state)
+                continue
+            if not self.explainer.connection():
+                item.update({"explanation_status": "blocked_no_provider", "error": "当前没有可用的大模型配置", "updated_at": utc_now().isoformat()})
+                self._write(state)
+                continue
+            state.update({"current_paper_id": paper_id, "current_title": paper.get("title", ""), "updated_at": utc_now().isoformat()})
+            self._write(state)
+            try:
+                notes = self.assets.reading_notes(paper_id, fulltext)
+                explanation = self.explainer.explain(
+                    current,
+                    fulltext,
+                    notes,
+                    (lambda value, current_id=paper_id, text=fulltext: self.assets.save_reading_notes(current_id, text, value)),
+                )
+                if explanation.get("mode") != "ai" or explanation.get("reading_basis") != "fulltext":
+                    raise RuntimeError(explanation.get("notice") or "全文精读未成功生成")
+                self.store.save_explanation(paper_id, explanation)
+                self.archive.backup_paper_async(paper_id)
+                item.update(
+                    {
+                        "explanation_status": "ready",
+                        "explanation_provider": explanation.get("provider", ""),
+                        "explanation_model": explanation.get("model", ""),
+                        "error": "",
+                        "updated_at": utc_now().isoformat(),
+                    }
+                )
+            except Exception as error:
+                item.update({"explanation_status": "failed", "error": str(error)[:1200], "updated_at": utc_now().isoformat()})
+            self._write(state)
+            if delay:
+                time.sleep(delay)
+
+        summary = self._summary(state, payload)
+        complete = summary["pdf_checked"] >= summary["pdf_target"] and summary["explanation_checked"] >= summary["explanation_target"]
+        state.update(
+            {
+                "status": "completed" if complete else "partial",
+                "current_paper_id": "",
+                "current_title": "",
+                "finished_at": utc_now().isoformat() if complete else "",
+                "updated_at": utc_now().isoformat(),
+            }
+        )
+        self._write(state)
+        return self._summary(state, payload)
+
+
+WEEKLY_SELECTION = WeeklySelectionService(
+    STORE,
+    CONFIG,
+    DATA_DIR / "weekly-selection.json",
+    daily_recommendations,
+)
+
+
+WEEKLY_PREPARATION = WeeklyPreparationService(
+    STORE,
+    ASSETS,
+    EXPLAINER,
+    READING_ARCHIVE,
+    CONFIG,
+    DATA_DIR / "weekly-preparation.json",
+    WEEKLY_SELECTION.get,
+)
 
 
 def project_recommendation(project: dict[str, Any], reference_time: datetime | None = None) -> dict[str, Any]:
@@ -5396,7 +5767,17 @@ class AppHandler(SimpleHTTPRequestHandler):
                 per_topic = int((params.get("per_topic") or [str(CONFIG.get("daily_recommendations_per_topic", 5))])[0])
             except ValueError:
                 per_topic = int(CONFIG.get("daily_recommendations_per_topic", 5))
-            self.send_json(daily_recommendations(topic, per_topic))
+            recommendations = WEEKLY_SELECTION.get(topic, per_topic)
+            WEEKLY_PREPARATION.start()
+            preparation = WEEKLY_PREPARATION.status()
+            for paper in recommendations["items"]:
+                paper["weekly_preparation"] = preparation["items"].get(paper["id"], {})
+            recommendations["preparation"] = preparation
+            self.send_json(recommendations)
+            return
+        if parsed.path == "/api/weekly-preparation":
+            WEEKLY_PREPARATION.start()
+            self.send_json(WEEKLY_PREPARATION.status())
             return
         if parsed.path == "/api/project-recommendations":
             configured_limit = CONFIG.get("weekly_project_recommendations", CONFIG.get("daily_project_recommendations", 4))
@@ -5825,6 +6206,7 @@ def main() -> None:
         return
     if os.environ.get("PAPERFIELD_AUTO_REFRESH", "1").strip() != "0":
         threading.Thread(target=scheduler_loop, daemon=True, name="refresh-scheduler").start()
+    WEEKLY_PREPARATION.start()
     READING_ARCHIVE.backup_existing_async()
     server = ThreadingHTTPServer((args.host, args.port), AppHandler)
     print(f"Paperfield is running at http://{args.host}:{args.port}")

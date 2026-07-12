@@ -7,23 +7,12 @@ Paperfield is a desktop research workstation for embodied intelligence, large la
 ## Highlights
 
 - Weekly paper recommendations by research field, capped at five papers per field with explainable scores.
+- Background preparation resolves public PDFs for weekly picks and generates full-text readings for priority papers, rotating on the next natural week.
 - Coverage of top conferences, journals, preprints, and public scholarly metadata, with formal publications separated from unconfirmed preprints.
 - A split PDF reader with full-text analysis, page translation, and source-grounded questions.
 - Up to four weekly GitHub project recommendations linked to papers, README documents, and curated source-reading routes, stable throughout the natural week.
 - Local, Cloudflare R2, or hybrid PDF storage with backups for explanations and chat history.
 - Password-protected beta sharing for up to four trusted testers.
-
-## Trilingual Markdown
-
-Paperfield's main README has three maintained static versions:
-
-- Chinese: [README.md](../../README.md)
-- English: [README.en.md](README.en.md)
-- Japanese: [README.ja.md](README.ja.md)
-
-Inside Paperfield's GitHub project reader, every `.md` file is marked `中/英/日`. The English view displays the repository source. Chinese and Japanese are generated on demand through a free translation endpoint, consume no GPT tokens, and are cached locally and optionally in R2.
-
-Other maintenance documents are not presented as hand-maintained translations. Their locations and language status are listed in the [documentation map](../README.md).
 
 ## Run locally
 
@@ -35,6 +24,8 @@ python app.py
 Open [http://127.0.0.1:8765](http://127.0.0.1:8765). Paperfield refreshes while running and catches up after the computer has been offline.
 
 The database, PDFs, source cache, explanations, chats, and secrets live under the Git-ignored `local/` directory. See [Public source and local files](PUBLIC_AND_LOCAL.en.md). Testers should normally download the clean archive from GitHub Releases.
+
+Without an explicit `PAPERFIELD_OPENAI_API_KEY`, changing CC Switch affects subsequent readings and questions. Saved readings, chats, and notes do not change. An explicit Paperfield API configuration in `local/.env` takes precedence over CC Switch.
 
 ## Share with testers
 

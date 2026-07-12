@@ -2,7 +2,7 @@
 
 ## Design Read
 
-A personal research workstation for prolonged reading and triage, with the quiet precision of a laboratory notebook and the speed of a mature developer tool.
+A personal research workstation for prolonged reading and triage, combining the precision of a laboratory instrument with the speed of a mature developer tool.
 
 ## Global Dials
 
@@ -12,23 +12,24 @@ A personal research workstation for prolonged reading and triage, with the quiet
 
 ## Theme
 
-Light theme only for the initial release. The product is used during study sessions in mixed ambient light, so clarity and print-like scanning take priority over visual drama.
+The discovery surface uses a light, low-glare reading field with a graphite navigation rail and task band. Full-screen readers use graphite toolbars around light evidence panes. The contrast should feel technical without turning the whole product into a dark developer console.
 
 ## Color Strategy
 
-Restrained. Pure white architecture, low-chroma neutral surfaces, and one moss-green primary derived from impeccable seed-121.
+Restrained. Cold neutral architecture, graphite operational surfaces, and one signal-green accent reserved for selection, readiness, and primary actions.
 
 ```css
---bg: oklch(1 0 0);
---surface: oklch(0.965 0.008 140);
---surface-strong: oklch(0.925 0.014 140);
---ink: oklch(0.19 0.022 145);
---ink-soft: oklch(0.39 0.022 145);
---muted: oklch(0.49 0.018 145);
---line: oklch(0.885 0.012 140);
---primary: oklch(0.49 0.115 140);
---primary-hover: oklch(0.43 0.12 140);
---primary-soft: oklch(0.93 0.04 140);
+--bg: oklch(0.985 0.004 225);
+--surface: oklch(0.955 0.008 225);
+--surface-strong: oklch(0.91 0.012 225);
+--ink: oklch(0.18 0.016 230);
+--ink-soft: oklch(0.36 0.018 230);
+--muted: oklch(0.48 0.014 230);
+--line: oklch(0.865 0.012 225);
+--primary: oklch(0.51 0.145 154);
+--primary-hover: oklch(0.43 0.13 154);
+--primary-soft: oklch(0.93 0.045 154);
+--signal: oklch(0.78 0.17 151);
 --danger: oklch(0.52 0.16 28);
 --warning: oklch(0.68 0.14 75);
 ```

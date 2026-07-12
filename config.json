@@ -28,6 +28,11 @@
   },
   "daily_recommendations_per_topic": 5,
   "recommendation_window_days": 45,
+  "weekly_preparation_enabled": true,
+  "weekly_pdf_preparation_max_papers": 35,
+  "weekly_explanation_preparation_max_papers": 10,
+  "weekly_preparation_retry_hours": 6,
+  "weekly_preparation_delay_seconds": 3,
   "daily_topics": [
     "具身智能",
     "触觉与灵巧操作",
