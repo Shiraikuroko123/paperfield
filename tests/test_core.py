@@ -312,7 +312,15 @@ class FeedTests(unittest.TestCase):
 
         class FakeStore:
             def list_papers(self):
-                return [{"id": paper_id, "title": paper_id, "topics": ["topic"]} for paper_id in ("a", "b", "c")]
+                return [
+                    {
+                        "id": paper_id,
+                        "title": paper_id,
+                        "topics": ["topic"],
+                        "pdf_url": f"https://arxiv.org/pdf/2607.0000{index}",
+                    }
+                    for index, paper_id in enumerate(("a", "b", "c"), start=1)
+                ]
 
             def assets_for_papers(self, paper_ids):
                 return {"a": {"local_pdf_path": "cached.pdf", "text_chars": 10000}}
@@ -353,6 +361,47 @@ class FeedTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertTrue(first["items"][0]["fulltext_cached"])
 
+    def test_weekly_selection_uses_public_reserves_when_primary_pdf_is_unavailable(self):
+        today = APP.utc_now().date()
+        week_start = today - timedelta(days=today.weekday())
+
+        class FakeStore:
+            def list_papers(self):
+                return [
+                    {"id": "blocked", "title": "Blocked", "topics": ["topic"], "pdf_url": "https://publisher.example/blocked.pdf"},
+                    {"id": "reserve", "title": "Reserve", "topics": ["topic"], "pdf_url": "https://arxiv.org/pdf/2607.12345"},
+                ]
+
+            def assets_for_papers(self, paper_ids):
+                return {"blocked": {"access_status": "unavailable"}}
+
+        def ranking_loader(topic, per_topic):
+            return {
+                "groups": [{
+                    "topic": "topic",
+                    "items": [{"id": "blocked", "recommendation_topic": "topic", "recommendation_score": 95, "score_breakdown": []}],
+                    "reserves": [{"id": "reserve", "recommendation_topic": "topic", "recommendation_score": 90, "score_breakdown": []}],
+                }],
+                "window_days": 45,
+                "rotation_week_start": week_start.isoformat(),
+                "rotation_week_end": (week_start + timedelta(days=6)).isoformat(),
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            service = APP.WeeklySelectionService(
+                FakeStore(),
+                {"daily_recommendations_per_topic": 1, "recommendation_window_days": 45},
+                Path(directory) / "selection.json",
+                ranking_loader,
+            )
+            selection = service.get()
+
+        self.assertEqual([paper["id"] for paper in selection["items"]], ["reserve"])
+        self.assertEqual(
+            [paper["id"] for paper in APP.WeeklyPreparationService.candidates(selection)],
+            ["blocked", "reserve"],
+        )
+
     def test_runtime_settings_persist_pdf_directory_cache_and_billing_day(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -383,8 +432,60 @@ class FeedTests(unittest.TestCase):
             )
             self.assertEqual(weights["relevance"], 40)
             self.assertEqual(APP.RuntimeSettings(root / "settings.json").get()["recommendation_weights"], weights)
+            decimal_weights = settings.update_recommendation_weights(
+                {
+                    "academic": 20.5,
+                    "relevance": 39.5,
+                    "freshness": 15,
+                    "evidence": 15,
+                    "impact_reproducibility": 10,
+                }
+            )
+            self.assertEqual(decimal_weights["academic"], 20.5)
+            self.assertEqual(sum(decimal_weights.values()), 100)
             with self.assertRaisesRegex(ValueError, "之和必须等于 100"):
                 settings.update_recommendation_weights({**weights, "academic": 21})
+
+    def test_public_pdf_access_prefers_verified_and_arxiv_candidates(self):
+        verified = APP.public_pdf_access({"id": "paper", "pdf_url": ""}, {"local_pdf_path": "cached.pdf"})
+        self.assertEqual(verified["state"], "verified")
+        self.assertEqual(verified["priority"], 3)
+
+        arxiv = APP.public_pdf_access({"id": "arxiv:2607.12345", "pdf_url": ""})
+        self.assertEqual(arxiv["state"], "source")
+        self.assertEqual(arxiv["priority"], 2)
+
+        unavailable = APP.public_pdf_access(
+            {"id": "paper", "pdf_url": "https://openaccess.thecvf.com/content.pdf"},
+            {"access_status": "unavailable"},
+        )
+        self.assertEqual(unavailable["state"], "unavailable")
+
+    def test_pdf_resolver_discovers_arxiv_from_semantic_scholar_title_match(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = APP.PaperStore(Path(directory) / "papers.db")
+            assets = APP.PaperAssetService(store, APP.S3ObjectStorage(store), APP.RuntimeSettings(Path(directory) / "settings.json"))
+
+            def request_json(url):
+                if "api.openalex.org" in url:
+                    return {"results": []}
+                if "api.semanticscholar.org" in url:
+                    return {
+                        "data": [
+                            {
+                                "title": "A Public Preprint",
+                                "openAccessPdf": None,
+                                "externalIds": {"ArXiv": "2607.12345"},
+                            }
+                        ]
+                    }
+                raise AssertionError(url)
+
+            paper = {"id": "paper", "title": "A Public Preprint", "doi": "", "source_url": "", "pdf_url": ""}
+            with mock.patch.object(APP.PaperAssetService, "_request_json", side_effect=request_json):
+                candidates = assets.candidate_urls(paper)
+
+        self.assertIn("https://arxiv.org/pdf/2607.12345", [url for url, _ in candidates])
 
     def test_pdf_cache_removal_tolerates_open_windows_file(self):
         locked = mock.Mock()

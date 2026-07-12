@@ -9,6 +9,7 @@ import html
 import http.client
 import ipaddress
 import json
+import math
 import os
 import posixpath
 import re
@@ -59,7 +60,7 @@ SETTINGS_PATH = Path(os.environ.get("PAPERFIELD_SETTINGS_PATH", DATA_DIR / "sett
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
 INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", ROOT / "institutions.json")).expanduser().resolve()
-APP_VERSION = "0.12.2"
+APP_VERSION = "0.12.3"
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
 RECOMMENDATION_WEIGHT_KEYS = (
@@ -3247,19 +3248,19 @@ class RuntimeSettings:
         }
 
     @staticmethod
-    def validate_recommendation_weights(payload: Any) -> dict[str, int]:
+    def validate_recommendation_weights(payload: Any) -> dict[str, float]:
         if not isinstance(payload, dict):
             raise ValueError("评分权重格式无效")
-        weights: dict[str, int] = {}
+        weights: dict[str, float] = {}
         for key in RECOMMENDATION_WEIGHT_KEYS:
             try:
-                value = int(payload.get(key, -1))
+                value = float(payload.get(key, -1))
             except (TypeError, ValueError) as error:
-                raise ValueError("评分权重必须是整数") from error
-            if value < 0 or value > 100:
+                raise ValueError("评分权重必须是数字") from error
+            if not math.isfinite(value) or value < 0 or value > 100:
                 raise ValueError("每项评分权重需在 0 到 100 之间")
-            weights[key] = value
-        if sum(weights.values()) != 100:
+            weights[key] = round(value, 2)
+        if abs(sum(weights.values()) - 100) > 0.01:
             raise ValueError("五项评分权重之和必须等于 100")
         return weights
 
@@ -3304,7 +3305,7 @@ class RuntimeSettings:
             self._persist()
             return dict(self._values)
 
-    def update_recommendation_weights(self, payload: Any) -> dict[str, int]:
+    def update_recommendation_weights(self, payload: Any) -> dict[str, float]:
         with self._lock:
             weights = self.validate_recommendation_weights(payload)
             self._values["recommendation_weights"] = weights
@@ -3742,6 +3743,15 @@ class PaperAssetService:
             if value and self._safe_remote_url(value) and all(existing != value for existing, _ in candidates):
                 candidates.append((value, provider))
 
+        def add_arxiv(value: Any, provider: str = "arXiv 预印本") -> None:
+            match = re.search(
+                r"(?:arxiv\.org/(?:abs|pdf)/|arxiv:\s*)?(\d{4}\.\d{4,5}(?:v\d+)?)",
+                compact_text(str(value or "")),
+                flags=re.I,
+            )
+            if match:
+                add(f"https://arxiv.org/pdf/{match.group(1)}", provider)
+
         asset = self.store.get_asset(paper["id"])
         if asset:
             add(asset.get("resolved_pdf_url"), asset.get("provider") or "已解析公开副本")
@@ -3770,6 +3780,7 @@ class PaperAssetService:
                     actual = VenueCatalog.normalize(work.get("display_name"))
                     if expected != actual:
                         continue
+                add_arxiv((work.get("ids") or {}).get("arxiv"), "OpenAlex 关联 arXiv")
                 locations = [work.get("best_oa_location"), work.get("primary_location"), *(work.get("locations") or [])]
                 for location in locations:
                     if location:
@@ -3778,14 +3789,24 @@ class PaperAssetService:
             pass
 
         identifier = f"DOI:{doi}" if doi else f"ARXIV:{arxiv_id}" if arxiv_id else ""
-        if identifier:
-            try:
+        try:
+            if identifier:
                 encoded = urllib.parse.quote(identifier, safe=":")
                 fields = urllib.parse.urlencode({"fields": "title,openAccessPdf,url,externalIds"})
                 semantic = self._request_json(f"https://api.semanticscholar.org/graph/v1/paper/{encoded}?{fields}")
-                add((semantic.get("openAccessPdf") or {}).get("url"), "Semantic Scholar 公开版本")
-            except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError, json.JSONDecodeError):
-                pass
+            else:
+                query = urllib.parse.urlencode({"query": paper.get("title", ""), "limit": 3, "fields": "title,openAccessPdf,externalIds"})
+                matches = self._request_json(f"https://api.semanticscholar.org/graph/v1/paper/search?{query}").get("data") or []
+                expected = VenueCatalog.normalize(paper.get("title"))
+                semantic = next(
+                    (item for item in matches if VenueCatalog.normalize(item.get("title")) == expected),
+                    {},
+                )
+            add((semantic.get("openAccessPdf") or {}).get("url"), "Semantic Scholar 公开版本")
+            external_ids = semantic.get("externalIds") or {}
+            add_arxiv(external_ids.get("ArXiv") or external_ids.get("arXiv"), "Semantic Scholar 关联 arXiv")
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError, json.JSONDecodeError):
+            pass
 
         if doi:
             try:
@@ -4916,6 +4937,45 @@ def scheduler_loop() -> None:
         time.sleep(300)
 
 
+PUBLIC_PDF_HOSTS = (
+    "arxiv.org",
+    "openreview.net",
+    "openaccess.thecvf.com",
+    "proceedings.mlr.press",
+    "proceedings.neurips.cc",
+    "papers.nips.cc",
+    "aclanthology.org",
+    "jmlr.org",
+)
+
+
+def public_pdf_access(paper: dict[str, Any], asset: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Describe how confidently Paperfield can open a legal public copy right now."""
+    access_status = compact_text((asset or {}).get("access_status"))
+    cached = bool(
+        asset and (
+            asset.get("local_pdf_path")
+            or asset.get("cloud_pdf_key")
+            or access_status in {"ready", "pdf_only"}
+        )
+    )
+    if cached:
+        return {"state": "verified", "priority": 3, "label": "已验证公开 PDF"}
+    if access_status == "unavailable":
+        return {"state": "unavailable", "priority": 0, "label": "暂未找到公开 PDF"}
+
+    if PaperAssetService._arxiv_id(paper):
+        return {"state": "source", "priority": 2, "label": "arXiv 公开副本待验证"}
+
+    pdf_url = compact_text(paper.get("pdf_url"))
+    if pdf_url:
+        host = (urllib.parse.urlparse(pdf_url).hostname or "").lower()
+        if any(host == known or host.endswith(f".{known}") for known in PUBLIC_PDF_HOSTS):
+            return {"state": "source", "priority": 2, "label": "公开 PDF 副本待验证"}
+        return {"state": "source", "priority": 1, "label": "PDF 链接待验证"}
+    return {"state": "none", "priority": 0, "label": "待寻找公开 PDF"}
+
+
 def rotate_daily_candidates(
     ranked: list[tuple[float, dict[str, Any], dict[str, Any], dict[str, Any] | None]],
     limit: int,
@@ -4942,6 +5002,7 @@ def daily_recommendations(topic: str = "", per_topic: int | None = None) -> dict
     seen: set[str] = set()
     today = utc_now().date()
     rotation_week_start = today - timedelta(days=today.weekday())
+    reserve_limit = max(0, min(5, int(CONFIG.get("weekly_reserve_candidates_per_topic", 2))))
     for current_topic in topics:
         candidates = [paper for paper in papers if current_topic in paper.get("topics", [])]
         recent = [paper for paper in candidates if not paper.get("published") or paper["published"] >= cutoff]
@@ -4963,10 +5024,18 @@ def daily_recommendations(topic: str = "", per_topic: int | None = None) -> dict
             asset = assets.get(paper["id"])
             score = CLASSIFIER.recommendation(paper, current_topic, asset, paper["id"] in linked_papers)
             ranked.append((score["total"], paper, score, asset))
-        ranked.sort(key=lambda item: (item[0], item[1].get("published", "")), reverse=True)
+        ranked.sort(
+            key=lambda item: (
+                public_pdf_access(item[1], item[3])["priority"],
+                item[0],
+                item[1].get("published", ""),
+            ),
+            reverse=True,
+        )
         available = [entry for entry in ranked if entry[1]["id"] not in seen]
         ranked_for_week = rotate_daily_candidates(available, limit, current_topic, rotation_week_start)
         selected = []
+        reserves = []
         for _, paper, score, asset in ranked_for_week:
             if paper["id"] in seen:
                 continue
@@ -4978,13 +5047,17 @@ def daily_recommendations(topic: str = "", per_topic: int | None = None) -> dict
                 "score_breakdown": score["components"],
                 "pdf_cached": bool(asset and asset.get("local_pdf_path")),
                 "fulltext_cached": bool(asset and int(asset.get("text_chars", 0) or 0) > 1000),
+                "public_pdf": public_pdf_access(paper, asset),
             }
-            selected.append(item)
-            items.append(item)
-            seen.add(paper["id"])
-            if len(selected) >= limit:
+            if len(selected) < limit:
+                selected.append(item)
+                items.append(item)
+                seen.add(paper["id"])
+            elif len(reserves) < reserve_limit:
+                reserves.append(item)
+            if len(selected) >= limit and len(reserves) >= reserve_limit:
                 break
-        groups.append({"topic": current_topic, "items": selected, "count": len(selected)})
+        groups.append({"topic": current_topic, "items": selected, "reserves": reserves, "count": len(selected)})
     return {
         "items": items,
         "groups": groups,
@@ -5000,6 +5073,8 @@ def daily_recommendations(topic: str = "", per_topic: int | None = None) -> dict
 
 
 class WeeklySelectionService:
+    SCHEMA_VERSION = 3
+
     def __init__(self, store: PaperStore, config: dict[str, Any], path: Path, ranking_loader: Any) -> None:
         self.store = store
         self.config = config
@@ -5023,7 +5098,7 @@ class WeeklySelectionService:
     def _select(self, per_topic: int) -> dict[str, Any]:
         ranked = self.ranking_loader("", per_topic)
         state = {
-            "schema_version": 1,
+            "schema_version": self.SCHEMA_VERSION,
             "week_start": ranked["rotation_week_start"],
             "week_end": ranked["rotation_week_end"],
             "per_topic": per_topic,
@@ -5044,6 +5119,15 @@ class WeeklySelectionService:
                         }
                         for paper in group["items"]
                     ],
+                    "reserves": [
+                        {
+                            "id": paper["id"],
+                            "recommendation_topic": paper["recommendation_topic"],
+                            "recommendation_score": paper["recommendation_score"],
+                            "score_breakdown": paper["score_breakdown"],
+                        }
+                        for paper in group.get("reserves", [])
+                    ],
                 }
             )
         self._write(state)
@@ -5056,32 +5140,55 @@ class WeeklySelectionService:
         week_start = (today - timedelta(days=today.weekday())).isoformat()
         with self._lock:
             state = self._read()
-            if state.get("week_start") != week_start or int(state.get("per_topic", 0) or 0) != configured_limit:
+            if (
+                int(state.get("schema_version", 0) or 0) != self.SCHEMA_VERSION
+                or state.get("week_start") != week_start
+                or int(state.get("per_topic", 0) or 0) != configured_limit
+            ):
                 state = self._select(configured_limit)
 
         papers = {paper["id"]: paper for paper in self.store.list_papers()}
-        ids = [item["id"] for group in state.get("groups", []) for item in group.get("items", [])]
+        ids = [
+            item["id"]
+            for group in state.get("groups", [])
+            for key in ("items", "reserves")
+            for item in group.get(key, [])
+        ]
         assets = self.store.assets_for_papers(ids)
         groups = []
         items = []
+        preparation_groups = []
+        visible_ids: set[str] = set()
+
+        def hydrate(saved: dict[str, Any]) -> dict[str, Any] | None:
+            paper = papers.get(saved.get("id", ""))
+            if not paper:
+                return None
+            asset = assets.get(saved["id"])
+            return {
+                **paper,
+                **saved,
+                "is_recommended": True,
+                "pdf_cached": bool(asset and asset.get("local_pdf_path")),
+                "fulltext_cached": bool(asset and int(asset.get("text_chars", 0) or 0) > 1000),
+                "public_pdf": public_pdf_access(paper, asset),
+            }
+
         for saved_group in state.get("groups", []):
+            primary = [item for saved in saved_group.get("items", []) if (item := hydrate(saved))]
+            reserves = [item for saved in saved_group.get("reserves", []) if (item := hydrate(saved))]
+            preparation_groups.append({"topic": saved_group.get("topic", ""), "items": [*primary, *reserves]})
             if topic and saved_group.get("topic") != topic:
                 continue
             selected = []
-            for saved in saved_group.get("items", [])[:requested_limit]:
-                paper = papers.get(saved["id"])
-                if not paper:
+            for item in [*primary, *reserves]:
+                if item["id"] in visible_ids or item["public_pdf"]["state"] not in {"verified", "source"}:
                     continue
-                asset = assets.get(saved["id"])
-                item = {
-                    **paper,
-                    **saved,
-                    "is_recommended": True,
-                    "pdf_cached": bool(asset and asset.get("local_pdf_path")),
-                    "fulltext_cached": bool(asset and int(asset.get("text_chars", 0) or 0) > 1000),
-                }
                 selected.append(item)
                 items.append(item)
+                visible_ids.add(item["id"])
+                if len(selected) >= requested_limit:
+                    break
             groups.append({"topic": saved_group.get("topic", ""), "items": selected, "count": len(selected)})
         return {
             "items": items,
@@ -5094,6 +5201,8 @@ class WeeklySelectionService:
             "rotation_policy": "同一自然周冻结入选名单，下周重新排名",
             "weights": self.config.get("recommendation_weights", {}),
             "generated_at": state.get("selected_at", ""),
+            "selection_token": state.get("selected_at", ""),
+            "preparation_groups": preparation_groups,
         }
 
     def rebuild(self) -> dict[str, Any]:
@@ -5130,7 +5239,8 @@ class WeeklyPreparationService:
 
     @staticmethod
     def candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
-        groups = [group.get("items", []) for group in payload.get("groups", [])]
+        source_groups = payload.get("preparation_groups") or payload.get("groups", [])
+        groups = [group.get("items", []) for group in source_groups]
         ordered: list[dict[str, Any]] = []
         seen: set[str] = set()
         for index in range(max((len(group) for group in groups), default=0)):
@@ -5161,6 +5271,7 @@ class WeeklyPreparationService:
             "schema_version": self.SCHEMA_VERSION,
             "week_start": recommendations["rotation_week_start"],
             "week_end": recommendations["rotation_week_end"],
+            "selection_token": recommendations.get("selection_token", ""),
             "status": "scheduled",
             "started_at": "",
             "last_attempt_at": "",
@@ -5174,7 +5285,12 @@ class WeeklyPreparationService:
     def _summary(self, state: dict[str, Any], recommendations: dict[str, Any]) -> dict[str, Any]:
         candidates = self.candidates(recommendations)
         pdf_limit = min(len(candidates), max(0, int(self.config.get("weekly_pdf_preparation_max_papers", 35))))
-        items = state.get("items", {}) if state.get("week_start") == recommendations.get("rotation_week_start") else {}
+        items = (
+            state.get("items", {})
+            if state.get("week_start") == recommendations.get("rotation_week_start")
+            and state.get("selection_token", "") == recommendations.get("selection_token", "")
+            else {}
+        )
         explanation_candidates = [
             paper for paper in candidates[:pdf_limit]
             if items.get(paper["id"], {}).get("fulltext_available")
@@ -5224,6 +5340,8 @@ class WeeklyPreparationService:
             return True
         if state.get("week_start") != recommendations.get("rotation_week_start"):
             return True
+        if state.get("selection_token", "") != recommendations.get("selection_token", ""):
+            return True
         if state.get("status") == "running":
             return True
         if state.get("status") == "completed":
@@ -5266,7 +5384,10 @@ class WeeklyPreparationService:
         delay = max(0, int(self.config.get("weekly_preparation_delay_seconds", 3)))
         with self._lock:
             state = self._read()
-            if state.get("week_start") != payload.get("rotation_week_start"):
+            if (
+                state.get("week_start") != payload.get("rotation_week_start")
+                or state.get("selection_token", "") != payload.get("selection_token", "")
+            ):
                 state = self._week_payload(payload)
             now = utc_now().isoformat()
             state.update({"schema_version": self.SCHEMA_VERSION, "status": "running", "started_at": state.get("started_at") or now, "last_attempt_at": now, "updated_at": now, "error": ""})

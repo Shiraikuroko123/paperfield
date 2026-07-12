@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.3
+
+- Weekly picks now prioritize verified public PDFs and legal public-copy signals, then replace unavailable papers with prepared topic reserves instead of filling the list with paywalled entries.
+- PDF discovery now follows arXiv identifiers exposed by OpenAlex and Semantic Scholar, including title-matched final-publication records.
+- The scoring editor supports decimal percentages, direct numerical entry, four research presets, and independent controls without re-rendering sliders during a drag.
+- GitHub project discovery now uses the full stream width; projects open directly into the code-reading workspace instead of a paper-detail pane.
+
 ## 0.12.2
 
 - Fixed ngrok warning pages being parsed as API JSON on shared clients.

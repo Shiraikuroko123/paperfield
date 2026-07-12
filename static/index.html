@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="具身智能与大模型论文、开源项目每周研究工作台">
   <title>Paperfield</title>
-  <link rel="stylesheet" href="/styles.css?v=0.12.2">
+  <link rel="stylesheet" href="/styles.css?v=0.12.3">
 </head>
 <body>
   <div class="app-shell">
@@ -119,6 +119,12 @@
                     <div class="score-ring-caption"><strong>综合评分模型</strong><span>当前比例实时预览</span></div>
                   </div>
                   <div class="score-weight-controls" id="scoreWeightControls"></div>
+                  <div class="score-weight-presets" id="scoreWeightPresets" role="group" aria-label="评分预设">
+                    <button type="button" data-score-preset="balanced">均衡</button>
+                    <button type="button" data-score-preset="academic">顶刊优先</button>
+                    <button type="button" data-score-preset="fresh">追新优先</button>
+                    <button type="button" data-score-preset="readable">可读复现</button>
+                  </div>
                   <div class="score-editor-actions">
                     <span id="scoreWeightStatus" aria-live="polite">已应用</span>
                     <button class="text-button" id="resetScoreWeights" type="button">恢复默认</button>
@@ -362,6 +368,6 @@
 
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
   <script src="/vendor/pdfjs/pdf.min.js?v=3.11.174"></script>
-  <script src="/app.js?v=0.12.2" defer></script>
+  <script src="/app.js?v=0.12.3" defer></script>
 </body>
 </html>

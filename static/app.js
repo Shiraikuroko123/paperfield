@@ -50,6 +50,13 @@ const DEFAULT_SCORE_WEIGHTS = {
   impact_reproducibility: 10,
 };
 
+const SCORE_WEIGHT_PRESETS = {
+  balanced: { academic: 20, relevance: 20, freshness: 20, evidence: 20, impact_reproducibility: 20 },
+  academic: { academic: 40, relevance: 22, freshness: 14, evidence: 14, impact_reproducibility: 10 },
+  fresh: { academic: 18, relevance: 22, freshness: 36, evidence: 14, impact_reproducibility: 10 },
+  readable: { academic: 20, relevance: 20, freshness: 14, evidence: 26, impact_reproducibility: 20 },
+};
+
 const el = (id) => document.getElementById(id);
 const NGROK_BYPASS_HEADERS = { "ngrok-skip-browser-warning": "paperfield" };
 if (globalThis.pdfjsLib) globalThis.pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.min.js?v=3.11.174";
@@ -126,39 +133,37 @@ function toast(message, error = false) {
   setTimeout(() => item.remove(), 3200);
 }
 
-const sameWeights = (left, right) => SCORE_DIMENSIONS.every(({ key }) => Number(left?.[key]) === Number(right?.[key]));
+const weightTotal = (weights) => SCORE_DIMENSIONS.reduce((sum, { key }) => sum + Number(weights?.[key] || 0), 0);
+const roundWeight = (value) => Math.round(Math.max(0, Math.min(100, Number(value) || 0)) * 100) / 100;
+const formatWeight = (value) => {
+  const rounded = roundWeight(value);
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+};
+const weightsAreComplete = (weights) => Math.abs(weightTotal(weights) - 100) < 0.005;
+const sameWeights = (left, right) => SCORE_DIMENSIONS.every(({ key }) => Math.abs(Number(left?.[key]) - Number(right?.[key])) < 0.005);
 
-function distributeWeight(total, values, keys) {
-  const currentTotal = keys.reduce((sum, key) => sum + Number(values[key] || 0), 0);
-  const raw = keys.map((key, index) => ({
-    key,
-    index,
-    value: currentTotal > 0 ? Number(values[key] || 0) / currentTotal * total : total / keys.length,
-  }));
-  const result = Object.fromEntries(raw.map((item) => [item.key, Math.floor(item.value)]));
-  let remainder = total - Object.values(result).reduce((sum, value) => sum + value, 0);
-  raw.sort((left, right) => (right.value - Math.floor(right.value)) - (left.value - Math.floor(left.value)) || left.index - right.index);
-  for (let index = 0; index < remainder; index += 1) result[raw[index % raw.length].key] += 1;
-  return result;
+function setScoreWeight(key, value) {
+  const nextValue = Number(value);
+  if (!Number.isFinite(nextValue)) return;
+  state.recommendationWeights = {
+    ...(state.recommendationWeights || DEFAULT_SCORE_WEIGHTS),
+    [key]: roundWeight(nextValue),
+  };
+  updateScoreEditorVisuals();
 }
 
-function rebalanceScoreWeights(changedKey, nextValue) {
-  const current = { ...(state.recommendationWeights || DEFAULT_SCORE_WEIGHTS) };
-  const value = Math.max(0, Math.min(100, Math.round(Number(nextValue) || 0)));
-  const otherKeys = SCORE_DIMENSIONS.map(({ key }) => key).filter((key) => key !== changedKey);
-  const distributed = distributeWeight(100 - value, current, otherKeys);
-  state.recommendationWeights = { ...current, ...distributed, [changedKey]: value };
-  renderScoreEditor();
-}
-
-function renderScoreEditor() {
+function updateScoreEditorVisuals() {
   const weights = state.recommendationWeights || DEFAULT_SCORE_WEIGHTS;
   const controls = el("scoreWeightControls");
-  controls.innerHTML = SCORE_DIMENSIONS.map(({ key, label, color }) => `
-    <label class="score-weight-row" style="--weight-color:${color}">
-      <span><i aria-hidden="true"></i><b>${label}</b><output for="score-weight-${key}">${weights[key]}%</output></span>
-      <input id="score-weight-${key}" type="range" min="0" max="100" step="1" value="${weights[key]}" data-score-weight="${key}" aria-label="${label}权重">
-    </label>`).join("");
+  SCORE_DIMENSIONS.forEach(({ key }) => {
+    const value = formatWeight(weights[key]);
+    const slider = controls.querySelector(`[data-score-weight="${key}"]`);
+    const number = controls.querySelector(`[data-score-weight-number="${key}"]`);
+    const output = controls.querySelector(`[data-score-output="${key}"]`);
+    if (slider && document.activeElement !== slider) slider.value = value;
+    if (number && document.activeElement !== number) number.value = value;
+    if (output) output.textContent = `${value}%`;
+  });
 
   let cursor = 0;
   const segments = SCORE_DIMENSIONS.map(({ key, color }) => {
@@ -166,17 +171,42 @@ function renderScoreEditor() {
     cursor += Number(weights[key] || 0);
     return `${color} ${start}% ${cursor}%`;
   });
+  const total = weightTotal(weights);
   el("scoreWeightRing").style.background = `conic-gradient(${segments.join(", ")})`;
-  el("scoreWeightTotal").textContent = SCORE_DIMENSIONS.reduce((sum, { key }) => sum + Number(weights[key] || 0), 0);
-  el("scoreGuideSummary").textContent = SCORE_DIMENSIONS.map(({ key }) => weights[key]).join(" / ");
+  el("scoreWeightTotal").textContent = formatWeight(total);
+  el("scoreGuideSummary").textContent = SCORE_DIMENSIONS.map(({ key }) => formatWeight(weights[key])).join(" / ");
 
   const locked = Boolean(state.auth?.enabled && !state.auth.host_ai_allowed);
+  const complete = weightsAreComplete(weights);
   const dirty = !sameWeights(weights, state.appliedRecommendationWeights || weights);
   controls.querySelectorAll("input").forEach((input) => { input.disabled = locked; });
+  el("scoreWeightPresets").querySelectorAll("button").forEach((button) => {
+    const preset = SCORE_WEIGHT_PRESETS[button.dataset.scorePreset];
+    button.disabled = locked;
+    button.classList.toggle("is-active", Boolean(preset && sameWeights(weights, preset)));
+  });
   el("resetScoreWeights").disabled = locked;
-  el("applyScoreWeights").disabled = locked || !dirty;
-  el("scoreWeightStatus").textContent = locked ? "当前账户只读" : dirty ? "尚未应用" : "已应用";
-  el("scoreWeightStatus").className = locked ? "" : dirty ? "is-dirty" : "is-applied";
+  el("applyScoreWeights").disabled = locked || !dirty || !complete;
+  el("scoreWeightStatus").textContent = locked
+    ? "当前账户只读"
+    : !complete
+      ? `当前合计 ${formatWeight(total)}%，需为 100%`
+      : dirty ? "尚未应用" : "已应用";
+  el("scoreWeightStatus").className = locked ? "" : !complete || dirty ? "is-dirty" : "is-applied";
+}
+
+function renderScoreEditor() {
+  const weights = state.recommendationWeights || DEFAULT_SCORE_WEIGHTS;
+  const controls = el("scoreWeightControls");
+  controls.innerHTML = SCORE_DIMENSIONS.map(({ key, label, color }) => `
+    <div class="score-weight-row" style="--weight-color:${color}">
+      <div class="score-weight-label"><i aria-hidden="true"></i><b>${label}</b><output data-score-output="${key}">${formatWeight(weights[key])}%</output></div>
+      <div class="score-weight-inputs">
+        <input id="score-weight-${key}" type="range" min="0" max="100" step="0.1" value="${formatWeight(weights[key])}" data-score-weight="${key}" aria-label="${label}权重">
+        <label class="score-weight-number"><span class="sr-only">${label}权重百分比</span><input type="number" min="0" max="100" step="0.1" inputmode="decimal" value="${formatWeight(weights[key])}" data-score-weight-number="${key}" aria-label="${label}权重百分比"><span aria-hidden="true">%</span></label>
+      </div>
+    </div>`).join("");
+  updateScoreEditorVisuals();
 }
 
 async function loadScoreWeights() {
@@ -187,6 +217,11 @@ async function loadScoreWeights() {
 }
 
 async function applyScoreWeights() {
+  if (!weightsAreComplete(state.recommendationWeights)) {
+    toast("五项权重合计需为 100%", true);
+    updateScoreEditorVisuals();
+    return;
+  }
   const button = el("applyScoreWeights");
   button.disabled = true;
   button.textContent = "正在重排";
@@ -307,7 +342,10 @@ function applyViewMode() {
   const projectMode = isProjectMode();
   const recommendedMode = state.view === "recommended";
   document.querySelector(".filter-strip").hidden = recommendedMode && state.weeklyKind === "projects";
-  document.querySelector(".content-grid").classList.toggle("is-recommended", recommendedMode);
+  const contentGrid = document.querySelector(".content-grid");
+  contentGrid.classList.toggle("is-recommended", recommendedMode);
+  contentGrid.classList.toggle("is-projects", projectMode);
+  if (projectMode) el("readingPane").classList.remove("is-open");
   document.querySelectorAll(".paper-only-filter").forEach((item) => { item.hidden = projectMode || recommendedMode; });
   document.querySelectorAll(".project-only-filter").forEach((item) => { item.hidden = !projectMode; });
   el("dateFilter").closest("label").hidden = recommendedMode;
@@ -419,24 +457,8 @@ function renderProjects() {
   }
 }
 
-async function openProject(fullName, openPane = true) {
-  state.selectedProject = fullName;
-  const url = new URL(window.location.href);
-  url.searchParams.set("view", "projects");
-  url.searchParams.set("project", fullName);
-  url.searchParams.delete("paper");
-  window.history.replaceState({}, "", url);
-  renderProjects();
-  el("readingEmpty").hidden = true;
-  el("paperDetail").hidden = false;
-  el("paperDetail").innerHTML = `<div class="detail-shell"><div class="skeleton-line" style="width:42%"></div><div class="skeleton-line" style="width:90%;height:22px"></div><div class="skeleton-line" style="width:72%"></div></div>`;
-  if (openPane) el("readingPane").classList.add("is-open");
-  try {
-    const project = await api(`/api/projects/${encodeURIComponent(fullName)}`);
-    renderProjectDetail(project);
-  } catch (error) {
-    toast(error.message, true);
-  }
+async function openProject(fullName) {
+  return openProjectReader(fullName);
 }
 
 function renderProjectDetail(project) {
@@ -911,6 +933,7 @@ function weeklyPreparationText(preparation) {
 }
 
 function updateWeeklyPreparation(preparation, rerender = false) {
+  const wasRunning = Boolean(state.weeklyPreparation?.running);
   state.weeklyPreparation = preparation || null;
   const status = el("weeklyPreparation");
   status.hidden = state.view !== "recommended" || state.weeklyKind !== "papers" || !preparation;
@@ -924,6 +947,10 @@ function updateWeeklyPreparation(preparation, rerender = false) {
   if (rerender && state.view === "recommended" && state.weeklyKind === "papers") renderPapers();
   if (state.weeklyPreparationPoll) window.clearInterval(state.weeklyPreparationPoll);
   state.weeklyPreparationPoll = null;
+  if (rerender && wasRunning && !preparation.running && state.view === "recommended" && state.weeklyKind === "papers") {
+    loadPapers({ preserveSelection: false }).catch((error) => toast(error.message, true));
+    return;
+  }
   if (preparation.running) {
     state.weeklyPreparationPoll = window.setInterval(async () => {
       try {
@@ -1019,6 +1046,15 @@ function weeklyPaperAssetStatus(paper) {
     stateClass = "is-cached";
   } else if (preparation.pdf_status === "unavailable") {
     label = "暂无公开 PDF";
+    stateClass = "is-unavailable";
+  } else if (paper.public_pdf?.state === "verified") {
+    label = paper.public_pdf.label;
+    stateClass = "is-ready";
+  } else if (paper.public_pdf?.state === "source") {
+    label = paper.public_pdf.label;
+    stateClass = "is-source";
+  } else if (paper.public_pdf?.state === "unavailable") {
+    label = paper.public_pdf.label;
     stateClass = "is-unavailable";
   } else if (state.weeklyPreparation?.running && state.weeklyPreparation.current_paper_id === paper.id) {
     label = "后台准备中";
@@ -1847,8 +1883,17 @@ function clearFilters() {
 function bindEvents() {
   const reload = debounce(() => loadPapers({ preserveSelection: false }));
   el("scoreWeightControls").addEventListener("input", (event) => {
-    const input = event.target.closest("[data-score-weight]");
-    if (input) rebalanceScoreWeights(input.dataset.scoreWeight, input.value);
+    const input = event.target.closest("[data-score-weight], [data-score-weight-number]");
+    if (!input || input.value === "") return;
+    const key = input.dataset.scoreWeight || input.dataset.scoreWeightNumber;
+    if (key) setScoreWeight(key, input.value);
+  });
+  el("scoreWeightPresets").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-score-preset]");
+    const preset = button && SCORE_WEIGHT_PRESETS[button.dataset.scorePreset];
+    if (!preset) return;
+    state.recommendationWeights = { ...preset };
+    renderScoreEditor();
   });
   el("resetScoreWeights").addEventListener("click", () => {
     state.recommendationWeights = { ...DEFAULT_SCORE_WEIGHTS };

@@ -226,8 +226,8 @@ a { color: var(--primary); text-underline-offset: 3px; }
 .coverage-summary { margin-left: auto; align-self: center; color: var(--muted); font-size: 10px; white-space: nowrap; }
 
 .content-grid { display: grid; grid-template-columns: minmax(0, 1fr) var(--reading-width); min-height: calc(100dvh - 213px); }
-.content-grid.is-recommended { grid-template-columns: minmax(0, 1fr); }
-.content-grid.is-recommended .reading-pane { display: none; }
+.content-grid.is-recommended, .content-grid.is-projects { grid-template-columns: minmax(0, 1fr); }
+.content-grid.is-recommended .reading-pane, .content-grid.is-projects .reading-pane { display: none; }
 .paper-stream { min-width: 0; }
 
 .stream-head {
@@ -273,7 +273,6 @@ a { color: var(--primary); text-underline-offset: 3px; }
   place-items: center;
   border-radius: 50%;
   background: conic-gradient(oklch(0.66 0.17 145) 0 30%, oklch(0.68 0.14 225) 30% 55%, oklch(0.78 0.15 85) 55% 75%, oklch(0.68 0.12 190) 75% 90%, oklch(0.68 0.16 25) 90% 100%);
-  transition: background 180ms ease-out;
 }
 .score-weight-ring > div { width: 82px; aspect-ratio: 1; display: grid; place-content: center; border-radius: 50%; background: var(--bg); text-align: center; }
 .score-weight-ring strong { color: var(--ink); font-family: "Cascadia Mono", Consolas, monospace; font-size: 24px; line-height: 1; font-variant-numeric: tabular-nums; }
@@ -281,15 +280,23 @@ a { color: var(--primary); text-underline-offset: 3px; }
 .score-ring-caption { display: grid; gap: 2px; text-align: center; }
 .score-ring-caption strong { color: var(--ink); font-size: 10px; }
 .score-ring-caption span { margin: 0; font-size: 9px; }
-.score-weight-controls { display: grid; align-content: center; gap: 9px; }
-.score-weight-row { --weight-color: var(--primary); display: grid; gap: 4px; }
-.score-weight-row > span { display: grid; grid-template-columns: 8px minmax(0, 1fr) 36px; align-items: center; gap: 7px; margin: 0; }
+.score-weight-controls { display: grid; align-content: center; gap: 10px; }
+.score-weight-row { --weight-color: var(--primary); display: grid; gap: 5px; }
+.score-weight-label { display: grid; grid-template-columns: 8px minmax(0, 1fr) 48px; align-items: center; gap: 7px; margin: 0; }
 .score-weight-row i { width: 8px; height: 8px; border-radius: 2px; background: var(--weight-color); }
 .score-weight-row b { overflow: hidden; color: var(--ink-soft); font-size: 10px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
 .score-weight-row output { color: var(--ink); font-family: "Cascadia Mono", Consolas, monospace; font-size: 10px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
-.score-weight-row input { width: 100%; height: 16px; min-height: 16px; margin: 0; accent-color: var(--weight-color); cursor: grab; }
-.score-weight-row input:active { cursor: grabbing; }
-.score-weight-row input:focus-visible { outline: 2px solid color-mix(in oklch, var(--weight-color) 72%, white); outline-offset: 2px; }
+.score-weight-inputs { display: grid; grid-template-columns: minmax(0, 1fr) 78px; align-items: center; gap: 9px; }
+.score-weight-inputs > input[type="range"] { width: 100%; height: 18px; min-height: 18px; margin: 0; accent-color: var(--weight-color); cursor: grab; }
+.score-weight-inputs > input[type="range"]:active { cursor: grabbing; }
+.score-weight-inputs input:focus-visible { outline: 2px solid color-mix(in oklch, var(--weight-color) 72%, white); outline-offset: 2px; }
+.score-weight-number { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 3px; min-height: 30px; padding: 0 6px 0 7px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--bg); color: var(--ink); }
+.score-weight-number input { width: 100%; min-width: 0; min-height: 28px; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font-family: "Cascadia Mono", Consolas, monospace; font-size: 10px; font-variant-numeric: tabular-nums; }
+.score-weight-number span:last-child { color: var(--muted); font-family: "Cascadia Mono", Consolas, monospace; font-size: 10px; }
+.score-weight-presets { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 5px; padding-top: 1px; }
+.score-weight-presets button { min-height: 28px; border: 1px solid var(--line); border-radius: var(--radius-control); padding: 4px 8px; background: var(--surface); color: var(--ink-soft); cursor: pointer; font-size: 10px; }
+.score-weight-presets button:hover { border-color: color-mix(in oklch, var(--primary) 55%, var(--line)); color: var(--primary-hover); }
+.score-weight-presets button.is-active { border-color: var(--primary); background: var(--primary-soft); color: var(--primary-hover); font-weight: 700; }
 .score-editor-actions { grid-column: 1 / -1; display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding-top: 12px; border-top: 1px solid var(--line); }
 .score-editor-actions > span { margin: 0 auto 0 0; color: var(--muted); font-size: 9px; }
 .score-editor-actions > span.is-dirty { color: var(--warning); }
@@ -359,6 +366,7 @@ a { color: var(--primary); text-underline-offset: 3px; }
 .pdf-state { max-width: 82px; color: var(--muted); font-family: "Cascadia Mono", Consolas, monospace; font-size: 8px; font-weight: 650; text-align: right; line-height: 1.35; }
 .pdf-state.is-ready { color: var(--primary-hover); }
 .pdf-state.is-cached { color: var(--ink-soft); }
+.pdf-state.is-source { color: var(--primary); }
 .pdf-state.is-running { color: var(--warning); }
 .pdf-state.is-unavailable { color: var(--muted); }
 .favorite-toggle { min-height: 28px; border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 20px; line-height: 1; padding: 0 2px; }
