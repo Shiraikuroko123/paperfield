@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.7
+
+- iPadOS and iOS now use Safari's native authenticated PDF viewer instead of PDF.js canvas rendering, which avoids prolonged first-page rendering for large, graphics-heavy cloud PDFs. Desktop readers continue to use the incremental PDF.js view.
+
 ## 0.12.6
 
 - Fixed shared cloud-PDF reading for the beta service: legacy cache paths are migrated into the active profile at startup, and concurrent reader requests now share one cloud restore instead of competing for the same temporary file.

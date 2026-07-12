@@ -63,6 +63,11 @@ const SCORE_WEIGHT_PRESETS = {
 const el = (id) => document.getElementById(id);
 const NGROK_BYPASS_HEADERS = { "ngrok-skip-browser-warning": "paperfield" };
 const PDF_LOAD_TIMEOUT_MS = 90000;
+const prefersNativePdfViewer = () => {
+  const userAgent = navigator.userAgent || "";
+  return /iPad|iPhone|iPod/.test(userAgent)
+    || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+};
 if (globalThis.pdfjsLib) globalThis.pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.min.js?v=3.11.174";
 
 const escapeHtml = (value = "") => String(value)
@@ -1352,6 +1357,7 @@ function releaseReaderPdf() {
   el("pdfActions").hidden = true;
   el("pdfRetryButton").hidden = true;
   el("pdfOpenButton").href = "#";
+  el("pdfOpenButton").textContent = "新窗口打开";
   if (state.readerPdfObjectUrl) URL.revokeObjectURL(state.readerPdfObjectUrl);
   state.readerPdfObjectUrl = "";
 }
@@ -1460,7 +1466,20 @@ async function loadReaderPdf(asset) {
   setPdfStatus("正在载入 PDF", asset.cloud_available && !asset.local_cached ? "正在从云端读取" : "正在读取已缓存文件");
   try {
     if (!el("readerDialog").open || state.readerPaper?.id !== requestedPaperId || state.readerPdfToken !== token) return;
-    el("pdfOpenButton").href = asset.pdf_url;
+    const nativeUrl = `${asset.pdf_url}#view=FitH`;
+    el("pdfOpenButton").href = nativeUrl;
+    if (prefersNativePdfViewer()) {
+      // PDF.js canvas rendering can stall on iPadOS for large, graphics-heavy papers.
+      // Safari's native PDF renderer is faster and keeps the authenticated same-origin request.
+      el("pdfOpenButton").textContent = "系统阅读器打开";
+      el("pdfFrame").src = nativeUrl;
+      el("pdfFrame").hidden = false;
+      el("pdfStatus").hidden = true;
+      el("pdfRetryButton").hidden = true;
+      el("pdfUnavailable").hidden = true;
+      el("pdfActions").hidden = false;
+      return;
+    }
     const renderedWithPdfJs = await renderPdfDocument(asset.pdf_url, token);
     if (!renderedWithPdfJs) throw new Error("当前浏览器无法启动 PDF 阅读器");
     if (!el("readerDialog").open || state.readerPaper?.id !== requestedPaperId || state.readerPdfToken !== token) return;
