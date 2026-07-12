@@ -84,6 +84,101 @@ const escapeHtml = (value = "") => String(value)
   .replaceAll('"', "&quot;")
   .replaceAll("'", "&#039;");
 
+function escapedTextMarkup(value = "") {
+  return escapeHtml(value).replace(/\r?\n/g, "<br>");
+}
+
+function normalizedLegacyEquation(expression) {
+  return expression
+    .trim()
+    .replace(/([A-Za-zΑ-Ωα-ω])_([A-Za-z0-9]+)/g, "$1_{$2}")
+    .replace(/log(\d+)/g, "\\log_{$1}")
+    .replace(/\bmax\b/g, "\\max")
+    .replaceAll("·", "\\cdot ");
+}
+
+function findUnescapedDelimiter(text, delimiter, from) {
+  let searchFrom = from;
+  while (searchFrom < text.length) {
+    const found = text.indexOf(delimiter, searchFrom);
+    if (found < 0) return -1;
+    let backslashes = 0;
+    for (let index = found - 1; index >= 0 && text[index] === "\\"; index -= 1) backslashes += 1;
+    if (backslashes % 2 === 0) return found;
+    searchFrom = found + delimiter.length;
+  }
+  return -1;
+}
+
+function mathExpressionMarkup(expression, displayMode) {
+  const source = String(expression || "").trim();
+  if (!source) return "";
+  if (!globalThis.katex?.renderToString) return `<code class="math-source">${escapeHtml(source)}</code>`;
+  try {
+    const rendered = globalThis.katex.renderToString(source, {
+      displayMode,
+      output: "htmlAndMathml",
+      strict: "ignore",
+      throwOnError: true,
+      trust: false,
+    });
+    return `<span class="${displayMode ? "math-display" : "math-inline"}">${rendered}</span>`;
+  } catch (error) {
+    return `<code class="math-source">${escapeHtml(source)}</code>`;
+  }
+}
+
+function legacyEquationTextMarkup(value = "") {
+  const text = String(value);
+  const pattern = /([A-Za-zΑ-Ωα-ωΔλρπτθΩ][A-Za-z0-9_{}^\\α-ωΑ-ΩΔλρπτθΩ()|,+\-*/=·. ]*\s*(?:=|≈|≠|≤|≥|∈|∝|→|←)\s*[A-Za-z0-9_{}^\\α-ωΑ-ΩΔλρπτθΩ()|,+\-*/=·. ]+)/g;
+  let markup = "";
+  let textStart = 0;
+
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index || 0;
+    markup += escapedTextMarkup(text.slice(textStart, index));
+    markup += mathExpressionMarkup(normalizedLegacyEquation(match[0]), false);
+    textStart = index + match[0].length;
+  }
+  return `${markup}${escapedTextMarkup(text.slice(textStart))}`;
+}
+
+function mathTextMarkup(value = "", autoDetectLegacyEquations = false) {
+  const text = String(value);
+  let markup = "";
+  let textStart = 0;
+  const plainTextMarkup = autoDetectLegacyEquations ? legacyEquationTextMarkup : escapedTextMarkup;
+
+  for (let index = 0; index < text.length; index += 1) {
+    let closing = "";
+    let displayMode = false;
+    if (text.startsWith("\\[", index)) {
+      closing = "\\]";
+      displayMode = true;
+    } else if (text.startsWith("\\(", index)) {
+      closing = "\\)";
+    } else if (text.startsWith("$$", index) && (index === 0 || text[index - 1] !== "\\")) {
+      closing = "$$";
+      displayMode = true;
+    } else if (text[index] === "$" && (index === 0 || text[index - 1] !== "\\")) {
+      closing = "$";
+    } else {
+      continue;
+    }
+
+    const formulaStart = index + (closing.startsWith("\\") ? 2 : closing.length);
+    const end = findUnescapedDelimiter(text, closing, formulaStart);
+    if (end < 0 || end === formulaStart) continue;
+    const formula = text.slice(formulaStart, end);
+    markup += plainTextMarkup(text.slice(textStart, index));
+    markup += mathExpressionMarkup(formula, displayMode);
+    index = end + closing.length - 1;
+    textStart = end + closing.length;
+  }
+
+  return `${markup}${plainTextMarkup(text.slice(textStart))}`;
+}
+
 function sharedRequestUrl(path, attempt = 0) {
   const url = new URL(path, window.location.origin);
   if (url.hostname.endsWith(".ngrok-free.dev")) {
@@ -597,12 +692,12 @@ async function monitorProjectReadingBackup(fullName) {
 function projectExplanationMarkup(explanation) {
   const block = (title, value) => {
     const content = Array.isArray(value)
-      ? `<ul>${value.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
-      : `<p>${escapeHtml(value || "暂无")}</p>`;
+      ? `<ul>${value.map((item) => `<li class="math-rich-text">${mathTextMarkup(item)}</li>`).join("")}</ul>`
+      : `<p class="math-rich-text">${mathTextMarkup(value || "暂无")}</p>`;
     return `<section class="project-explain-block"><h4>${title}</h4>${content}</section>`;
   };
   return `<div class="explain-head"><h3>代码讲解</h3><div class="explain-actions"><span class="explain-mode">${explanation.mode === "ai" ? `AI 讲解 · ${escapeHtml(explanation.model || "")}` : "元数据导读"}</span><button class="text-button" type="button" data-project-explain>重新生成</button></div></div>
-    ${explanation.notice ? `<p style="color:var(--warning)">${escapeHtml(explanation.notice)}</p>` : ""}
+    ${explanation.notice ? `<p class="math-rich-text" style="color:var(--warning)">${mathTextMarkup(explanation.notice)}</p>` : ""}
     <div class="project-explain-grid">
       ${block("项目目标", explanation.overview)}${block("代码架构", explanation.architecture)}${block("关键入口", explanation.entry_points)}
       ${block("代码流程", explanation.code_flow)}${block("安装与运行", explanation.setup)}${block("值得学习", explanation.strengths)}
@@ -755,7 +850,8 @@ function renderProjectChatHistory(items = []) {
     const label = document.createElement("strong");
     label.textContent = item.role === "user" ? "你" : "代码导师";
     const content = document.createElement("p");
-    content.textContent = item.content;
+    content.className = "math-rich-text";
+    content.innerHTML = mathTextMarkup(item.content);
     message.append(label, content);
     history.append(message);
   });
@@ -779,7 +875,7 @@ function appendProjectChatMessage(role, content, pending = false) {
   history.querySelector(".chat-empty")?.remove();
   const message = document.createElement("div");
   message.className = `chat-message is-${role}${pending ? " is-pending" : ""}`;
-  message.innerHTML = `<strong>${role === "user" ? "你" : "代码导师"}</strong><p>${escapeHtml(content)}</p>`;
+  message.innerHTML = `<strong>${role === "user" ? "你" : "代码导师"}</strong><p class="math-rich-text">${mathTextMarkup(content)}</p>`;
   history.append(message);
   history.scrollTop = history.scrollHeight;
   return message;
@@ -1288,9 +1384,9 @@ function renderDetail(paper) {
 }
 
 function explanationMarkup(explanation) {
-  const list = (value) => Array.isArray(value)
-    ? `<ul>${value.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
-    : `<p>${escapeHtml(value || "暂无")}</p>`;
+  const list = (value, autoDetectLegacyEquations = false) => Array.isArray(value)
+    ? `<ul>${value.map((item) => `<li class="math-rich-text">${mathTextMarkup(item, autoDetectLegacyEquations)}</li>`).join("")}</ul>`
+    : `<p class="math-rich-text">${mathTextMarkup(value || "暂无", autoDetectLegacyEquations)}</p>`;
   return `
     <div class="explain-head">
       <h3>中文讲解</h3>
@@ -1299,7 +1395,7 @@ function explanationMarkup(explanation) {
         <button class="text-button" type="button" data-explain>重新生成</button>
       </div>
     </div>
-    ${explanation.notice ? `<p style="color:var(--warning);margin-bottom:12px">${escapeHtml(explanation.notice)}</p>` : ""}
+    ${explanation.notice ? `<p class="math-rich-text" style="color:var(--warning);margin-bottom:12px">${mathTextMarkup(explanation.notice)}</p>` : ""}
     <div class="explain-grid">
       <div class="explain-block"><h4>一句话理解</h4>${list(explanation.one_sentence)}</div>
       <div class="explain-block"><h4>论文结构</h4>${list(explanation.paper_structure)}</div>
@@ -1307,7 +1403,7 @@ function explanationMarkup(explanation) {
       <div class="explain-block"><h4>解决的问题</h4>${list(explanation.problem)}</div>
       <div class="explain-block"><h4>方法路线</h4>${list(explanation.method)}</div>
       <div class="explain-block"><h4>算法流程</h4>${list(explanation.algorithm_flow)}</div>
-      <div class="explain-block"><h4>公式与推导</h4>${list(explanation.derivation)}</div>
+      <div class="explain-block"><h4>公式与推导</h4>${list(explanation.derivation, true)}</div>
       <div class="explain-block"><h4>实验怎么看</h4>${list(explanation.experiments)}</div>
       <div class="explain-block"><h4>结论链条</h4>${list(explanation.conclusions)}</div>
       <div class="explain-block"><h4>主要贡献</h4>${list(explanation.contributions)}</div>
@@ -1315,9 +1411,9 @@ function explanationMarkup(explanation) {
       <div class="explain-block"><h4>阅读前置</h4>${list(explanation.prerequisites)}</div>
       <div class="explain-block"><h4>是否适合你</h4>${list(explanation.fit)}</div>
       ${Array.isArray(explanation.evidence) && explanation.evidence.length ? `
-        <div class="explain-block"><h4>原文证据</h4><ul>${explanation.evidence.map((item) => `<li>${escapeHtml(item.claim || "")}${item.pages ? ` <b>${escapeHtml(Array.isArray(item.pages) ? item.pages.join("、") : item.pages)}</b>` : ""}</li>`).join("")}</ul></div>` : ""}
+        <div class="explain-block"><h4>原文证据</h4><ul>${explanation.evidence.map((item) => `<li class="math-rich-text">${mathTextMarkup(item.claim || "")}${item.pages ? ` <b>${escapeHtml(Array.isArray(item.pages) ? item.pages.join("、") : item.pages)}</b>` : ""}</li>`).join("")}</ul></div>` : ""}
       ${Array.isArray(explanation.glossary) && explanation.glossary.length ? `
-        <div class="explain-block"><h4>术语表</h4><dl class="glossary">${explanation.glossary.map((item) => `<div><dt>${escapeHtml(item.term)}</dt><dd>${escapeHtml(item.explanation)}</dd></div>`).join("")}</dl></div>` : ""}
+        <div class="explain-block"><h4>术语表</h4><dl class="glossary">${explanation.glossary.map((item) => `<div><dt class="math-rich-text">${mathTextMarkup(item.term)}</dt><dd class="math-rich-text">${mathTextMarkup(item.explanation)}</dd></div>`).join("")}</dl></div>` : ""}
     </div>`;
 }
 
@@ -1958,7 +2054,8 @@ function renderChatHistory(items = []) {
     const label = document.createElement("strong");
     label.textContent = item.role === "user" ? "你" : "论文导师";
     const content = document.createElement("p");
-    content.textContent = item.content;
+    content.className = "math-rich-text";
+    content.innerHTML = mathTextMarkup(item.content);
     message.append(label, content);
     history.append(message);
   });
@@ -2411,7 +2508,7 @@ function bindEvents() {
     if (history.querySelector(".chat-empty")) history.innerHTML = "";
     const pending = document.createElement("div");
     pending.className = "chat-message is-user";
-    pending.innerHTML = `<strong>你</strong><p>${escapeHtml(question)}</p>`;
+    pending.innerHTML = `<strong>你</strong><p class="math-rich-text">${mathTextMarkup(question)}</p>`;
     history.append(pending);
     try {
       await api(`/api/papers/${encodeURIComponent(paper.id)}/chat`, { method: "POST", body: JSON.stringify({ question }) });

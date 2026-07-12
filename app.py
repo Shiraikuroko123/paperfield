@@ -3246,7 +3246,7 @@ architecture 说明模块职责；code_flow 按输入、预处理、核心逻辑
 {context}
 """
         try:
-            result = self._parse_json(self.ai._request_text(prompt, connection, timeout=180))
+            result = self._parse_json(self.ai._request_text(f"{self.ai.LATEX_GUIDANCE}\n\n{prompt}", connection, timeout=180))
         except Exception as error:
             result = self._fallback(project, workspace, f"AI 服务暂时不可用：{error}")
             self.store.save_project_explanation(project["full_name"], result)
@@ -3286,7 +3286,7 @@ architecture 说明模块职责；code_flow 按输入、预处理、核心逻辑
 源码材料：
 {context}
 """
-        answer = self.ai._request_text(prompt, connection, timeout=180).strip()
+        answer = self.ai._request_text(f"{self.ai.LATEX_GUIDANCE}\n\n{prompt}", connection, timeout=180).strip()
         self.store.add_project_chat_message(project["full_name"], "user", question)
         self.store.add_project_chat_message(project["full_name"], "assistant", answer)
         return {
@@ -4694,6 +4694,10 @@ class ProjectDocumentTranslationService:
 class PaperExplainer:
     _wire_lock = threading.RLock()
     _wire_preferences: dict[tuple[str, str, str, str], str] = {}
+    LATEX_GUIDANCE = (
+        "涉及数学表达时，请在字符串中使用 LaTeX：行内公式为 $...$，独立公式为 $$...$$。"
+        "只在确有公式时使用；保持 JSON 合法，反斜杠必须按 JSON 规则转义。"
+    )
 
     @classmethod
     def connection(cls) -> dict[str, str] | None:
@@ -5062,7 +5066,7 @@ class PaperExplainer:
 当前页块：
 {chunk}
 """
-                output = self._request_text(note_prompt, connection, timeout=120)
+                output = self._request_text(f"{self.LATEX_GUIDANCE}\n\n{note_prompt}", connection, timeout=120)
                 match = re.search(r"\{.*\}", output, flags=re.S)
                 return index - 1, json.loads(match.group(0)) if match else {"raw_notes": output}
 
@@ -5118,7 +5122,7 @@ class PaperExplainer:
 全文阅读笔记：
 {json.dumps(material, ensure_ascii=False)}
 """
-                return kind, parse_json_output(self._request_text(prompt, connection, timeout=120))
+                return kind, parse_json_output(self._request_text(f"{self.LATEX_GUIDANCE}\n\n{prompt}", connection, timeout=120))
 
             parts: dict[str, dict[str, Any]] = {}
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
@@ -5146,7 +5150,7 @@ derivation, experiments, conclusions, contributions, limitations, prerequisites,
 {metadata}
 摘要：{source_material}
 """
-            explanation = parse_json_output(self._request_text(prompt, connection, timeout=120))
+            explanation = parse_json_output(self._request_text(f"{self.LATEX_GUIDANCE}\n\n{prompt}", connection, timeout=120))
         explanation["mode"] = "ai"
         explanation["reading_basis"] = "fulltext" if fulltext else "abstract"
         explanation["provider"] = connection["provider"]
@@ -5195,7 +5199,7 @@ derivation, experiments, conclusions, contributions, limitations, prerequisites,
 论文材料：
 {material}
 """
-        answer = self._request_text(prompt, connection, timeout=180).strip()
+        answer = self._request_text(f"{self.LATEX_GUIDANCE}\n\n{prompt}", connection, timeout=180).strip()
         return {
             "answer": answer,
             "reading_basis": "fulltext" if reading_notes else "fulltext_excerpt" if fulltext else "abstract",
