@@ -9,7 +9,7 @@ Paperfield is a desktop research workstation for embodied intelligence, large la
 - Weekly paper recommendations by research field, capped at five papers per field with explainable scores.
 - Coverage of top conferences, journals, preprints, and public scholarly metadata, with formal publications separated from unconfirmed preprints.
 - A split PDF reader with full-text analysis, page translation, and source-grounded questions.
-- Up to four daily GitHub project recommendations linked to papers, README documents, and curated source-reading routes.
+- Up to four weekly GitHub project recommendations linked to papers, README documents, and curated source-reading routes, stable throughout the natural week.
 - Local, Cloudflare R2, or hybrid PDF storage with backups for explanations and chat history.
 - Password-protected beta sharing for up to four trusted testers.
 

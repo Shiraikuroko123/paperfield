@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.2
+
+- Merged project recommendations into the weekly picks page below the selected papers.
+- Replaced the daily project label with a natural-week rotation of up to four projects.
+- Kept legacy project-recommendation URLs compatible by redirecting them to weekly picks.
+
 ## 0.10.1
 
 - Added an isolated `community-beta` R2 namespace for connector imports and shared PDFs.

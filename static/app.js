@@ -1,6 +1,9 @@
 const state = {
   papers: [],
   projects: [],
+  weeklyProjects: [],
+  weeklyProjectCandidateTotal: 0,
+  weeklyKind: "papers",
   selectedId: null,
   selectedProject: null,
   readerPaper: null,
@@ -171,29 +174,38 @@ function projectParams() {
   return params;
 }
 
-const isProjectMode = () => state.view === "projects" || state.view === "project-recommended";
+const isProjectMode = () => state.view === "projects";
 
 function applyViewMode() {
   const projectMode = isProjectMode();
-  const projectRecommendedMode = state.view === "project-recommended";
   const recommendedMode = state.view === "recommended";
-  document.querySelector(".content-grid").classList.toggle("is-recommended", recommendedMode || projectRecommendedMode);
+  document.querySelector(".filter-strip").hidden = recommendedMode && state.weeklyKind === "projects";
+  document.querySelector(".content-grid").classList.toggle("is-recommended", recommendedMode);
   document.querySelectorAll(".paper-only-filter").forEach((item) => { item.hidden = projectMode || recommendedMode; });
-  document.querySelectorAll(".project-only-filter").forEach((item) => { item.hidden = !projectMode || projectRecommendedMode; });
-  el("dateFilter").closest("label").hidden = recommendedMode || projectRecommendedMode;
+  document.querySelectorAll(".project-only-filter").forEach((item) => { item.hidden = !projectMode; });
+  el("dateFilter").closest("label").hidden = recommendedMode;
   document.querySelector(".score-guide").hidden = projectMode;
-  el("streamTitle").textContent = projectRecommendedMode ? "每日项目" : projectMode ? "GitHub 项目" : recommendedMode ? "每周精选" : "论文流";
+  el("scoreGuideContent").textContent = recommendedMode && state.weeklyKind === "projects"
+    ? "方向匹配 20 · 近期活跃 25 · 社区采用 20 · 论文关联 25 · 仓库完整度 10"
+    : "学术质量 30 · 方向匹配 25 · 时效性 20 · 证据完整度 15 · 影响与复现 10";
+  el("streamTitle").textContent = projectMode ? "GitHub 项目" : recommendedMode ? "每周精选" : "论文流";
   el("loadMoreButton").textContent = projectMode ? "加载更多项目" : "加载更多论文";
-  document.querySelector(".stream-head .status-tabs").hidden = projectMode || recommendedMode;
-  el("overviewTitle").textContent = projectRecommendedMode ? "今天值得研究的项目" : projectMode ? "今天有哪些项目在更新" : recommendedMode ? "本周先读这几篇" : "今天值得读什么";
-  el("overviewMessage").textContent = projectRecommendedMode ? "从活跃仓库中按方向、社区采用、论文关联和完整度筛选。" : projectMode ? "跟踪具身智能与大模型开源仓库，并连接对应论文。" : recommendedMode ? "从完整候选池中按领域、刊物、时效、全文证据与复现线索二次筛选。" : "浏览全部公开论文元数据与来源。";
-  el("statTotalLabel").textContent = projectRecommendedMode ? "今日项目" : projectMode ? "GitHub 项目" : recommendedMode ? "本周精选" : "收录论文";
-  el("statUnreadLabel").textContent = projectRecommendedMode ? "候选项目" : projectMode ? "今日更新" : recommendedMode ? "候选池" : "未读";
-  el("statFavoriteLabel").textContent = projectMode ? "论文关联" : "已收藏";
+  el("weeklyKindTabs").hidden = !recommendedMode;
+  el("readingStatusTabs").hidden = projectMode || recommendedMode;
+  document.querySelectorAll("[data-weekly-kind]").forEach((button) => {
+    const active = button.dataset.weeklyKind === state.weeklyKind;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  el("overviewTitle").textContent = projectMode ? "今天有哪些项目在更新" : recommendedMode ? "本周先读与复现" : "今天值得读什么";
+  el("overviewMessage").textContent = projectMode ? "跟踪具身智能与大模型开源仓库，并连接对应论文。" : recommendedMode ? "按自然周筛选论文与开源项目，同一周保持稳定。" : "浏览全部公开论文元数据与来源。";
+  el("statTotalLabel").textContent = projectMode ? "GitHub 项目" : recommendedMode ? "论文精选" : "收录论文";
+  el("statUnreadLabel").textContent = projectMode ? "今日更新" : recommendedMode ? "候选论文" : "未读";
+  el("statFavoriteLabel").textContent = projectMode ? "论文关联" : recommendedMode ? "项目精选" : "已收藏";
   if (state.stats) {
-    el("statTotal").textContent = projectRecommendedMode ? state.total : projectMode ? state.stats.project_total : recommendedMode ? state.total : state.stats.total;
-    el("statUnread").textContent = projectRecommendedMode ? state.stats.project_total : projectMode ? state.stats.project_updated_today : recommendedMode ? state.stats.total : state.stats.unread;
-    el("statFavorite").textContent = projectMode ? state.stats.project_link_count : state.stats.favorites;
+    el("statTotal").textContent = projectMode ? state.stats.project_total : recommendedMode ? state.total : state.stats.total;
+    el("statUnread").textContent = projectMode ? state.stats.project_updated_today : recommendedMode ? state.stats.total : state.stats.unread;
+    el("statFavorite").textContent = projectMode ? state.stats.project_link_count : recommendedMode ? state.weeklyProjects.length : state.stats.favorites;
     if (!state.stats.refresh.running) el("refreshButton").textContent = projectMode ? "更新全部" : "更新论文";
   }
 }
@@ -210,16 +222,6 @@ function renderSkeleton() {
 async function loadProjects({ append = false } = {}) {
   if (!append) renderSkeleton();
   try {
-    if (state.view === "project-recommended") {
-      const payload = await api("/api/project-recommendations");
-      state.projects = payload.items;
-      state.total = payload.total;
-      renderProjects();
-      el("resultCount").textContent = `${payload.total} 个 · 候选 ${payload.candidate_total} 个`;
-      el("loadMoreWrap").hidden = true;
-      el("navProjectRecommendedCount").textContent = payload.total;
-      return;
-    }
     const params = projectParams();
     params.set("limit", state.pageSize);
     params.set("offset", append ? state.projects.length : 0);
@@ -246,18 +248,11 @@ async function loadProjects({ append = false } = {}) {
   }
 }
 
-function renderProjects() {
-  const list = el("paperList");
-  list.innerHTML = "";
-  el("emptyState").hidden = state.projects.length > 0;
-  if (!state.projects.length) {
-    el("emptyState").querySelector("strong").textContent = "当前筛选没有 GitHub 项目";
-    el("emptyState").querySelector("p").textContent = "调整主题、语言或起始日期后重试。";
-  }
-  for (const project of state.projects) {
+function createProjectRow(project, weekly = false) {
     const row = document.createElement("article");
-    row.className = `paper-row project-row${project.full_name === state.selectedProject ? " is-selected" : ""}`;
+    row.className = `paper-row project-row${weekly ? " is-recommended" : ""}${project.full_name === state.selectedProject ? " is-selected" : ""}`;
     row.tabIndex = 0;
+    row.setAttribute("aria-label", `打开项目：${project.full_name}`);
     row.innerHTML = `
       <div>
         <div class="paper-kicker">
@@ -273,7 +268,7 @@ function renderProjects() {
       <div class="paper-score project-score">
         <strong>${project.recommendation_score ? Math.round(project.recommendation_score) : project.stars}</strong>
         <span>${project.recommendation_score ? "项目分" : "Stars"}</span>
-        <b>${project.recommendation_score ? `${project.stars} Stars` : `${project.linked_paper_count} 篇论文`}</b>
+        <b>${project.recommendation_score ? `${project.stars} Stars · ${project.linked_paper_count} 篇论文` : `${project.linked_paper_count} 篇论文`}</b>
       </div>`;
     row.addEventListener("click", () => openProjectReader(project.full_name));
     row.addEventListener("keydown", (event) => {
@@ -282,6 +277,19 @@ function renderProjects() {
         openProjectReader(project.full_name);
       }
     });
+    return row;
+}
+
+function renderProjects() {
+  const list = el("paperList");
+  list.innerHTML = "";
+  el("emptyState").hidden = state.projects.length > 0;
+  if (!state.projects.length) {
+    el("emptyState").querySelector("strong").textContent = "当前筛选没有 GitHub 项目";
+    el("emptyState").querySelector("p").textContent = "调整主题、语言或起始日期后重试。";
+  }
+  for (const project of state.projects) {
+    const row = createProjectRow(project);
     list.append(row);
   }
 }
@@ -328,7 +336,7 @@ function renderProjectDetail(project) {
         ${project.papers?.length ? `<div class="linked-list">${project.papers.map((paper) => `
           <button type="button" data-linked-paper="${escapeHtml(paper.id)}">
             <strong>${escapeHtml(paper.title)}</strong><span>${escapeHtml(paper.venue)} · 匹配 ${Math.round(paper.project_score)}</span>
-          </button>`).join("")}</div>` : `<p>暂未找到高置信度论文关联。项目仍会保留在每日更新流中。</p>`}
+          </button>`).join("")}</div>` : `<p>暂未找到高置信度论文关联。项目仍会保留在 GitHub 项目流中。</p>`}
       </section>
     </div>`;
   el("paperDetail").querySelector("[data-close-detail]").addEventListener("click", showReadingEmpty);
@@ -665,14 +673,22 @@ async function loadPapers({ preserveSelection = true, append = false } = {}) {
       const params = new URLSearchParams();
       const topic = state.topic || el("topicFilter").value;
       if (topic) params.set("topic", topic);
-      const payload = await api(`/api/recommendations?${params.toString()}`);
+      const [payload, projectPayload] = await Promise.all([
+        api(`/api/recommendations?${params.toString()}`),
+        api("/api/project-recommendations"),
+      ]);
       state.papers = payload.items;
+      state.weeklyProjects = projectPayload.items;
+      state.weeklyProjectCandidateTotal = projectPayload.candidate_total;
+      el("weeklyPaperCount").textContent = payload.total;
+      el("weeklyProjectCount").textContent = projectPayload.total;
       state.total = payload.total;
       renderPapers();
-      el("resultCount").textContent = `${payload.total} 篇 · 每领域最多 ${payload.per_topic} 篇`;
+      el("resultCount").textContent = `${payload.total} 篇论文 · ${projectPayload.total} 个项目 · ${payload.rotation_week_start} 至 ${payload.rotation_week_end}`;
       el("loadMoreWrap").hidden = true;
-      el("navRecommendedCount").textContent = payload.total;
+      el("navRecommendedCount").textContent = payload.total + projectPayload.total;
       if (state.stats) el("statTotal").textContent = payload.total;
+      applyViewMode();
       return;
     }
     const params = currentParams();
@@ -707,9 +723,15 @@ async function loadPapers({ preserveSelection = true, append = false } = {}) {
 function renderPapers() {
   const list = el("paperList");
   list.innerHTML = "";
-  el("emptyState").hidden = state.papers.length > 0;
+  const showingWeeklyProjects = state.view === "recommended" && state.weeklyKind === "projects";
+  const visibleItems = showingWeeklyProjects ? state.weeklyProjects : state.papers;
+  el("emptyState").hidden = visibleItems.length > 0;
+  if (!visibleItems.length) {
+    el("emptyState").querySelector("strong").textContent = showingWeeklyProjects ? "本周暂无项目精选" : "当前筛选没有论文";
+    el("emptyState").querySelector("p").textContent = showingWeeklyProjects ? "更新 GitHub 项目后，下周候选会自动补充。" : "清除部分条件，或点击更新论文拉取最新公开元数据。";
+  }
   let currentGroup = "";
-  for (const paper of state.papers) {
+  for (const paper of showingWeeklyProjects ? [] : state.papers) {
     if (state.view === "recommended" && paper.recommendation_topic !== currentGroup) {
       currentGroup = paper.recommendation_topic;
       const group = document.createElement("div");
@@ -755,6 +777,13 @@ function renderPapers() {
     });
     row.querySelector("[data-favorite]").addEventListener("click", (event) => toggleFavorite(event, paper));
     list.append(row);
+  }
+  if (showingWeeklyProjects && state.weeklyProjects.length) {
+    const group = document.createElement("div");
+    group.className = "recommendation-group recommendation-project-group";
+    group.innerHTML = `<strong>本周开源项目</strong><span>${state.weeklyProjects.length} 个 · 从 ${state.weeklyProjectCandidateTotal} 个近期候选中筛选</span>`;
+    list.append(group);
+    state.weeklyProjects.forEach((project) => list.append(createProjectRow(project, true)));
   }
 }
 
@@ -1382,7 +1411,6 @@ async function loadStats() {
   el("navAllCount").textContent = stats.total;
   el("navTopCount").textContent = stats.top_venue_count;
   el("navProjectCount").textContent = stats.project_total;
-  el("navProjectRecommendedCount").textContent = Math.min(4, stats.project_total);
   el("navFavoriteCount").textContent = stats.favorites;
   el("navEmbodiedCount").textContent = stats.topic_counts["具身智能"] || 0;
   el("navLlmCount").textContent = stats.topic_counts["大语言模型"] || 0;
@@ -1505,6 +1533,21 @@ function bindEvents() {
   });
   el("connectorForm").addEventListener("submit", (event) => { event.preventDefault(); searchConnector(); });
   el("loadMoreButton").addEventListener("click", () => loadPapers({ append: true }));
+
+  document.querySelectorAll("[data-weekly-kind]").forEach((button) => button.addEventListener("click", () => {
+    state.weeklyKind = button.dataset.weeklyKind;
+    document.querySelectorAll("[data-weekly-kind]").forEach((item) => {
+      const active = item === button;
+      item.classList.toggle("is-active", active);
+      item.setAttribute("aria-selected", String(active));
+    });
+    const url = new URL(window.location.href);
+    if (state.weeklyKind === "projects") url.searchParams.set("weekly", "projects");
+    else url.searchParams.delete("weekly");
+    window.history.replaceState({}, "", url);
+    applyViewMode();
+    renderPapers();
+  }));
 
   document.querySelectorAll(".rail-link").forEach((button) => button.addEventListener("click", () => {
     state.topic = button.dataset.topic || "";
@@ -1632,8 +1675,9 @@ async function init() {
   const initialPaperId = initialParams.get("paper");
   const initialProject = initialParams.get("project");
   const requestedView = initialParams.get("view");
-  if (requestedView === "project-recommended") state.view = "project-recommended";
-  else if (requestedView === "projects" || initialProject) state.view = "projects";
+  if (initialParams.get("weekly") === "projects") state.weeklyKind = "projects";
+  if (requestedView === "project-recommended") state.view = "recommended";
+  else if (requestedView === "projects" || (initialProject && requestedView !== "recommended")) state.view = "projects";
   el("overviewDate").textContent = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric", weekday: "long" }).format(now);
   bindEvents();
   applyViewMode();

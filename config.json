@@ -57,7 +57,7 @@
   "github_days_back": 30,
   "github_per_query": 50,
   "github_min_stars": 3,
-  "daily_project_recommendations": 4,
+  "weekly_project_recommendations": 4,
   "project_recommendation_window_days": 45,
   "github_queries": [
     {"category": "具身智能", "query": "topic:embodied-ai"},

@@ -239,11 +239,13 @@ a { color: var(--primary); text-underline-offset: 3px; }
 .status-tabs { display: flex; padding: 2px; background: var(--surface); border-radius: var(--radius-control); }
 .status-tabs button { min-height: 28px; border: 0; padding: 4px 9px; background: transparent; color: var(--muted); border-radius: 4px; cursor: pointer; font-size: 11px; }
 .status-tabs button.is-active { background: var(--bg); color: var(--ink); box-shadow: 0 1px 3px oklch(0.2 0.02 145 / 0.09); }
+.weekly-kind-tabs button b { margin-left: 3px; font-size: 10px; font-variant-numeric: tabular-nums; }
 
 .paper-list { min-height: 300px; }
 .recommendation-group { min-height: 42px; display: flex; align-items: baseline; gap: 9px; padding: 11px 24px 8px; border-bottom: 1px solid var(--line); background: var(--surface); }
 .recommendation-group strong { font-size: 12px; }
 .recommendation-group span { color: var(--muted); font-size: 10px; }
+.recommendation-project-group { margin-top: 12px; border-top: 1px solid var(--line); background: color-mix(in oklch, var(--primary-soft) 38%, white); }
 .load-more { padding: 18px 24px 28px; text-align: center; border-bottom: 1px solid var(--line); }
 
 .paper-row {

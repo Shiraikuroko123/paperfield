@@ -471,12 +471,13 @@ class FeedTests(unittest.TestCase):
             finally:
                 APP.PROJECT_DOC_TRANSLATION_DIR = original_translation_dir
 
-    def test_daily_project_recommendations_are_capped_at_four(self):
-        now = APP.utc_now().isoformat()
+    def test_weekly_project_recommendations_are_stable_capped_and_rotate(self):
+        week_start = date(2026, 7, 6)
+        pushed_at = f"{(week_start - timedelta(days=1)).isoformat()}T12:00:00+00:00"
         projects = [
             {
                 "full_name": f"owner/project-{index}", "description": "embodied AI", "topics": ["embodied-ai"],
-                "categories": ["具身智能" if index % 2 else "大语言模型"], "pushed_at": now,
+                "categories": ["具身智能" if index % 2 else "大语言模型"], "pushed_at": pushed_at,
                 "stars": 100 - index, "linked_paper_count": index % 3, "language": "Python", "license": "MIT",
                 "homepage": "",
             }
@@ -491,13 +492,24 @@ class FeedTests(unittest.TestCase):
         original_store = APP.STORE
         APP.STORE = FakeStore()
         try:
-            result = APP.daily_project_recommendations(10)
+            result = APP.weekly_project_recommendations(10, week_start)
+            repeated = APP.weekly_project_recommendations(10, week_start)
+            next_week = APP.weekly_project_recommendations(10, week_start + timedelta(days=7))
         finally:
             APP.STORE = original_store
 
         self.assertEqual(result["total"], 4)
         self.assertLessEqual(len(result["items"]), 4)
         self.assertIn("score_breakdown", result["items"][0])
+        self.assertEqual(result["rotation_week_start"], "2026-07-06")
+        self.assertEqual(
+            [item["full_name"] for item in result["items"]],
+            [item["full_name"] for item in repeated["items"]],
+        )
+        self.assertNotEqual(
+            [item["full_name"] for item in result["items"]],
+            [item["full_name"] for item in next_week["items"]],
+        )
 
     def test_project_source_reader_rejects_path_traversal(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -55,7 +55,7 @@ SETTINGS_PATH = Path(os.environ.get("PAPERFIELD_SETTINGS_PATH", DATA_DIR / "sett
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
 INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", ROOT / "institutions.json")).expanduser().resolve()
-APP_VERSION = "0.10.1"
+APP_VERSION = "0.10.2"
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
 
@@ -4927,12 +4927,13 @@ def daily_recommendations(topic: str = "", per_topic: int | None = None) -> dict
     }
 
 
-def project_recommendation(project: dict[str, Any]) -> dict[str, Any]:
+def project_recommendation(project: dict[str, Any], reference_time: datetime | None = None) -> dict[str, Any]:
+    reference = reference_time or utc_now()
     try:
         pushed = datetime.fromisoformat(project.get("pushed_at", "").replace("Z", "+00:00"))
         if pushed.tzinfo is None:
             pushed = pushed.replace(tzinfo=timezone.utc)
-        age_days = max(0, (utc_now() - pushed).days)
+        age_days = max(0, (reference - pushed).days)
     except ValueError:
         age_days = 365
     categories = project.get("categories", [])
@@ -4969,10 +4970,16 @@ def project_recommendation(project: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def daily_project_recommendations(limit: int | None = None) -> dict[str, Any]:
-    maximum = max(1, min(4, limit or int(CONFIG.get("daily_project_recommendations", 4))))
+def weekly_project_recommendations(limit: int | None = None, week_start: Any = None) -> dict[str, Any]:
+    configured_limit = CONFIG.get("weekly_project_recommendations", CONFIG.get("daily_project_recommendations", 4))
+    maximum = max(1, min(4, limit or int(configured_limit)))
     window_days = max(7, int(CONFIG.get("project_recommendation_window_days", 45)))
-    cutoff = utc_now() - timedelta(days=window_days)
+    today = utc_now().date()
+    rotation_week_start = week_start or (today - timedelta(days=today.weekday()))
+    selection_time = datetime(
+        rotation_week_start.year, rotation_week_start.month, rotation_week_start.day, tzinfo=timezone.utc,
+    )
+    cutoff = selection_time - timedelta(days=window_days)
     projects = []
     for project in STORE.list_projects():
         try:
@@ -4981,17 +4988,26 @@ def daily_project_recommendations(limit: int | None = None) -> dict[str, Any]:
                 pushed = pushed.replace(tzinfo=timezone.utc)
         except ValueError:
             pushed = datetime.min.replace(tzinfo=timezone.utc)
-        if pushed < cutoff:
+        if pushed < cutoff or pushed > selection_time:
             continue
-        score = project_recommendation(project)
+        score = project_recommendation(project, selection_time)
         projects.append({**project, "recommendation_score": score["total"], "score_breakdown": score["components"]})
     projects.sort(
         key=lambda item: (item["recommendation_score"], item["linked_paper_count"], item["stars"], item["pushed_at"]),
         reverse=True,
     )
+    rotation_pool_size = min(len(projects), maximum * 7)
+    rotation_pool = projects[:rotation_pool_size]
+    block_count = max(1, (len(rotation_pool) + maximum - 1) // maximum)
+    block_index = (rotation_week_start.toordinal() // 7) % block_count
+    block_start = block_index * maximum
+    weekly_block = rotation_pool[block_start:block_start + maximum]
+    weekly_names = {project["full_name"] for project in weekly_block}
+    ordered = [*weekly_block, *(project for project in projects if project["full_name"] not in weekly_names)]
+
     selected = []
     represented = set()
-    for project in projects:
+    for project in ordered:
         primary_category = (project.get("categories") or [""])[0]
         if primary_category and primary_category in represented:
             continue
@@ -5001,7 +5017,7 @@ def daily_project_recommendations(limit: int | None = None) -> dict[str, Any]:
             break
     if len(selected) < maximum:
         selected_names = {project["full_name"] for project in selected}
-        remaining = [project for project in projects if project["full_name"] not in selected_names]
+        remaining = [project for project in ordered if project["full_name"] not in selected_names]
         selected.extend(remaining[: maximum - len(selected)])
     return {
         "items": selected,
@@ -5009,8 +5025,16 @@ def daily_project_recommendations(limit: int | None = None) -> dict[str, Any]:
         "candidate_total": len(projects),
         "limit": maximum,
         "window_days": window_days,
+        "rotation_week_start": rotation_week_start.isoformat(),
+        "rotation_week_end": (rotation_week_start + timedelta(days=6)).isoformat(),
+        "rotation_policy": "同一自然周稳定、每周轮换高分项目候选",
         "generated_at": utc_now().isoformat(),
     }
+
+
+def daily_project_recommendations(limit: int | None = None) -> dict[str, Any]:
+    """Compatibility alias for clients older than 0.10.2."""
+    return weekly_project_recommendations(limit)
 
 
 def filter_papers(papers: list[dict[str, Any]], params: dict[str, list[str]]) -> list[dict[str, Any]]:
@@ -5353,11 +5377,12 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.send_json(daily_recommendations(topic, per_topic))
             return
         if parsed.path == "/api/project-recommendations":
+            configured_limit = CONFIG.get("weekly_project_recommendations", CONFIG.get("daily_project_recommendations", 4))
             try:
-                limit = int((params.get("limit") or [str(CONFIG.get("daily_project_recommendations", 4))])[0])
+                limit = int((params.get("limit") or [str(configured_limit)])[0])
             except ValueError:
-                limit = int(CONFIG.get("daily_project_recommendations", 4))
-            self.send_json(daily_project_recommendations(limit))
+                limit = int(configured_limit)
+            self.send_json(weekly_project_recommendations(limit))
             return
         if parsed.path == "/api/projects":
             projects = filter_projects(STORE.list_projects(), params)

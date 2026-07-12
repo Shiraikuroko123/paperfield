@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="每日具身智能与大模型论文研究工作台">
+  <meta name="description" content="具身智能与大模型论文、开源项目每周研究工作台">
   <title>Paperfield</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -30,9 +30,6 @@
         </button>
         <button class="rail-link" data-view="projects">
           <span>GitHub 项目</span><b id="navProjectCount">0</b>
-        </button>
-        <button class="rail-link" data-view="project-recommended">
-          <span>每日项目</span><b id="navProjectRecommendedCount">0</b>
         </button>
         <button class="rail-link" data-topic="具身智能">
           <span>具身智能</span><b id="navEmbodiedCount">0</b>
@@ -117,7 +114,11 @@
                 <div id="scoreGuideContent">学术质量 30 · 方向匹配 25 · 时效性 20 · 证据完整度 15 · 影响与复现 10</div>
               </details>
             </div>
-            <div class="status-tabs" role="group" aria-label="阅读状态">
+            <div class="status-tabs weekly-kind-tabs" id="weeklyKindTabs" role="tablist" aria-label="每周精选类型" hidden>
+              <button class="is-active" data-weekly-kind="papers" role="tab" aria-selected="true">论文精选 <b id="weeklyPaperCount">0</b></button>
+              <button data-weekly-kind="projects" role="tab" aria-selected="false">项目精选 <b id="weeklyProjectCount">0</b></button>
+            </div>
+            <div class="status-tabs" id="readingStatusTabs" role="group" aria-label="阅读状态">
               <button class="is-active" data-status="">全部</button>
               <button data-status="unread">未读</button>
               <button data-status="reading">在读</button>
