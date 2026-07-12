@@ -129,6 +129,78 @@ class ExplanationTests(unittest.TestCase):
         self.assertEqual(output, "chat fallback works")
         self.assertEqual(calls, ["https://example.test/v1/responses", "https://example.test/v1/chat/completions"])
 
+    def test_ai_request_sends_selected_reasoning_effort(self):
+        class FakeResponse:
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps({"output_text": "reasoned answer"}).encode("utf-8")
+
+        payloads = []
+
+        def fake_urlopen(request, timeout=0):
+            payloads.append(json.loads(request.data.decode("utf-8")))
+            return FakeResponse()
+
+        connection = {
+            "key": "test-key",
+            "base_url": "https://example.test/v1",
+            "model": "test-model",
+            "provider": "reasoning-test-provider",
+            "wire_api": "responses",
+            "reasoning_effort": "ultra",
+        }
+        APP.PaperExplainer._wire_preferences.clear()
+        with mock.patch.object(APP.urllib.request, "urlopen", side_effect=fake_urlopen):
+            output = APP.PaperExplainer._request_text("hello", connection, timeout=3)
+
+        self.assertEqual(output, "reasoned answer")
+        self.assertEqual(payloads[0]["reasoning"], {"effort": "ultra"})
+
+    def test_ai_request_downgrades_unsupported_reasoning_effort(self):
+        class FakeResponse:
+            headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps({"output_text": "fallback answer"}).encode("utf-8")
+
+        efforts = []
+
+        def fake_urlopen(request, timeout=0):
+            payload = json.loads(request.data.decode("utf-8"))
+            effort = payload.get("reasoning", {}).get("effort", "")
+            efforts.append(effort)
+            if effort == "ultra":
+                raise urllib.error.HTTPError(request.full_url, 400, "unsupported effort", {}, io.BytesIO(b"{}"))
+            return FakeResponse()
+
+        connection = {
+            "key": "test-key",
+            "base_url": "https://example.test/v1",
+            "model": "test-model",
+            "provider": "reasoning-fallback-provider",
+            "wire_api": "responses",
+            "reasoning_effort": "ultra",
+        }
+        APP.PaperExplainer._wire_preferences.clear()
+        with mock.patch.object(APP.urllib.request, "urlopen", side_effect=fake_urlopen):
+            output = APP.PaperExplainer._request_text("hello", connection, timeout=3)
+
+        self.assertEqual(output, "fallback answer")
+        self.assertEqual(efforts, ["ultra", "max"])
+
 
 class FeedTests(unittest.TestCase):
     def test_arxiv_focus_queries_use_updated_date_and_deduplicate(self):
@@ -450,6 +522,7 @@ class FeedTests(unittest.TestCase):
                     "local_cache_max_mb": 4096,
                     "shared_storage_max_mb": 3072,
                     "r2_billing_cycle_day": 11,
+                    "ai_reasoning_effort": "ultra",
                 },
                 cloud_configured=True,
             )
@@ -458,6 +531,7 @@ class FeedTests(unittest.TestCase):
             self.assertTrue((root / "library").is_dir())
             self.assertEqual(loaded["shared_storage_max_mb"], 3072)
             self.assertEqual(loaded["r2_billing_cycle_day"], 11)
+            self.assertEqual(loaded["ai_reasoning_effort"], "ultra")
             weights = settings.update_recommendation_weights(
                 {
                     "academic": 20,
@@ -584,6 +658,28 @@ class FeedTests(unittest.TestCase):
             self.assertEqual(cloud.calls, 1)
             self.assertEqual(len(results), 2)
             self.assertTrue(all(path and path.exists() for path in results))
+
+    def test_page_image_renders_cached_pdf_as_jpeg(self):
+        import fitz
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = APP.PaperStore(root / "papers.db")
+            settings = APP.RuntimeSettings(root / "settings.json")
+            settings.update({"local_pdf_dir": str(root / "pdfs")}, cloud_configured=True)
+            assets = APP.PaperAssetService(store, APP.S3ObjectStorage(store), settings)
+            pdf_path = settings.pdf_dir / "paper.pdf"
+            document = fitz.open()
+            page = document.new_page()
+            page.insert_text((72, 72), "A compatible PDF page.")
+            document.save(pdf_path)
+            document.close()
+            store.save_asset("paper", {"local_pdf_path": str(pdf_path), "storage_mode": "local"})
+
+            image = assets.page_image("paper", 1)
+
+            self.assertTrue(image and image.startswith(b"\xff\xd8\xff"))
+            self.assertIsNone(assets.page_image("paper", 2))
 
     def test_cloud_operations_are_counted_and_inventory_is_recorded(self):
         class FakeBody(io.BytesIO):

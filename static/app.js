@@ -11,6 +11,7 @@ const state = {
   readerPaper: null,
   readerAsset: null,
   readerPdfObjectUrl: "",
+  readerPdfImageUrls: [],
   readerPdfDocument: null,
   readerPdfLoadingTask: null,
   readerPdfObserver: null,
@@ -62,11 +63,15 @@ const SCORE_WEIGHT_PRESETS = {
 
 const el = (id) => document.getElementById(id);
 const NGROK_BYPASS_HEADERS = { "ngrok-skip-browser-warning": "paperfield" };
+const SHARED_REQUEST_NONCE = Math.random().toString(36).slice(2);
 const PDF_LOAD_TIMEOUT_MS = 90000;
-const prefersNativePdfViewer = () => {
+const PDF_PAGE_IMAGE_TIMEOUT_MS = 45000;
+const prefersCompatiblePdfPages = () => {
   const userAgent = navigator.userAgent || "";
-  return /iPad|iPhone|iPod/.test(userAgent)
+  const appleTouch = /iPad|iPhone|iPod/.test(userAgent)
     || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const coarsePointer = typeof globalThis.matchMedia === "function" && globalThis.matchMedia("(pointer: coarse)").matches;
+  return appleTouch || (navigator.maxTouchPoints > 0 && coarsePointer);
 };
 if (globalThis.pdfjsLib) globalThis.pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.min.js?v=3.11.174";
 
@@ -77,12 +82,41 @@ const escapeHtml = (value = "") => String(value)
   .replaceAll('"', "&quot;")
   .replaceAll("'", "&#039;");
 
+function sharedRequestUrl(path, attempt = 0) {
+  const url = new URL(path, window.location.origin);
+  if (url.hostname.endsWith(".ngrok-free.dev")) {
+    url.searchParams.set("_pf", `${SHARED_REQUEST_NONCE}-${attempt}`);
+  }
+  return url.toString();
+}
+
+async function isNgrokWarningResponse(response) {
+  const contentType = response.headers.get("Content-Type") || "";
+  if (!contentType.toLowerCase().includes("text/html")) return false;
+  const raw = await response.clone().text();
+  return raw.includes("ERR_NGROK_6024") || raw.includes("ngrok-free");
+}
+
+async function fetchShared(path, options = {}) {
+  const { headers = {}, ...requestOptions } = options;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await fetch(sharedRequestUrl(path, attempt), {
+      credentials: "same-origin",
+      ...requestOptions,
+      cache: "no-store",
+      headers: { ...NGROK_BYPASS_HEADERS, ...headers },
+    });
+    if (!(await isNgrokWarningResponse(response)) || attempt === 1) return response;
+    await new Promise((resolve) => window.setTimeout(resolve, 180));
+  }
+  throw new Error("ngrok 请求重试失败");
+}
+
 const api = async (path, options = {}) => {
   const { headers = {}, ...requestOptions } = options;
-  const response = await fetch(path, {
-    credentials: "same-origin",
+  const response = await fetchShared(path, {
     ...requestOptions,
-    headers: { "Content-Type": "application/json", Accept: "application/json", ...NGROK_BYPASS_HEADERS, ...headers },
+    headers: { "Content-Type": "application/json", Accept: "application/json", ...headers },
   });
   const raw = await response.text();
   let payload;
@@ -101,7 +135,7 @@ const api = async (path, options = {}) => {
 };
 
 async function loadAuthUser() {
-  const response = await fetch("/api/auth/me", { credentials: "same-origin", headers: { Accept: "application/json", ...NGROK_BYPASS_HEADERS } });
+  const response = await fetchShared("/api/auth/me", { headers: { Accept: "application/json" } });
   const raw = await response.text();
   let payload;
   try {
@@ -1360,6 +1394,8 @@ function releaseReaderPdf() {
   el("pdfOpenButton").textContent = "新窗口打开";
   if (state.readerPdfObjectUrl) URL.revokeObjectURL(state.readerPdfObjectUrl);
   state.readerPdfObjectUrl = "";
+  state.readerPdfImageUrls.forEach((url) => URL.revokeObjectURL(url));
+  state.readerPdfImageUrls = [];
 }
 
 async function renderPdfPage(pdfDocument, pageNumber, shell, token) {
@@ -1390,6 +1426,106 @@ async function renderPdfPage(pdfDocument, pageNumber, shell, token) {
     delete shell.dataset.rendering;
     shell.classList.remove("is-rendering");
   }
+}
+
+function pdfPageImageUrl(asset, pageNumber) {
+  return `/api/papers/${encodeURIComponent(asset.paper_id)}/page-image?page=${pageNumber}`;
+}
+
+function renderPdfImageError(asset, pageNumber, shell, token, error) {
+  if (state.readerPdfToken !== token) return;
+  shell.dataset.failed = "1";
+  const message = document.createElement("span");
+  message.className = "pdf-page-error";
+  message.textContent = `第 ${pageNumber} 页兼容图像读取失败：${String(error?.message || error).slice(0, 90)}`;
+  const retry = document.createElement("button");
+  retry.className = "pdf-page-retry";
+  retry.type = "button";
+  retry.textContent = "重试此页";
+  retry.addEventListener("click", () => {
+    delete shell.dataset.failed;
+    message.remove();
+    retry.remove();
+    renderPdfImagePage(asset, pageNumber, shell, token).catch(() => {});
+  });
+  shell.append(message, retry);
+}
+
+async function renderPdfImagePage(asset, pageNumber, shell, token) {
+  if (shell.dataset.rendered) return true;
+  if (shell.dataset.rendering || shell.dataset.failed || state.readerPdfToken !== token) return false;
+  shell.dataset.rendering = "1";
+  shell.classList.add("is-rendering");
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), PDF_PAGE_IMAGE_TIMEOUT_MS);
+  let objectUrl = "";
+  try {
+    const response = await fetchShared(pdfPageImageUrl(asset, pageNumber), {
+      headers: { Accept: "image/jpeg", ...NGROK_BYPASS_HEADERS },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const raw = await response.text();
+      let message = `请求失败：${response.status}`;
+      try { message = JSON.parse(raw).error || message; } catch {}
+      throw new Error(message);
+    }
+    const imageBlob = await response.blob();
+    if (!imageBlob.type.startsWith("image/")) throw new Error("服务没有返回页面图像");
+    objectUrl = URL.createObjectURL(imageBlob);
+    const image = new Image();
+    image.alt = `论文第 ${pageNumber} 页`;
+    image.decoding = "async";
+    await new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = () => reject(new Error("页面图像解码失败"));
+      image.src = objectUrl;
+    });
+    if (state.readerPdfToken !== token) {
+      URL.revokeObjectURL(objectUrl);
+      return false;
+    }
+    state.readerPdfImageUrls.push(objectUrl);
+    shell.prepend(image);
+    shell.dataset.rendered = "1";
+    return true;
+  } catch (error) {
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    if (state.readerPdfToken === token) renderPdfImageError(asset, pageNumber, shell, token, error);
+    return false;
+  } finally {
+    window.clearTimeout(timeout);
+    delete shell.dataset.rendering;
+    shell.classList.remove("is-rendering");
+  }
+}
+
+async function renderPdfImageDocument(asset, token) {
+  const pageCount = Math.max(0, Number(asset.page_count) || 0);
+  if (!pageCount) return false;
+  const viewer = el("pdfCanvasViewer");
+  const fragment = document.createDocumentFragment();
+  for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+    const shell = document.createElement("section");
+    shell.className = "pdf-page";
+    shell.dataset.page = String(pageNumber);
+    shell.innerHTML = `<span class="pdf-page-label">${pageNumber} / ${pageCount}</span>`;
+    fragment.append(shell);
+  }
+  viewer.replaceChildren(fragment);
+  viewer.hidden = false;
+  const firstPage = viewer.querySelector('[data-page="1"]');
+  await renderPdfImagePage(asset, 1, firstPage, token);
+  state.readerPdfObserver = new IntersectionObserver((entries) => {
+    entries.filter((entry) => entry.isIntersecting).forEach((entry) => {
+      const shell = entry.target;
+      renderPdfImagePage(asset, Number(shell.dataset.page), shell, token).then((rendered) => {
+        if (rendered) state.readerPdfObserver?.unobserve(shell);
+      }).catch(() => {});
+    });
+  }, { root: viewer, rootMargin: "1200px 0px" });
+  viewer.querySelectorAll('.pdf-page:not([data-page="1"])').forEach((shell) => state.readerPdfObserver.observe(shell));
+  return true;
 }
 
 async function renderPdfDocument(url, token) {
@@ -1468,12 +1604,15 @@ async function loadReaderPdf(asset) {
     if (!el("readerDialog").open || state.readerPaper?.id !== requestedPaperId || state.readerPdfToken !== token) return;
     const nativeUrl = `${asset.pdf_url}#view=FitH`;
     el("pdfOpenButton").href = nativeUrl;
-    if (prefersNativePdfViewer()) {
-      // PDF.js canvas rendering can stall on iPadOS for large, graphics-heavy papers.
-      // Safari's native PDF renderer is faster and keeps the authenticated same-origin request.
+    if (prefersCompatiblePdfPages()) {
+      // Avoid WebKit canvas stalls by delivering rasterized pages lazily from the host.
       el("pdfOpenButton").textContent = "系统阅读器打开";
-      el("pdfFrame").src = nativeUrl;
-      el("pdfFrame").hidden = false;
+      const renderedWithPageImages = await renderPdfImageDocument(asset, token);
+      if (!renderedWithPageImages) {
+        el("pdfFrame").src = nativeUrl;
+        el("pdfFrame").hidden = false;
+      }
+      if (!el("readerDialog").open || state.readerPaper?.id !== requestedPaperId || state.readerPdfToken !== token) return;
       el("pdfStatus").hidden = true;
       el("pdfRetryButton").hidden = true;
       el("pdfUnavailable").hidden = true;
@@ -1579,9 +1718,8 @@ async function importReaderPdf(file) {
   setPdfStatus("正在导入 PDF", "校验文件并提取逐页全文");
   el("readerImportButton").disabled = true;
   try {
-    const response = await fetch(`/api/papers/${encodeURIComponent(paper.id)}/import`, {
+    const response = await fetchShared(`/api/papers/${encodeURIComponent(paper.id)}/import`, {
       method: "POST",
-      credentials: "same-origin",
       headers: {
         "Content-Type": "application/pdf",
         ...NGROK_BYPASS_HEADERS,
@@ -1717,9 +1855,11 @@ function renderAiModels(payload) {
   el("aiModelInput").value = overrideActive ? payload.model || "" : "";
   el("aiModelInput").placeholder = `跟随 CC Switch 默认模型${payload.configured_model || payload.model ? `：${payload.configured_model || payload.model}` : ""}`;
   el("aiModelOptions").innerHTML = (payload.models || []).map((model) => `<option value="${escapeHtml(model)}"></option>`).join("");
+  const availableEfforts = new Set(["", "low", "medium", "high", "xhigh", "max", "ultra"]);
+  el("aiReasoningEffort").value = availableEfforts.has(payload.reasoning_effort || "") ? payload.reasoning_effort || "" : "";
   el("aiModelNotice").textContent = payload.error
     ? `${payload.error}。也可手动填写模型名称；清空输入即可跟随 CC Switch 默认模型。`
-    : "只管理当前设备或当前部署的 API，不会显示其他用户的模型或密钥。清空输入即可跟随 CC Switch 默认模型。";
+    : "推理强度会按当前模型和 API 传递；不支持的档位会自动降级，不会影响普通模型调用。清空模型名称即可跟随 CC Switch 默认模型。";
 }
 
 async function loadAiModels() {
@@ -1745,11 +1885,16 @@ async function saveAiModel() {
   try {
     const payload = await api("/api/ai/model", {
       method: "POST",
-      body: JSON.stringify({ model: el("aiModelInput").value.trim() }),
+      body: JSON.stringify({
+        model: el("aiModelInput").value.trim(),
+        reasoning_effort: el("aiReasoningEffort").value,
+      }),
     });
     await loadAiModels();
     await loadStats();
-    toast(payload.selected_model ? `已切换到 ${payload.selected_model}` : "已恢复跟随 CC Switch 默认模型");
+    const reasoningLabels = { "": "自动", low: "轻度", medium: "中", high: "高", xhigh: "极高", max: "最高", ultra: "极限" };
+    const modelLabel = payload.selected_model || "CC Switch 默认模型";
+    toast(`已应用 ${modelLabel} · 推理${reasoningLabels[payload.selected_reasoning_effort || ""] || "自动"}`);
   } catch (error) {
     toast(error.message, true);
   } finally {

@@ -491,8 +491,11 @@ a { color: var(--primary); text-underline-offset: 3px; }
 .pdf-canvas-viewer[hidden] { display: none; }
 .pdf-page { position: relative; width: 100%; min-height: 240px; display: grid; place-items: center; margin: 0 auto 16px; background: oklch(0.22 0.008 145); }
 .pdf-page canvas { display: block; max-width: 100%; height: auto; background: white; }
+.pdf-page img { display: block; max-width: 100%; height: auto; background: white; }
 .pdf-page-label { position: absolute; right: 7px; bottom: 6px; padding: 2px 5px; border-radius: 3px; background: oklch(0.18 0.01 145 / 0.8); color: oklch(0.82 0.01 145); font-family: "Cascadia Mono", Consolas, monospace; font-size: 8px; }
 .pdf-page.is-rendering::before { content: ""; position: absolute; left: calc(50% - 11px); top: calc(50% - 11px); width: 22px; height: 22px; border: 2px solid oklch(0.42 0.02 145); border-top-color: var(--signal); border-radius: 50%; animation: pdf-spin 800ms linear infinite; }
+.pdf-page-error { max-width: 30ch; color: oklch(0.82 0.035 30); font-size: 11px; line-height: 1.6; text-align: center; }
+.pdf-page-retry { min-height: 28px; border: 1px solid oklch(0.5 0.09 145); border-radius: var(--radius-control); background: oklch(0.24 0.018 145); color: oklch(0.94 0.01 145); cursor: pointer; font-size: 10px; }
 .pdf-actions { position: absolute; top: 9px; right: 12px; z-index: 3; }
 .pdf-actions[hidden] { display: none; }
 .pdf-actions a { display: inline-flex; align-items: center; min-height: 30px; padding: 5px 9px; border: 1px solid oklch(0.44 0.02 145); border-radius: var(--radius-control); background: oklch(0.22 0.012 145); color: oklch(0.92 0.01 145); font-size: 10px; text-decoration: none; }
@@ -672,6 +675,14 @@ a { color: var(--primary); text-underline-offset: 3px; }
 .storage-settings input, .storage-settings select { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: var(--radius-control); padding: 8px 9px; background: var(--bg); color: var(--ink); }
 .storage-size-input { display: flex; align-items: center; gap: 8px; }
 .storage-size-input span { color: var(--muted); font-size: 10px; }
+.reasoning-reference { border-top: 1px solid var(--line); padding-top: 10px; color: var(--ink-soft); font-size: 10px; }
+.reasoning-reference summary { color: var(--primary); cursor: pointer; font-size: 11px; font-weight: 650; }
+.reasoning-reference-scroll { margin-top: 10px; overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-control); }
+.reasoning-reference table { width: 100%; min-width: 560px; border-collapse: collapse; font-size: 9px; }
+.reasoning-reference th, .reasoning-reference td { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.reasoning-reference th { background: var(--surface); color: var(--ink); font-weight: 650; }
+.reasoning-reference tr:last-child td { border-bottom: 0; }
+.reasoning-reference p { margin: 9px 0 0; color: var(--muted); font-size: 9px; line-height: 1.55; }
 .storage-form-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 10px; border-top: 1px solid var(--line); }
 .storage-form-actions span { color: var(--muted); font-size: 9px; line-height: 1.45; }
 .storage-form-actions > div { display: flex; align-items: center; gap: 8px; }

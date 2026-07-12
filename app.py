@@ -73,6 +73,7 @@ DEFAULT_RECOMMENDATION_WEIGHTS = {
     "evidence": 15,
     "impact_reproducibility": 10,
 }
+AI_REASONING_EFFORTS = {"", "low", "medium", "high", "xhigh", "max", "ultra"}
 
 
 class AIRequestError(RuntimeError):
@@ -81,6 +82,7 @@ class AIRequestError(RuntimeError):
     def __init__(self, message: str, retry_with_other_wire: bool = False) -> None:
         super().__init__(message)
         self.retry_with_other_wire = retry_with_other_wire
+        self.retry_without_reasoning = False
 
 
 def utc_now() -> datetime:
@@ -3556,6 +3558,7 @@ class RuntimeSettings:
             "r2_billing_cycle_day": int(os.environ.get("PAPERFIELD_R2_BILLING_CYCLE_DAY", "1")),
             "recommendation_weights": dict(DEFAULT_RECOMMENDATION_WEIGHTS),
             "ai_model_override": "",
+            "ai_reasoning_effort": "",
         }
 
     @staticmethod
@@ -3599,6 +3602,9 @@ class RuntimeSettings:
         ai_model_override = compact_text(str(payload.get("ai_model_override", "")))
         if len(ai_model_override) > 200:
             raise ValueError("AI 模型名称不能超过 200 个字符")
+        ai_reasoning_effort = compact_text(str(payload.get("ai_reasoning_effort", ""))).lower()
+        if ai_reasoning_effort not in AI_REASONING_EFFORTS:
+            raise ValueError("推理强度必须为自动、轻度、中、高、极高、最高或极限")
         return {
             "pdf_storage_mode": mode, "local_pdf_dir": str(local_path),
             "local_cache_max_mb": cache_mb, "shared_storage_max_mb": shared_storage_mb,
@@ -3607,6 +3613,7 @@ class RuntimeSettings:
                 payload.get("recommendation_weights", DEFAULT_RECOMMENDATION_WEIGHTS)
             ),
             "ai_model_override": ai_model_override,
+            "ai_reasoning_effort": ai_reasoning_effort,
         }
 
     def get(self) -> dict[str, Any]:
@@ -3628,13 +3635,21 @@ class RuntimeSettings:
             return dict(weights)
 
     def update_ai_model_override(self, model: Any) -> str:
+        model, _ = self.update_ai_preferences(model, self._values.get("ai_reasoning_effort", ""))
+        return model
+
+    def update_ai_preferences(self, model: Any, reasoning_effort: Any) -> tuple[str, str]:
         with self._lock:
             value = compact_text(str(model or ""))
             if len(value) > 200:
                 raise ValueError("AI 模型名称不能超过 200 个字符")
+            effort = compact_text(str(reasoning_effort or "")).lower()
+            if effort not in AI_REASONING_EFFORTS:
+                raise ValueError("推理强度必须为自动、轻度、中、高、极高、最高或极限")
             self._values["ai_model_override"] = value
+            self._values["ai_reasoning_effort"] = effort
             self._persist()
-            return value
+            return value, effort
 
     def _persist(self) -> None:
         if not self.path:
@@ -4472,6 +4487,21 @@ class PaperAssetService:
             self._prune_pdf_cache(target)
             return target
 
+    def page_image(self, paper_id: str, page_number: int) -> bytes | None:
+        if page_number < 1:
+            return None
+        path = self.pdf_path(paper_id)
+        if not path or not path.exists():
+            return None
+        import fitz
+
+        with fitz.open(path) as document:
+            if page_number > document.page_count:
+                return None
+            page = document.load_page(page_number - 1)
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(1.7, 1.7), alpha=False)
+            return pixmap.tobytes("jpeg", jpg_quality=85)
+
     def _text_path(self, paper_id: str, asset: dict[str, Any]) -> Path | None:
         path = Path(asset.get("local_text_path", "")) if asset.get("local_text_path") else None
         if path and path.exists():
@@ -4723,9 +4753,11 @@ class PaperExplainer:
 
         settings = globals().get("SETTINGS")
         selected_model = ""
+        selected_reasoning_effort = ""
         if settings:
             try:
                 selected_model = compact_text(settings.get().get("ai_model_override", ""))
+                selected_reasoning_effort = compact_text(settings.get().get("ai_reasoning_effort", "")).lower()
             except (AttributeError, OSError, ValueError, TypeError):
                 pass
         if selected_model:
@@ -4734,6 +4766,12 @@ class PaperExplainer:
             connection["model_source"] = "Paperfield 网页选择"
         else:
             connection["model_source"] = "CC Switch / 环境默认"
+        if selected_reasoning_effort in AI_REASONING_EFFORTS and selected_reasoning_effort:
+            connection["reasoning_effort"] = selected_reasoning_effort
+            connection["reasoning_source"] = "Paperfield 网页选择"
+        else:
+            connection["reasoning_effort"] = ""
+            connection["reasoning_source"] = "自动"
         return connection
 
     @staticmethod
@@ -4748,13 +4786,18 @@ class PaperExplainer:
     def connection_status(cls) -> dict[str, Any]:
         connection = cls.connection()
         if not connection:
-            return {"available": False, "provider": "", "model": "", "wire_api": "", "base_host": ""}
+            return {
+                "available": False, "provider": "", "model": "", "wire_api": "", "base_host": "",
+                "reasoning_effort": "", "reasoning_source": "自动",
+            }
         return {
             "available": True,
             "provider": connection["provider"],
             "model": connection["model"],
             "configured_model": connection.get("configured_model", connection["model"]),
             "model_source": connection.get("model_source", ""),
+            "reasoning_effort": connection.get("reasoning_effort", ""),
+            "reasoning_source": connection.get("reasoning_source", "自动"),
             "wire_api": cls._wire_name(connection.get("wire_api", "responses")),
             "base_host": urllib.parse.urlparse(connection["base_url"]).netloc,
         }
@@ -4881,16 +4924,28 @@ class PaperExplainer:
         return response_output or chat_output
 
     @classmethod
-    def _request_once(cls, prompt: str, connection: dict[str, str], wire: str, timeout: int) -> str:
+    def _request_once(
+        cls,
+        prompt: str,
+        connection: dict[str, str],
+        wire: str,
+        timeout: int,
+        reasoning_effort: str | None = None,
+    ) -> str:
+        effort = compact_text(reasoning_effort if reasoning_effort is not None else connection.get("reasoning_effort", "")).lower()
         if wire == "chat_completions":
             endpoint = "chat/completions"
             request_payload = {"model": connection["model"], "messages": [{"role": "user", "content": prompt}]}
+            if effort:
+                request_payload["reasoning_effort"] = effort
         else:
             endpoint = "responses"
             request_payload = {
                 "model": connection["model"],
                 "input": [{"role": "user", "content": [{"type": "input_text", "text": prompt}]}],
             }
+            if effort:
+                request_payload["reasoning"] = {"effort": effort}
         request = urllib.request.Request(
             f"{connection['base_url']}/{endpoint}",
             data=json.dumps(request_payload, ensure_ascii=False).encode("utf-8"),
@@ -4908,9 +4963,11 @@ class PaperExplainer:
                 content_type = response.headers.get("Content-Type", "")
         except urllib.error.HTTPError as error:
             retryable = error.code not in {401, 403, 429}
-            raise AIRequestError(
+            request_error = AIRequestError(
                 f"{cls._wire_label(wire)} 接口返回 HTTP {error.code}", retry_with_other_wire=retryable,
-            ) from error
+            )
+            request_error.retry_without_reasoning = bool(effort and error.code in {400, 404, 422})
+            raise request_error from error
         except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as error:
             raise AIRequestError(
                 f"{cls._wire_label(wire)} 接口暂时无法连接", retry_with_other_wire=True,
@@ -4933,6 +4990,19 @@ class PaperExplainer:
             )
         return output_text
 
+    @staticmethod
+    def _reasoning_effort_candidates(value: Any) -> list[str]:
+        requested = compact_text(str(value or "")).lower()
+        candidates = {
+            "ultra": ["ultra", "max", "xhigh", "high", ""],
+            "max": ["max", "xhigh", "high", ""],
+            "xhigh": ["xhigh", "high", ""],
+            "high": ["high", "medium", ""],
+            "medium": ["medium", "low", ""],
+            "low": ["low", ""],
+        }
+        return candidates.get(requested, [""])
+
     @classmethod
     def _request_text(cls, prompt: str, connection: dict[str, str], timeout: int = 180) -> str:
         configured_wire = cls._wire_name(connection.get("wire_api", "responses"))
@@ -4947,16 +5017,23 @@ class PaperExplainer:
         if alternate_wire not in wires:
             wires.append(alternate_wire)
         failures: list[str] = []
+        reasoning_efforts = cls._reasoning_effort_candidates(connection.get("reasoning_effort", ""))
         for index, wire in enumerate(wires):
-            try:
-                output = cls._request_once(prompt, connection, wire, timeout)
-                with cls._wire_lock:
-                    cls._wire_preferences[preference_key] = wire
-                return output
-            except AIRequestError as error:
-                failures.append(str(error))
-                if index == len(wires) - 1 or not error.retry_with_other_wire:
+            wire_error: AIRequestError | None = None
+            for effort in reasoning_efforts:
+                try:
+                    output = cls._request_once(prompt, connection, wire, timeout, effort)
+                    with cls._wire_lock:
+                        cls._wire_preferences[preference_key] = wire
+                    return output
+                except AIRequestError as error:
+                    wire_error = error
+                    failures.append(str(error))
+                    if error.retry_without_reasoning and effort != reasoning_efforts[-1]:
+                        continue
                     break
+            if not wire_error or index == len(wires) - 1 or not wire_error.retry_with_other_wire:
+                break
         raise RuntimeError("AI 上游没有返回可用文本：" + "；随后 ".join(failures))
 
     def _openai_explain(
@@ -6307,6 +6384,10 @@ class AppHandler(SimpleHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "SAMEORIGIN")
         self.send_header("Referrer-Policy", "same-origin")
+        if urllib.parse.urlparse(self.path).path in {
+            "/", "/index.html", "/app.js", "/styles.css", "/login", "/login.html", "/login.js", "/login.css",
+        }:
+            self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
     def send_json(self, payload: Any, status: int = 200, headers: dict[str, str] | None = None) -> None:
@@ -6318,6 +6399,17 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             for name, value in (headers or {}).items():
                 self.send_header(name, value)
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            pass
+
+    def send_binary(self, body: bytes, content_type: str, status: int = 200) -> None:
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "private, max-age=3600")
             self.end_headers()
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
@@ -6573,7 +6665,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             project = STORE.get_project(full_name)
             self.send_json(project or {"error": "项目不存在"}, 200 if project else 404)
             return
-        paper_action = re.fullmatch(r"/api/papers/(.+)/(asset|pdf|text|chat)", parsed.path)
+        paper_action = re.fullmatch(r"/api/papers/(.+)/(asset|pdf|text|chat|page-image)", parsed.path)
         if paper_action:
             paper_id = urllib.parse.unquote(paper_action.group(1))
             action = paper_action.group(2)
@@ -6603,6 +6695,24 @@ class AppHandler(SimpleHTTPRequestHandler):
                     self.send_json({"error": "暂未找到可直接访问的公开 PDF 副本"}, 404)
                     return
                 self.send_pdf_file(path)
+                return
+            if action == "page-image":
+                try:
+                    page_number = max(1, int((params.get("page") or ["1"])[0]))
+                except ValueError:
+                    page_number = 1
+                try:
+                    content = ASSETS.page_image(paper_id, page_number)
+                    if not content:
+                        ASSETS.prepare(paper)
+                        content = ASSETS.page_image(paper_id, page_number)
+                except Exception as error:
+                    self.send_json({"error": f"页面图像生成失败：{error}"}, 503)
+                    return
+                if not content:
+                    self.send_json({"error": "无法生成该 PDF 页面的兼容图像"}, 404)
+                    return
+                self.send_binary(content, "image/jpeg")
                 return
             if action == "text":
                 try:
@@ -6784,8 +6894,16 @@ class AppHandler(SimpleHTTPRequestHandler):
                 return
             try:
                 payload = self.read_json()
-                model = SETTINGS.update_ai_model_override(payload.get("model", ""))
-                self.send_json({**EXPLAINER.connection_status(), "selected_model": model})
+                model, reasoning_effort = SETTINGS.update_ai_preferences(
+                    payload.get("model", ""), payload.get("reasoning_effort", ""),
+                )
+                self.send_json(
+                    {
+                        **EXPLAINER.connection_status(),
+                        "selected_model": model,
+                        "selected_reasoning_effort": reasoning_effort,
+                    }
+                )
             except (OSError, TypeError, ValueError) as error:
                 self.send_json({"error": str(error)}, 400)
             return

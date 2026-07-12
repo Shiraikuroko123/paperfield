@@ -3,6 +3,9 @@
 ## 0.12.7
 
 - iPadOS and iOS now use Safari's native authenticated PDF viewer instead of PDF.js canvas rendering, which avoids prolonged first-page rendering for large, graphics-heavy cloud PDFs. Desktop readers continue to use the incremental PDF.js view.
+- Added a mobile compatibility reader that lazily serves host-rendered JPEG pages for touch devices, so individual PDF.js canvas failures cannot leave pages permanently loading; the system PDF reader remains available as an alternate view.
+- Added no-store API fetching with an automatic retry and a unique request nonce when an ngrok confirmation page is detected, preventing the free-tunnel interstitial from being cached as a Paperfield API response.
+- Expanded AI model settings with Auto, low, medium, high, xhigh, max, and ultra reasoning effort controls, a built-in comparison table, and compatibility fallback when an OpenAI-compatible gateway rejects a higher effort level.
 
 ## 0.12.6
 
