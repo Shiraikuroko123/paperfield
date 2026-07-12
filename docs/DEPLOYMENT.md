@@ -32,9 +32,12 @@ docker compose down
 | `PAPERFIELD_DATA_DIR` | Persistent data directory |
 | `PAPERFIELD_DB_PATH` | Optional explicit SQLite path |
 | `PAPERFIELD_AUTO_REFRESH` | Set to `0` to disable the in-process scheduler |
+| `PAPERFIELD_AUTH_REQUIRED` | Set to `1` to require an account from the auth users file |
+| `PAPERFIELD_AUTH_USERS_PATH` | JSON account registry; passwords are stored as PBKDF2 hashes |
 | `PAPERFIELD_OPENAI_API_KEY` | AI key for container/cloud deployment |
 | `PAPERFIELD_OPENAI_BASE_URL` | OpenAI-compatible base URL |
 | `PAPERFIELD_OPENAI_MODEL` | Explanation model |
+| `PAPERFIELD_DISABLE_CLOUD` | Set to `1` to ignore all S3/R2 credentials for an isolated instance |
 | `PAPERFIELD_S3_PROVIDER` | Display name for an optional S3-compatible archive |
 | `PAPERFIELD_S3_ENDPOINT` | S3-compatible endpoint; blank for AWS S3 |
 | `PAPERFIELD_S3_REGION` | Object-storage region |
@@ -50,9 +53,9 @@ docker compose down
 
 The current release should run as one application instance with one persistent volume. Multiple instances must not share SQLite over a network filesystem.
 
-Before public internet deployment:
+The beta Quick Tunnel workflow provides an authenticated single-instance preview. Before a permanent multi-user internet deployment:
 
-1. Add authentication.
+1. Replace the beta account registry with an established OIDC provider.
 2. Put TLS and a reverse proxy in front of the application.
 3. Move to PostgreSQL.
 4. Move scheduled work to a single worker or managed scheduler.

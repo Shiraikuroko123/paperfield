@@ -1,9 +1,16 @@
 import importlib.util
 import io
+import json
+import os
 import tempfile
+import threading
 import unittest
+import urllib.error
+import urllib.request
 from datetime import date, timedelta
+from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest import mock
 
 
 SPEC = importlib.util.spec_from_file_location("paperfield_app", Path(__file__).resolve().parents[1] / "app.py")
@@ -87,6 +94,83 @@ class ExplanationTests(unittest.TestCase):
 
 
 class FeedTests(unittest.TestCase):
+    def test_beta_auth_hashes_password_and_limits_accounts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "auth-users.json"
+            auth = APP.AuthService(path, required=False)
+            account = auth.upsert_user("tester-one", "123456", "Tester One", "beta")
+
+            self.assertEqual(account["username"], "tester-one")
+            self.assertEqual(account["role"], "beta")
+            self.assertEqual(auth.authenticate("tester-one", "123456")["display_name"], "Tester One")
+            self.assertIsNone(auth.authenticate("tester-one", "incorrect"))
+            self.assertNotIn("123456", path.read_text(encoding="utf-8"))
+
+            for index in range(2, 5):
+                auth.upsert_user(f"tester-{index}", "123456")
+            with self.assertRaisesRegex(ValueError, "最多允许 4 个"):
+                auth.upsert_user("tester-five", "123456")
+
+    def test_beta_auth_protects_api_and_creates_session_cookie(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auth = APP.AuthService(Path(directory) / "auth-users.json", required=True)
+            auth.upsert_user("tester", "123456")
+            original_auth = APP.AUTH
+            APP.AUTH = auth
+            server = ThreadingHTTPServer(("127.0.0.1", 0), APP.AppHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_port}"
+            try:
+                with self.assertRaises(urllib.error.HTTPError) as denied:
+                    urllib.request.urlopen(f"{base}/api/papers", timeout=5)
+                self.assertEqual(denied.exception.code, 401)
+
+                request = urllib.request.Request(
+                    f"{base}/api/auth/login",
+                    data=json.dumps({"username": "tester", "password": "123456"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    cookie = response.headers["Set-Cookie"].split(";", 1)[0]
+                me_request = urllib.request.Request(f"{base}/api/auth/me", headers={"Cookie": cookie})
+                with urllib.request.urlopen(me_request, timeout=5) as response:
+                    me = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(me["user"]["username"], "tester")
+                self.assertFalse(me["host_ai_allowed"])
+
+                ai_request = urllib.request.Request(
+                    f"{base}/api/papers/test/explain",
+                    data=b"{}",
+                    headers={"Content-Type": "application/json", "Cookie": cookie},
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as denied_ai:
+                    urllib.request.urlopen(ai_request, timeout=5)
+                self.assertEqual(denied_ai.exception.code, 403)
+                ai_payload = json.loads(denied_ai.exception.read().decode("utf-8"))
+                self.assertTrue(ai_payload["local_ai_required"])
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+                APP.AUTH = original_auth
+
+    def test_cloud_can_be_explicitly_disabled_for_beta_profile(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            os.environ,
+            {
+                "PAPERFIELD_DISABLE_CLOUD": "1",
+                "PAPERFIELD_S3_BUCKET": "personal-bucket",
+                "PAPERFIELD_S3_ACCESS_KEY_ID": "personal-key",
+                "PAPERFIELD_S3_SECRET_ACCESS_KEY": "personal-secret",
+            },
+        ):
+            cloud = APP.S3ObjectStorage(APP.PaperStore(Path(directory) / "papers.db"))
+            self.assertFalse(cloud.configured)
+            self.assertEqual(cloud.bucket, "")
+
     def test_weekly_candidate_rotation_is_stable_and_changes_next_week(self):
         ranked = [(100 - index, {"id": f"paper-{index}"}, {}, None) for index in range(35)]
         this_week = date(2026, 7, 6)

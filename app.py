@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import concurrent.futures
 import hashlib
+import hmac
 import html
 import http.client
 import ipaddress
@@ -12,6 +14,7 @@ import posixpath
 import re
 import shutil
 import sqlite3
+import secrets
 import textwrap
 import threading
 import time
@@ -22,6 +25,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
+from http.cookies import SimpleCookie
 from html.parser import HTMLParser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -44,11 +48,14 @@ PROJECT_REPO_DIR = Path(os.environ.get("PAPERFIELD_PROJECT_REPO_DIR", DATA_DIR /
 PROJECT_DOC_TRANSLATION_DIR = Path(
     os.environ.get("PAPERFIELD_PROJECT_DOC_TRANSLATION_DIR", DATA_DIR / "project-doc-translations")
 ).expanduser().resolve()
+AUTH_USERS_PATH = Path(
+    os.environ.get("PAPERFIELD_AUTH_USERS_PATH", DATA_DIR / "auth-users.json")
+).expanduser().resolve()
 SETTINGS_PATH = Path(os.environ.get("PAPERFIELD_SETTINGS_PATH", DATA_DIR / "settings.json")).expanduser().resolve()
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
 INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", ROOT / "institutions.json")).expanduser().resolve()
-APP_VERSION = "0.9.0"
+APP_VERSION = "0.10.0"
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
 
@@ -73,6 +80,175 @@ def iso_date(value: Any) -> str:
 
 def compact_text(value: str | None) -> str:
     return re.sub(r"\s+", " ", value or "").strip()
+
+
+class AuthService:
+    MAX_USERS = 4
+    ITERATIONS = 310_000
+    SESSION_TTL = timedelta(days=7)
+
+    def __init__(self, path: Path, required: bool | None = None) -> None:
+        self.path = path
+        self.required = (
+            os.environ.get("PAPERFIELD_AUTH_REQUIRED", "").strip() == "1"
+            if required is None else required
+        )
+        self._lock = threading.RLock()
+        self._sessions: dict[str, dict[str, Any]] = {}
+
+    def _load(self) -> dict[str, Any]:
+        if not self.path.exists():
+            return {"schema_version": 1, "max_users": self.MAX_USERS, "users": []}
+        payload = json.loads(self.path.read_text(encoding="utf-8"))
+        users = payload.get("users") if isinstance(payload.get("users"), list) else []
+        return {"schema_version": 1, "max_users": self.MAX_USERS, "users": users[:self.MAX_USERS]}
+
+    def _save(self, payload: dict[str, Any]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_suffix(self.path.suffix + ".tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(self.path)
+
+    @property
+    def enabled(self) -> bool:
+        return self.required or bool(self._load()["users"])
+
+    def validate_startup(self) -> None:
+        if self.required and not self._load()["users"]:
+            raise RuntimeError(f"已启用登录保护，但账户文件中没有用户：{self.path}")
+
+    @staticmethod
+    def _normalize_username(username: str) -> str:
+        value = compact_text(username).lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{2,31}", value):
+            raise ValueError("用户名需为 3-32 位小写字母、数字、点、下划线或连字符")
+        return value
+
+    @classmethod
+    def _password_record(cls, password: str) -> tuple[str, str]:
+        if len(password) < 6 or len(password) > 128:
+            raise ValueError("密码长度必须为 6-128 位")
+        salt = secrets.token_bytes(16)
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, cls.ITERATIONS)
+        return (
+            base64.urlsafe_b64encode(salt).decode("ascii"),
+            base64.urlsafe_b64encode(digest).decode("ascii"),
+        )
+
+    def upsert_user(
+        self,
+        username: str,
+        password: str,
+        display_name: str = "",
+        role: str | None = "standard",
+    ) -> dict[str, Any]:
+        normalized = self._normalize_username(username)
+        normalized_role = compact_text(role).lower() if role is not None else ""
+        if normalized_role and normalized_role not in {"beta", "standard"}:
+            raise ValueError("账户角色必须是 beta 或 standard")
+        salt, password_hash = self._password_record(password)
+        with self._lock:
+            payload = self._load()
+            users = payload["users"]
+            existing = next((item for item in users if item.get("username") == normalized), None)
+            if existing is None and len(users) >= self.MAX_USERS:
+                raise ValueError(f"内测账户最多允许 {self.MAX_USERS} 个")
+            record = {
+                "username": normalized,
+                "display_name": compact_text(display_name)[:60] or normalized,
+                "role": normalized_role or (existing.get("role", "standard") if existing else "standard"),
+                "enabled": True,
+                "salt": salt,
+                "password_hash": password_hash,
+                "iterations": self.ITERATIONS,
+                "created_at": existing.get("created_at", utc_now().isoformat()) if existing else utc_now().isoformat(),
+                "updated_at": utc_now().isoformat(),
+            }
+            if existing:
+                users[users.index(existing)] = record
+            else:
+                users.append(record)
+            self._save(payload)
+        return self.public_user(record)
+
+    def set_enabled(self, username: str, enabled: bool) -> dict[str, Any]:
+        normalized = self._normalize_username(username)
+        with self._lock:
+            payload = self._load()
+            record = next((item for item in payload["users"] if item.get("username") == normalized), None)
+            if not record:
+                raise ValueError("账户不存在")
+            record["enabled"] = bool(enabled)
+            record["updated_at"] = utc_now().isoformat()
+            self._save(payload)
+            if not enabled:
+                self._sessions = {
+                    token: session for token, session in self._sessions.items()
+                    if session.get("username") != normalized
+                }
+        return self.public_user(record)
+
+    @staticmethod
+    def public_user(record: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "username": record.get("username", ""),
+            "display_name": record.get("display_name", ""),
+            "role": record.get("role", "standard"),
+            "enabled": bool(record.get("enabled", True)),
+            "created_at": record.get("created_at", ""),
+            "updated_at": record.get("updated_at", ""),
+        }
+
+    def users(self) -> list[dict[str, Any]]:
+        return [self.public_user(record) for record in self._load()["users"]]
+
+    def authenticate(self, username: str, password: str) -> dict[str, Any] | None:
+        try:
+            normalized = self._normalize_username(username)
+        except ValueError:
+            return None
+        record = next((item for item in self._load()["users"] if item.get("username") == normalized), None)
+        if not record or not record.get("enabled", True):
+            return None
+        try:
+            salt = base64.urlsafe_b64decode(str(record.get("salt", "")))
+            expected = base64.urlsafe_b64decode(str(record.get("password_hash", "")))
+            iterations = int(record.get("iterations", self.ITERATIONS))
+            actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+        except (TypeError, ValueError):
+            return None
+        return self.public_user(record) if hmac.compare_digest(actual, expected) else None
+
+    def create_session(self, username: str) -> str:
+        token = secrets.token_urlsafe(32)
+        with self._lock:
+            self._sessions[token] = {
+                "username": username,
+                "expires_at": utc_now() + self.SESSION_TTL,
+            }
+        return token
+
+    def session_user(self, token: str) -> dict[str, Any] | None:
+        if not token:
+            return None
+        with self._lock:
+            now = utc_now()
+            self._sessions = {
+                key: value for key, value in self._sessions.items()
+                if value.get("expires_at") and value["expires_at"] > now
+            }
+            session = self._sessions.get(token)
+        if not session:
+            return None
+        record = next(
+            (item for item in self._load()["users"] if item.get("username") == session["username"]),
+            None,
+        )
+        return self.public_user(record) if record and record.get("enabled", True) else None
+
+    def revoke_session(self, token: str) -> None:
+        with self._lock:
+            self._sessions.pop(token, None)
 
 
 def venue_sync_error_status(error: Exception | str) -> str:
@@ -3075,12 +3251,13 @@ class RuntimeSettings:
 class S3ObjectStorage:
     def __init__(self, store: PaperStore) -> None:
         self.store = store
-        self.bucket = os.environ.get("PAPERFIELD_S3_BUCKET", "").strip()
-        self.endpoint = os.environ.get("PAPERFIELD_S3_ENDPOINT", "").strip() or None
-        self.region = os.environ.get("PAPERFIELD_S3_REGION", "auto").strip() or "auto"
-        self.access_key = os.environ.get("PAPERFIELD_S3_ACCESS_KEY_ID", "").strip()
-        self.secret_key = os.environ.get("PAPERFIELD_S3_SECRET_ACCESS_KEY", "").strip()
-        self.provider = os.environ.get("PAPERFIELD_S3_PROVIDER", "S3 兼容对象存储").strip()
+        disabled = os.environ.get("PAPERFIELD_DISABLE_CLOUD", "").strip() == "1"
+        self.bucket = "" if disabled else os.environ.get("PAPERFIELD_S3_BUCKET", "").strip()
+        self.endpoint = None if disabled else os.environ.get("PAPERFIELD_S3_ENDPOINT", "").strip() or None
+        self.region = "auto" if disabled else os.environ.get("PAPERFIELD_S3_REGION", "auto").strip() or "auto"
+        self.access_key = "" if disabled else os.environ.get("PAPERFIELD_S3_ACCESS_KEY_ID", "").strip()
+        self.secret_key = "" if disabled else os.environ.get("PAPERFIELD_S3_SECRET_ACCESS_KEY", "").strip()
+        self.provider = "" if disabled else os.environ.get("PAPERFIELD_S3_PROVIDER", "S3 兼容对象存储").strip()
         self._client_value: Any = None
 
     @property
@@ -4328,6 +4505,7 @@ READING_ARCHIVE = ReadingArchiveService(STORE, CLOUD)
 ASSETS = PaperAssetService(STORE, CLOUD, SETTINGS)
 TRANSLATOR = TranslationService()
 PROJECT_DOCUMENTS = ProjectDocumentTranslationService(STORE, CLOUD, PROJECT_ASSETS, TRANSLATOR)
+AUTH = AuthService(AUTH_USERS_PATH)
 REFRESH_STATE: dict[str, Any] = {"running": False, "message": "", "lock": threading.Lock()}
 
 
@@ -4887,6 +5065,8 @@ def apply_multi_sort(
 
 class AppHandler(SimpleHTTPRequestHandler):
     server_version = f"Paperfield/{APP_VERSION}"
+    _login_lock = threading.Lock()
+    _login_failures: dict[str, list[float]] = {}
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
@@ -4894,17 +5074,100 @@ class AppHandler(SimpleHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         print(f"[{self.log_date_time_string()}] {format % args}")
 
-    def send_json(self, payload: Any, status: int = 200) -> None:
+    def end_headers(self) -> None:
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
+        self.send_header("Referrer-Policy", "same-origin")
+        super().end_headers()
+
+    def send_json(self, payload: Any, status: int = 200, headers: dict[str, str] | None = None) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         try:
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             pass
+
+    def redirect(self, location: str, headers: dict[str, str] | None = None) -> None:
+        self.send_response(HTTPStatus.SEE_OTHER)
+        self.send_header("Location", location)
+        self.send_header("Cache-Control", "no-store")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
+        self.end_headers()
+
+    def session_token(self) -> str:
+        try:
+            cookie = SimpleCookie(self.headers.get("Cookie", ""))
+            return cookie.get("paperfield_session").value if cookie.get("paperfield_session") else ""
+        except (KeyError, TypeError):
+            return ""
+
+    def current_user(self) -> dict[str, Any] | None:
+        return AUTH.session_user(self.session_token()) if AUTH.enabled else None
+
+    def require_auth(self, parsed: urllib.parse.ParseResult) -> dict[str, Any] | None:
+        if not AUTH.enabled:
+            self.auth_user = {"username": "local", "display_name": "本地用户", "role": "local", "enabled": True}
+            return self.auth_user
+        user = self.current_user()
+        if user:
+            self.auth_user = user
+            return user
+        if parsed.path.startswith("/api/"):
+            self.send_json({"error": "登录已失效，请重新登录", "auth_required": True}, 401)
+        else:
+            next_path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+            self.redirect(f"/login?next={urllib.parse.quote(next_path, safe='')}")
+        return None
+
+    def host_ai_allowed(self) -> bool:
+        user = getattr(self, "auth_user", None)
+        return not AUTH.enabled or bool(user and user.get("role") == "beta")
+
+    def require_host_ai(self) -> bool:
+        if self.host_ai_allowed():
+            return True
+        self.send_json(
+            {
+                "error": "普通账户不能使用内测主机的 GPT 额度；请在自己的电脑上运行 Paperfield 并连接本地 API",
+                "local_ai_required": True,
+            },
+            403,
+        )
+        return False
+
+    def secure_cookie(self, token: str, clear: bool = False) -> str:
+        secure = self.headers.get("X-Forwarded-Proto", "").lower() == "https" or "https" in self.headers.get("CF-Visitor", "").lower()
+        value = f"paperfield_session={'deleted' if clear else token}; Path=/; HttpOnly; SameSite=Lax"
+        value += "; Max-Age=0" if clear else f"; Max-Age={int(AuthService.SESSION_TTL.total_seconds())}"
+        return value + ("; Secure" if secure else "")
+
+    def client_address_key(self) -> str:
+        return compact_text(self.headers.get("CF-Connecting-IP")) or self.client_address[0]
+
+    def login_blocked(self) -> bool:
+        key = self.client_address_key()
+        cutoff = time.monotonic() - 600
+        with self._login_lock:
+            recent = [value for value in self._login_failures.get(key, []) if value >= cutoff]
+            self._login_failures[key] = recent
+            return len(recent) >= 10
+
+    def record_login_failure(self) -> None:
+        key = self.client_address_key()
+        with self._login_lock:
+            self._login_failures.setdefault(key, []).append(time.monotonic())
+
+    def clear_login_failures(self) -> None:
+        with self._login_lock:
+            self._login_failures.pop(self.client_address_key(), None)
 
     def read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))
@@ -4963,21 +5226,37 @@ class AppHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/health":
+            payload = {"status": "ok", "version": APP_VERSION}
+            if not AUTH.enabled:
+                payload.update({"papers": STORE.count(), "projects": STORE.count_projects()})
+            self.send_json(payload)
+            return
+        if parsed.path == "/login":
+            if not AUTH.enabled or self.current_user():
+                self.redirect("/")
+                return
+            self.path = "/login.html"
+            return super().do_GET()
+        if parsed.path in {"/login.css", "/login.js"}:
+            return super().do_GET()
+        if parsed.path == "/api/auth/me":
+            if not AUTH.enabled:
+                self.send_json({"enabled": False, "user": None, "host_ai_allowed": True})
+                return
+            user = self.current_user()
+            self.send_json(
+                {"enabled": True, "user": user, "host_ai_allowed": bool(user and user.get("role") == "beta")},
+                200 if user else 401,
+            )
+            return
+        if not self.require_auth(parsed):
+            return
         if not parsed.path.startswith("/api/"):
             if parsed.path not in {"/", "/index.html"} and not (STATIC_DIR / parsed.path.lstrip("/")).exists():
                 self.path = "/index.html"
             return super().do_GET()
         params = urllib.parse.parse_qs(parsed.query)
-        if parsed.path == "/api/health":
-            self.send_json(
-                {
-                    "status": "ok",
-                    "version": APP_VERSION,
-                    "papers": STORE.count(),
-                    "projects": STORE.count_projects(),
-                }
-            )
-            return
         if parsed.path == "/api/papers":
             papers = filter_papers(STORE.list_papers(), params)
             limit = max(1, min(500, int((params.get("limit") or ["100"])[0])))
@@ -5025,6 +5304,8 @@ class AppHandler(SimpleHTTPRequestHandler):
         if project_action:
             full_name = urllib.parse.unquote(project_action.group(1))
             action = project_action.group(2)
+            if action in {"explain", "chat"} and not self.require_host_ai():
+                return
             project = STORE.get_project(full_name)
             if not project:
                 self.send_json({"error": "项目不存在"}, 404)
@@ -5162,7 +5443,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             for paper in papers:
                 for topic in paper["topics"]:
                     topic_counts[topic] = topic_counts.get(topic, 0) + 1
-            ai_connection = EXPLAINER.connection()
+            ai_connection = EXPLAINER.connection() if self.host_ai_allowed() else None
             self.send_json(
                 {
                     "total": len(papers),
@@ -5190,6 +5471,38 @@ class AppHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/auth/login":
+            if not AUTH.enabled:
+                self.send_json({"error": "当前实例未启用账户登录"}, 400)
+                return
+            if self.login_blocked():
+                self.send_json({"error": "登录尝试过多，请十分钟后再试"}, 429)
+                return
+            payload = self.read_json()
+            user = AUTH.authenticate(
+                str(payload.get("username", "")),
+                str(payload.get("password", "")),
+            )
+            if not user:
+                self.record_login_failure()
+                self.send_json({"error": "用户名或密码错误"}, 401)
+                return
+            self.clear_login_failures()
+            token = AUTH.create_session(user["username"])
+            self.send_json(
+                {"ok": True, "user": user},
+                headers={"Set-Cookie": self.secure_cookie(token)},
+            )
+            return
+        if parsed.path == "/api/auth/logout":
+            AUTH.revoke_session(self.session_token())
+            self.send_json(
+                {"ok": True},
+                headers={"Set-Cookie": self.secure_cookie("", clear=True)},
+            )
+            return
+        if not self.require_auth(parsed):
+            return
         if parsed.path == "/api/translate":
             payload = self.read_json()
             text = str(payload.get("text", "")).strip()
@@ -5274,6 +5587,8 @@ class AppHandler(SimpleHTTPRequestHandler):
         if match:
             paper_id = urllib.parse.unquote(match.group(1))
             action = match.group(2)
+            if action in {"explain", "chat"} and not self.require_host_ai():
+                return
             paper = STORE.get_paper(paper_id)
             if not paper:
                 self.send_json({"error": "论文不存在"}, 404)
@@ -5363,6 +5678,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=int(os.environ.get("PAPERFIELD_PORT", "8765")))
     parser.add_argument("--refresh", action="store_true", help="refresh data and exit")
     args = parser.parse_args()
+    AUTH.validate_startup()
     seed_if_empty()
     STORE.recalculate_quality(CLASSIFIER)
     if args.refresh:

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.0
+
+- Added password-protected beta accounts with PBKDF2 password hashing, seven-day sessions, login throttling, and a four-account limit.
+- Added beta/standard account roles so only explicitly trusted beta accounts can consume the host GPT provider.
+- Added an isolated beta profile that copies the public paper/project catalog while removing personal reading state, chats, PDFs, project caches, and cloud records.
+- Added free Cloudflare Quick Tunnel start/stop scripts and an explicit cloud-disable switch for shared instances.
+- Added a responsive beta login screen, current-account indicator, and logout action.
+
 ## 0.9.0
 
 - Replaced repeated repository trees with a curated reading route and a separate flat all-files view.

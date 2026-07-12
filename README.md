@@ -41,6 +41,8 @@ python app.py
 
 Open `http://127.0.0.1:8765`.
 
+To share an isolated password-protected beta instance with up to four testers, use the free Cloudflare Quick Tunnel workflow in [`docs/BETA_SHARING.md`](docs/BETA_SHARING.md). The beta profile keeps its own reading state and does not inherit personal PDFs, chats, project caches, or R2 credentials.
+
 也可以使用项目脚本：
 
 ```powershell

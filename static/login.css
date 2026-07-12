@@ -1,0 +1,194 @@
+:root {
+  color-scheme: light;
+  --bg: oklch(1 0 0);
+  --surface: oklch(0.965 0.008 140);
+  --surface-strong: oklch(0.925 0.014 140);
+  --ink: oklch(0.19 0.022 145);
+  --ink-soft: oklch(0.39 0.022 145);
+  --muted: oklch(0.49 0.018 145);
+  --line: oklch(0.885 0.012 140);
+  --primary: oklch(0.49 0.115 140);
+  --primary-hover: oklch(0.43 0.12 140);
+  --primary-soft: oklch(0.93 0.04 140);
+  --danger: oklch(0.52 0.16 28);
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100dvh;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+button, input { font: inherit; }
+
+button:focus-visible, input:focus-visible {
+  outline: 3px solid color-mix(in oklch, var(--primary) 35%, transparent);
+  outline-offset: 2px;
+}
+
+[hidden] { display: none !important; }
+
+.login-shell {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: minmax(300px, 0.86fr) minmax(420px, 1.14fr);
+}
+
+.login-identity {
+  min-height: 100%;
+  display: grid;
+  align-content: center;
+  grid-template-columns: 48px 1fr;
+  gap: 14px 16px;
+  padding: 64px clamp(36px, 7vw, 108px);
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+}
+
+.brand-mark {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: white;
+  background: var(--primary);
+  font-size: 24px;
+  font-weight: 760;
+}
+
+.login-identity p,
+.login-heading p {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.login-identity h1 {
+  margin: 0;
+  font-size: 32px;
+  line-height: 1.08;
+  letter-spacing: 0;
+}
+
+.login-identity > span {
+  grid-column: 2;
+  width: fit-content;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.login-panel {
+  width: min(420px, calc(100% - 48px));
+  align-self: center;
+  justify-self: center;
+  padding: 40px 0;
+}
+
+.login-heading { margin-bottom: 28px; }
+
+.login-heading h2 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+form { display: grid; gap: 18px; }
+
+label { display: grid; gap: 8px; }
+
+label > span {
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+input {
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+input:hover { border-color: color-mix(in oklch, var(--primary) 42%, var(--line)); }
+
+.password-field { position: relative; }
+
+.password-field input { padding-right: 62px; }
+
+.password-field button {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  min-height: 34px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.password-field button:hover { color: var(--primary-hover); background: var(--primary-soft); }
+
+.login-error {
+  margin: -4px 0 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in oklch, var(--danger) 24%, var(--line));
+  border-radius: 6px;
+  color: var(--danger);
+  background: color-mix(in oklch, var(--danger) 6%, white);
+  font-size: 13px;
+}
+
+.login-submit {
+  min-height: 44px;
+  border: 0;
+  border-radius: 6px;
+  color: white;
+  background: var(--primary);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.login-submit:hover { background: var(--primary-hover); }
+.login-submit:disabled { cursor: wait; opacity: 0.64; }
+
+.login-footnote {
+  margin: 24px 0 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .login-shell { grid-template-columns: 1fr; }
+  .login-identity {
+    min-height: auto;
+    align-content: start;
+    grid-template-columns: 40px 1fr;
+    padding: 28px 24px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .brand-mark { width: 40px; height: 40px; font-size: 20px; }
+  .login-identity h1 { font-size: 24px; }
+  .login-identity > span { display: none; }
+  .login-panel { width: min(100% - 40px, 420px); padding: 40px 0 56px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+}

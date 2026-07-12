@@ -2,7 +2,7 @@
 
 ## Current deployment model
 
-Paperfield 0.6 is a single-process, single-user application:
+Paperfield is a single-process application. The beta sharing mode adds a small password-protected account gateway, but beta accounts still share one isolated beta workspace:
 
 ```mermaid
 flowchart LR
@@ -15,7 +15,7 @@ flowchart LR
     AI["CC Switch or OpenAI-compatible API"] --> API
 ```
 
-This model is appropriate for a personal workstation. It is intentionally not exposed as a public multi-user service yet.
+This model is appropriate for a personal workstation and short private beta sessions through a temporary tunnel. It is not a permanent multi-user service: account-specific reading state still requires the schema migration described below.
 
 ## Existing boundaries
 

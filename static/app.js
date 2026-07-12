@@ -20,6 +20,7 @@ const state = {
   projectCurrentContent: "",
   projectCodeWrapped: false,
   projectDocument: null,
+  auth: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -37,9 +38,32 @@ const api = async (path, options = {}) => {
     ...options,
   });
   const payload = await response.json();
+  if (response.status === 401 && payload.auth_required) {
+    const next = `${window.location.pathname}${window.location.search}`;
+    window.location.replace(`/login?next=${encodeURIComponent(next)}`);
+  }
   if (!response.ok) throw new Error(payload.error || `请求失败：${response.status}`);
   return payload;
 };
+
+async function loadAuthUser() {
+  const response = await fetch("/api/auth/me", { headers: { Accept: "application/json" } });
+  const payload = await response.json();
+  if (response.status === 401) {
+    const next = `${window.location.pathname}${window.location.search}`;
+    window.location.replace(`/login?next=${encodeURIComponent(next)}`);
+    return;
+  }
+  state.auth = payload;
+  el("authControls").hidden = !payload.enabled;
+  if (payload.user) {
+    const roleLabel = payload.user.role === "beta" ? "内测" : "普通";
+    el("authUsername").textContent = `${payload.user.display_name || payload.user.username} · ${roleLabel}`;
+    el("authUsername").title = payload.host_ai_allowed
+      ? "内测账户可使用主机 API"
+      : "普通账户需在自己的电脑上运行 Paperfield 并连接本地 API";
+  }
+}
 
 const debounce = (fn, delay = 260) => {
   let timer;
@@ -1037,6 +1061,10 @@ async function importReaderPdf(file) {
       body: file,
     });
     const asset = await response.json();
+    if (response.status === 401 && asset.auth_required) {
+      const next = `${window.location.pathname}${window.location.search}`;
+      window.location.replace(`/login?next=${encodeURIComponent(next)}`);
+    }
     if (!response.ok) throw new Error(asset.error || `导入失败：${response.status}`);
     renderReaderAsset(paper, asset);
     toast(`已导入 ${asset.page_count} 页 PDF`);
@@ -1400,6 +1428,13 @@ function bindEvents() {
   el("clearFilters").addEventListener("click", clearFilters);
   el("emptyClear").addEventListener("click", clearFilters);
   el("refreshButton").addEventListener("click", triggerRefresh);
+  el("logoutButton").addEventListener("click", async () => {
+    try {
+      await api("/api/auth/logout", { method: "POST", body: "{}" });
+    } finally {
+      window.location.replace("/login");
+    }
+  });
   el("openConnectorButton").addEventListener("click", () => {
     el("connectorQuery").value = "";
     el("connectorResults").innerHTML = "";
@@ -1584,7 +1619,7 @@ async function init() {
   applyViewMode();
   document.querySelectorAll(".rail-link").forEach((item) => item.classList.toggle("is-active", item.dataset.view === state.view));
   try {
-    await Promise.all([loadOptions(), loadStats(), loadStorageStatus(), loadPapers({ preserveSelection: false })]);
+    await Promise.all([loadAuthUser(), loadOptions(), loadStats(), loadStorageStatus(), loadPapers({ preserveSelection: false })]);
     if (initialPaperId) await openPaper(initialPaperId, false);
     if (initialProject) await openProjectReader(initialProject);
   } catch (error) {
