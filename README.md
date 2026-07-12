@@ -12,7 +12,7 @@ Paperfield 是面向具身智能、大语言模型和开源项目追踪的桌面
 - 后台提前寻找本周精选的公开 PDF，并为优先论文生成基于全文的中文精读；下一自然周自动换批。
 - 聚合顶会、顶刊、预印本与公开学术元数据，区分正式发表和未确认预印本。
 - 在阅读器左侧显示 PDF，右侧提供全文精读、分页翻译和基于原文的问答。
-- 每周推荐不超过 4 个 GitHub 项目，并关联对应论文、README 与源码阅读路径；同一自然周保持稳定。
+- 每周推荐不超过 4 个 GitHub 项目，并关联对应论文、README 与源码阅读路径；大型仓库在后台准备，完整压缩包不可用时自动整理 README、配置、入口与核心文本文件。
 - 支持本地、Cloudflare R2 或混合 PDF 存储，以及讲解和聊天历史备份。
 - 支持最多 4 个内测账号的登录保护共享模式。
 
@@ -40,6 +40,8 @@ python app.py
 Paperfield 会读取本机 CC Switch/Codex 的 OpenAI 兼容配置，也可以使用 `PAPERFIELD_OPENAI_API_KEY`、`PAPERFIELD_OPENAI_BASE_URL` 和 `PAPERFIELD_OPENAI_MODEL` 显式覆盖。没有 GPT Key 时仍可阅读 PDF、使用免费翻译并生成标注为摘要导读的基础说明。
 
 未设置 `PAPERFIELD_OPENAI_API_KEY` 时，切换 CC Switch 会影响之后新发起的精读和问答；已经生成并保存的精读、聊天和阅读笔记不会改变。若在 `local/.env` 中显式配置 Paperfield API，它的优先级更高，CC Switch 切换不会影响网页。
+
+在页面的“存储与模型”中可查看当前实例 API 可调用的模型并选择 Paperfield 专用模型；模型列表和选择都只作用于当前实例，不会显示或传递其他用户的模型与密钥。兼容服务如果只支持 `Chat Completions` 或只支持 `Responses`，系统会在空响应或端点不兼容时自动尝试另一种协议。
 
 论文和项目 Markdown 翻译依次尝试浏览器翻译能力、配置的 LibreTranslate 端点和无需 Key 的 Google Translate 端点。免费端点可能限流，因此结果会在本地和可选 R2 中缓存。
 

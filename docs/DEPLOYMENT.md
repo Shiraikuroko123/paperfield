@@ -37,6 +37,7 @@ docker compose down
 | `PAPERFIELD_OPENAI_API_KEY` | AI key for container/cloud deployment |
 | `PAPERFIELD_OPENAI_BASE_URL` | OpenAI-compatible base URL |
 | `PAPERFIELD_OPENAI_MODEL` | Explanation model |
+| `PAPERFIELD_OPENAI_WIRE_API` | `responses` or `chat_completions` for an explicit API override; Paperfield can fall back automatically when the other protocol is supported |
 | `PAPERFIELD_DISABLE_CLOUD` | Set to `1` to ignore all S3/R2 credentials for an isolated instance |
 | `PAPERFIELD_CLOUD_PREFIX` | Optional object-key namespace for an isolated/shared library |
 | `PAPERFIELD_SHARED_STORAGE_MAX_MB` | Capacity limit applied when a cloud prefix is configured |
@@ -49,6 +50,12 @@ docker compose down
 | `PAPERFIELD_LOCAL_CACHE_MAX_MB` | Maximum local PDF cache before old files are pruned |
 | `PAPERFIELD_PROJECT_ZIP_MAX_MB` | Maximum compressed public repository download |
 | `PAPERFIELD_PROJECT_TEXT_MAX_MB` | Maximum extracted text source cache per repository |
+| `PAPERFIELD_PROJECT_ARCHIVE_TIMEOUT_SECONDS` | Maximum archive-fetch time before curated-source fallback |
+| `PAPERFIELD_PROJECT_ARCHIVE_REPOSITORY_MAX_MB` | Repository-size threshold that skips full archive fetch and starts curated fallback immediately |
+| `PAPERFIELD_PROJECT_SELECTIVE_MAX_FILES` | Maximum number of README, config, entry, and source files in curated fallback |
+| `PAPERFIELD_PROJECT_SELECTIVE_TEXT_MAX_MB` | Maximum text size of the curated source fallback |
+| `PAPERFIELD_PROJECT_SELECTIVE_WORKERS` | Concurrent public raw-file fetches used by curated fallback |
+| `PAPERFIELD_PROJECT_SELECTIVE_FILE_TIMEOUT_SECONDS` | Per-file raw-source timeout used by curated fallback |
 | `GITHUB_TOKEN` | Optional GitHub rate-limit increase |
 
 ## Cloud constraints

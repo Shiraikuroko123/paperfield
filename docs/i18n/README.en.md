@@ -12,7 +12,7 @@ Paperfield is a desktop research workstation for embodied intelligence, large la
 - Background preparation resolves public PDFs for weekly picks and generates full-text readings for priority papers, rotating on the next natural week.
 - Coverage of top conferences, journals, preprints, and public scholarly metadata, with formal publications separated from unconfirmed preprints.
 - A split PDF reader with full-text analysis, page translation, and source-grounded questions.
-- Up to four weekly GitHub project recommendations linked to papers, README documents, and curated source-reading routes, stable throughout the natural week.
+- Up to four weekly GitHub project recommendations linked to papers, README documents, and curated source-reading routes, stable throughout the natural week. Large repositories prepare in the background and fall back to a bounded README/config/entry/core-source snapshot when a full ZIP is unavailable.
 - Local, Cloudflare R2, or hybrid PDF storage with backups for explanations and chat history.
 - Password-protected beta sharing for up to four trusted testers.
 
@@ -28,6 +28,8 @@ Open [http://127.0.0.1:8765](http://127.0.0.1:8765). Paperfield refreshes while 
 The database, PDFs, source cache, explanations, chats, and secrets live under the Git-ignored `local/` directory. See [Public source and local files](PUBLIC_AND_LOCAL.en.md). Testers should normally download the clean archive from GitHub Releases.
 
 Without an explicit `PAPERFIELD_OPENAI_API_KEY`, changing CC Switch affects subsequent readings and questions. Saved readings, chats, and notes do not change. An explicit Paperfield API configuration in `local/.env` takes precedence over CC Switch.
+
+Use **Storage and models** in the app to inspect the models available to the API of the current instance and select a Paperfield-specific model. The list and selection stay within that instance and never expose another user's models or credentials. When a compatible provider only supports `Chat Completions` or only `Responses`, Paperfield automatically tries the other protocol after an empty or incompatible response.
 
 ## Share with testers
 

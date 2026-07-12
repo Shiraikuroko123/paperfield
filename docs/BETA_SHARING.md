@@ -24,7 +24,7 @@ The shared namespace defaults to a 2 GB capacity ceiling. A beta account can cha
 
 Manual PDF uploads require the uploader to confirm they have the right to share the file. Do not redistribute subscription-only or institution-licensed publisher copies. Connector-resolved legal open-access PDFs can enter the shared namespace automatically.
 
-The beta process can use the host computer's current CC Switch/OpenAI-compatible configuration for AI explanations. Requests therefore consume the host account's model quota.
+The beta process can use the host computer's current CC Switch/OpenAI-compatible configuration for AI explanations. Requests therefore consume the host account's model quota. The host can inspect and choose only that host instance's available model list under **存储与模型**; this never exposes an API key or another user's models.
 
 ## Accounts
 

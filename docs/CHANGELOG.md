@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.4
+
+- Added a safe in-app model picker that queries only the current instance's OpenAI-compatible `/models` endpoint and persists a Paperfield-specific model override without exposing credentials.
+- AI calls now detect empty or non-JSON upstream responses, report a useful protocol diagnosis, and automatically retry the alternate OpenAI wire format (`Responses` or `Chat Completions`).
+- GitHub source preparation now returns immediately, reports background progress, and automatically falls back from a large or slow repository ZIP to a bounded curated text-source snapshot.
+
 ## 0.12.3
 
 - Weekly picks now prioritize verified public PDFs and legal public-copy signals, then replace unavailable papers with prepared topic reserves instead of filling the list with paywalled entries.

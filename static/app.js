@@ -29,7 +29,9 @@ const state = {
   projectCurrentContent: "",
   projectCodeWrapped: false,
   projectDocument: null,
+  projectWorkspaceToken: 0,
   auth: null,
+  aiModels: null,
   recommendationWeights: null,
   appliedRecommendationWeights: null,
 };
@@ -783,9 +785,24 @@ function renderProjectWorkspace(workspace) {
   state.projectWorkspace = workspace;
   const project = workspace.project;
   el("projectReaderTitle").textContent = project.full_name;
-  el("projectReaderMeta").textContent = `${project.language || "语言未标注"} · ${project.stars} Stars · ${workspace.file_count} 个源码文件 · ${project.linked_paper_count} 篇关联论文${project.size_kb ? ` · 仓库约 ${Math.max(1, Math.round(project.size_kb / 1024))} MB` : ""}`;
+  const preparation = workspace.preparation || {};
+  el("projectReaderMeta").textContent = `${project.language || "语言未标注"} · ${project.stars} Stars · ${workspace.file_count} 个源码文件 · ${project.linked_paper_count} 篇关联论文${project.size_kb ? ` · 仓库约 ${Math.max(1, Math.round(project.size_kb / 1024))} MB` : ""}${workspace.preparing ? " · 后台准备中" : ""}`;
   el("projectGithubLink").href = project.url;
+  el("projectRefreshSource").disabled = Boolean(workspace.preparing);
   renderReadingBackupStatus("projectBackupStatus", workspace.reading_backup_available, workspace.reading_backup_pending);
+  if (workspace.preparing && !workspace.ready) {
+    const message = preparation.message || "正在后台获取公开仓库源码";
+    el("projectFileTree").innerHTML = "";
+    el("projectCurrentPath").textContent = "后台准备中";
+    el("projectCodeMeta").textContent = "";
+    el("projectCodeContent").textContent = `${message}\n\n大型仓库会优先整理 README、依赖配置、入口与核心文本文件。完成后会自动显示。`;
+    el("projectReadmeContent").textContent = message;
+    el("projectDocumentPath").textContent = "README";
+    el("projectDocumentLanguages").hidden = true;
+    el("projectRootReadme").hidden = true;
+    el("projectExplanation").innerHTML = `<div class="reader-explain-empty"><strong>源码正在准备</strong><p>${escapeHtml(message)}</p></div>`;
+    return;
+  }
   restoreProjectReadme();
   if (!workspace.ready) {
     el("projectFileTree").innerHTML = "";
@@ -806,8 +823,36 @@ function renderProjectWorkspace(workspace) {
   el("projectExplanation").querySelector("[data-project-explain]")?.addEventListener("click", generateProjectExplanation);
 }
 
+async function monitorProjectWorkspace(fullName, token) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, 1200));
+    if (token !== state.projectWorkspaceToken || !el("projectReaderDialog").open || state.selectedProject !== fullName) return;
+    try {
+      const workspace = await api(`/api/projects/${encodeURIComponent(fullName)}/workspace`);
+      if (token !== state.projectWorkspaceToken || state.selectedProject !== fullName) return;
+      renderProjectWorkspace(workspace);
+      if (!workspace.preparing) {
+        await loadProjectChatHistory(fullName);
+        if (!workspace.ready && workspace.error) toast(workspace.error, true);
+        return;
+      }
+    } catch (error) {
+      if (attempt >= 3) {
+        el("projectCodeContent").textContent = `后台读取状态失败：${error.message}`;
+        el("projectReadmeContent").textContent = error.message;
+        toast(error.message, true);
+        return;
+      }
+    }
+  }
+  if (token === state.projectWorkspaceToken) {
+    el("projectCodeContent").textContent = "仓库仍在后台准备。请稍后点击“更新源码”重新读取状态。";
+  }
+}
+
 async function openProjectReader(fullName, force = false) {
   const dialog = el("projectReaderDialog");
+  const token = ++state.projectWorkspaceToken;
   state.selectedProject = fullName;
   state.projectWorkspace = null;
   state.projectSelectedPath = "";
@@ -842,6 +887,7 @@ async function openProjectReader(fullName, force = false) {
     const workspace = await api(`/api/projects/${encodeURIComponent(fullName)}/workspace`, { method: "POST", body: JSON.stringify({ force }) });
     renderProjectWorkspace(workspace);
     await loadProjectChatHistory(fullName);
+    if (workspace.preparing) monitorProjectWorkspace(fullName, token);
   } catch (error) {
     el("projectCodeContent").textContent = error.message;
     el("projectReadmeContent").textContent = error.message;
@@ -1622,6 +1668,60 @@ async function loadStorageStatus(refresh = false) {
   renderStorageStatus(payload);
 }
 
+function renderAiModels(payload) {
+  state.aiModels = payload;
+  const section = el("aiSettingsSection");
+  section.hidden = false;
+  const provider = payload.provider || "当前 API";
+  const baseHost = payload.base_host ? ` · ${payload.base_host}` : "";
+  const wire = payload.wire_api === "chat_completions" ? "Chat Completions" : "Responses";
+  el("aiModelMeta").textContent = payload.available
+    ? `${provider}${baseHost} · ${wire}`
+    : "当前没有可用的大模型配置";
+  const overrideActive = payload.model_source === "Paperfield 网页选择";
+  el("aiModelInput").value = overrideActive ? payload.model || "" : "";
+  el("aiModelInput").placeholder = `跟随 CC Switch 默认模型${payload.configured_model || payload.model ? `：${payload.configured_model || payload.model}` : ""}`;
+  el("aiModelOptions").innerHTML = (payload.models || []).map((model) => `<option value="${escapeHtml(model)}"></option>`).join("");
+  el("aiModelNotice").textContent = payload.error
+    ? `${payload.error}。也可手动填写模型名称；清空输入即可跟随 CC Switch 默认模型。`
+    : "只管理当前设备或当前部署的 API，不会显示其他用户的模型或密钥。清空输入即可跟随 CC Switch 默认模型。";
+}
+
+async function loadAiModels() {
+  const section = el("aiSettingsSection");
+  if (state.auth?.enabled && !state.auth.host_ai_allowed) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  el("aiModelMeta").textContent = "正在读取当前 API 可调用的模型";
+  el("aiModelNotice").textContent = "模型名称和密钥不会发送到其他账户。";
+  try {
+    renderAiModels(await api("/api/ai/models"));
+  } catch (error) {
+    el("aiModelMeta").textContent = "无法读取模型列表";
+    el("aiModelNotice").textContent = error.message;
+  }
+}
+
+async function saveAiModel() {
+  const button = el("saveAiModel");
+  button.disabled = true;
+  try {
+    const payload = await api("/api/ai/model", {
+      method: "POST",
+      body: JSON.stringify({ model: el("aiModelInput").value.trim() }),
+    });
+    await loadAiModels();
+    await loadStats();
+    toast(payload.selected_model ? `已切换到 ${payload.selected_model}` : "已恢复跟随 CC Switch 默认模型");
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function renderChatHistory(items = []) {
   const history = el("chatHistory");
   history.innerHTML = "";
@@ -1927,6 +2027,7 @@ function bindEvents() {
   el("openStorageButton").addEventListener("click", () => {
     el("storageDialog").showModal();
     el("defaultStorageMode").focus();
+    loadAiModels();
   });
   el("storageClose").addEventListener("click", () => el("storageDialog").close());
   el("refreshStorageUsage").addEventListener("click", async () => {
@@ -1943,6 +2044,18 @@ function bindEvents() {
       button.textContent = "重新清点";
     }
   });
+  el("refreshAiModels").addEventListener("click", async () => {
+    const button = el("refreshAiModels");
+    button.disabled = true;
+    button.textContent = "正在刷新";
+    try {
+      await loadAiModels();
+    } finally {
+      button.disabled = false;
+      button.textContent = "刷新模型";
+    }
+  });
+  el("saveAiModel").addEventListener("click", saveAiModel);
   el("storageSettingsForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const button = event.submitter;
@@ -2030,6 +2143,7 @@ function bindEvents() {
   el("readerCloudButton").addEventListener("click", archiveReaderPdf);
   el("readerStorageMode").addEventListener("change", updateReaderStorageAction);
   el("projectReaderClose").addEventListener("click", () => el("projectReaderDialog").close());
+  el("projectReaderDialog").addEventListener("close", () => { state.projectWorkspaceToken += 1; });
   document.querySelectorAll("[data-project-tab]").forEach((button) => button.addEventListener("click", () => setProjectTab(button.dataset.projectTab)));
   document.querySelectorAll("[data-project-file-mode]").forEach((button) => button.addEventListener("click", () => renderProjectFiles(button.dataset.projectFileMode)));
   el("projectRefreshSource").addEventListener("click", () => state.projectWorkspace && openProjectReader(state.projectWorkspace.project.full_name, true));

@@ -672,6 +672,7 @@ a { color: var(--primary); text-underline-offset: 3px; }
 .storage-size-input span { color: var(--muted); font-size: 10px; }
 .storage-form-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 10px; border-top: 1px solid var(--line); }
 .storage-form-actions span { color: var(--muted); font-size: 9px; line-height: 1.45; }
+.storage-form-actions > div { display: flex; align-items: center; gap: 8px; }
 .connector-empty.is-error { color: var(--danger); }
 
 .toast-region { position: fixed; right: 18px; bottom: 18px; z-index: 60; display: grid; gap: 8px; }
@@ -748,6 +749,7 @@ a { color: var(--primary); text-underline-offset: 3px; }
   .usage-meters { grid-template-columns: 1fr; }
   .storage-settings label { grid-template-columns: 1fr; gap: 6px; }
   .storage-form-actions { align-items: flex-start; flex-direction: column; }
+  .storage-form-actions > div { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
   .storage-form-actions button { width: 100%; }
 }
 

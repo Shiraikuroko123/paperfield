@@ -60,7 +60,7 @@ SETTINGS_PATH = Path(os.environ.get("PAPERFIELD_SETTINGS_PATH", DATA_DIR / "sett
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
 INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", ROOT / "institutions.json")).expanduser().resolve()
-APP_VERSION = "0.12.3"
+APP_VERSION = "0.12.4"
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
 RECOMMENDATION_WEIGHT_KEYS = (
@@ -73,6 +73,14 @@ DEFAULT_RECOMMENDATION_WEIGHTS = {
     "evidence": 15,
     "impact_reproducibility": 10,
 }
+
+
+class AIRequestError(RuntimeError):
+    """A sanitized upstream AI failure that can safely be shown in the client."""
+
+    def __init__(self, message: str, retry_with_other_wire: bool = False) -> None:
+        super().__init__(message)
+        self.retry_with_other_wire = retry_with_other_wire
 
 
 def utc_now() -> datetime:
@@ -2483,6 +2491,8 @@ class ProjectAssetService:
     def __init__(self, store: PaperStore) -> None:
         self.store = store
         self._lock = threading.RLock()
+        self._jobs: dict[str, dict[str, Any]] = {}
+        self._download_slots = threading.BoundedSemaphore(2)
         PROJECT_REPO_DIR.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
@@ -2499,11 +2509,102 @@ class ProjectAssetService:
             return False
         return relative.suffix.lower() in cls.TEXT_EXTENSIONS or relative.name.lower() in cls.TEXT_FILENAMES
 
-    def _download(self, project: dict[str, Any], target: Path) -> tuple[int, int, str]:
+    @staticmethod
+    def _display_fetch_error(error: Exception) -> str:
+        if isinstance(error, urllib.error.HTTPError):
+            return f"GitHub 返回 HTTP {error.code}"
+        if isinstance(error, TimeoutError):
+            return "请求超时"
+        if isinstance(error, zipfile.BadZipFile):
+            return "下载内容不是有效的 ZIP 压缩包"
+        if isinstance(error, (urllib.error.URLError, ConnectionError, http.client.HTTPException)):
+            return "网络连接暂时不可用"
+        detail = compact_text(str(error))
+        return detail[:240] if detail else "未知错误"
+
+    @staticmethod
+    def _limit_from_environment(name: str, default: int, minimum: int, maximum: int) -> int:
+        try:
+            value = int(os.environ.get(name, str(default)))
+        except ValueError:
+            value = default
+        return max(minimum, min(maximum, value))
+
+    def _clear_target(self, target: Path) -> None:
+        root = PROJECT_REPO_DIR.resolve()
+        resolved = target.resolve()
+        if not resolved.is_relative_to(root):
+            raise ValueError("仓库缓存目录不安全")
+        if target.exists():
+            shutil.rmtree(target)
+        target.mkdir(parents=True, exist_ok=True)
+
+    def _remove_target(self, target: Path) -> None:
+        root = PROJECT_REPO_DIR.resolve()
+        resolved = target.resolve()
+        if not resolved.is_relative_to(root):
+            raise ValueError("仓库缓存目录不安全")
+        if target.exists():
+            shutil.rmtree(target)
+
+    @staticmethod
+    def _readme_path(target: Path) -> str:
+        readmes = sorted(
+            (path for path in target.rglob("*") if path.is_file() and path.name.lower().startswith("readme")),
+            key=lambda path: (len(path.relative_to(target).parts), path.name.lower()),
+        )
+        return str(readmes[0]) if readmes else ""
+
+    def _extract_archive(self, archive: Path, target: Path) -> tuple[int, int, str]:
+        self._clear_target(target)
+        file_count = 0
+        source_chars = 0
+        extracted_bytes = 0
+        extracted_limit = self._limit_from_environment("PAPERFIELD_PROJECT_TEXT_MAX_MB", 200, 50, 2048) * 1024 * 1024
+        with zipfile.ZipFile(archive) as bundle:
+            for index, info in enumerate(bundle.infolist()):
+                if index >= 20000:
+                    break
+                if info.is_dir() or info.file_size > 1024 * 1024:
+                    continue
+                if ((info.external_attr >> 16) & 0o170000) == 0o120000:
+                    continue
+                parts = [part for part in info.filename.replace("\\", "/").split("/") if part]
+                if len(parts) < 2:
+                    continue
+                relative = Path(*parts[1:])
+                if relative.is_absolute() or ".." in relative.parts or not self._wanted_file(relative):
+                    continue
+                extracted_bytes += info.file_size
+                if extracted_bytes > extracted_limit or file_count >= 5000:
+                    break
+                content = bundle.read(info)
+                if b"\x00" in content[:4096]:
+                    continue
+                destination = (target / relative).resolve()
+                if not destination.is_relative_to(target.resolve()):
+                    continue
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(content)
+                file_count += 1
+                source_chars += len(content.decode("utf-8", errors="replace"))
+        return file_count, source_chars, self._readme_path(target)
+
+    def _download_archive(self, project: dict[str, Any], target: Path) -> tuple[int, int, str]:
         full_name = project["full_name"]
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", full_name):
-            raise ValueError("GitHub 仓库名称不合法")
-        maximum_zip = max(20, int(os.environ.get("PAPERFIELD_PROJECT_ZIP_MAX_MB", "120"))) * 1024 * 1024
+        maximum_zip = self._limit_from_environment("PAPERFIELD_PROJECT_ZIP_MAX_MB", 120, 20, 2048) * 1024 * 1024
+        timeout = self._limit_from_environment("PAPERFIELD_PROJECT_ARCHIVE_TIMEOUT_SECONDS", 40, 15, 180)
+        archive_repository_limit = self._limit_from_environment(
+            "PAPERFIELD_PROJECT_ARCHIVE_REPOSITORY_MAX_MB", 96, 20, 2048,
+        )
+        try:
+            repository_size_kb = int(project.get("size_kb", 0) or 0)
+        except (TypeError, ValueError):
+            repository_size_kb = 0
+        if repository_size_kb > archive_repository_limit * 1024:
+            raise ValueError(
+                f"仓库规模约 {math.ceil(repository_size_kb / 1024)} MB，超过完整压缩包抓取阈值"
+            )
         branch = compact_text(project.get("default_branch"))
         archive_url = (
             f"https://codeload.github.com/{full_name}/zip/refs/heads/{urllib.parse.quote(branch, safe='')}"
@@ -2515,12 +2616,15 @@ class ProjectAssetService:
         )
         archive = PROJECT_REPO_DIR / f"{self._cache_key(full_name)}.zip.part"
         try:
-            with urllib.request.urlopen(request, timeout=120) as response, archive.open("wb") as handle:
+            deadline = time.monotonic() + timeout
+            with urllib.request.urlopen(request, timeout=min(timeout, 30)) as response, archive.open("wb") as handle:
                 content_length = int(response.headers.get("Content-Length", "0") or 0)
                 if content_length > maximum_zip:
                     raise ValueError("仓库压缩包超过缓存大小限制")
                 total = 0
                 while True:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("仓库压缩包下载超过等待时间")
                     chunk = response.read(1024 * 512)
                     if not chunk:
                         break
@@ -2528,53 +2632,255 @@ class ProjectAssetService:
                     if total > maximum_zip:
                         raise ValueError("仓库压缩包超过缓存大小限制")
                     handle.write(chunk)
-            if target.exists():
-                resolved_target = target.resolve()
-                if not resolved_target.is_relative_to(PROJECT_REPO_DIR.resolve()):
-                    raise ValueError("仓库缓存目录不安全")
-                shutil.rmtree(target)
-            target.mkdir(parents=True, exist_ok=True)
-            file_count = 0
-            source_chars = 0
-            extracted_bytes = 0
-            extracted_limit = max(50, int(os.environ.get("PAPERFIELD_PROJECT_TEXT_MAX_MB", "200"))) * 1024 * 1024
-            with zipfile.ZipFile(archive) as bundle:
-                for index, info in enumerate(bundle.infolist()):
-                    if index >= 20000:
-                        break
-                    if info.is_dir() or info.file_size > 1024 * 1024:
-                        continue
-                    if ((info.external_attr >> 16) & 0o170000) == 0o120000:
-                        continue
-                    parts = [part for part in info.filename.replace("\\", "/").split("/") if part]
-                    if len(parts) < 2:
-                        continue
-                    relative = Path(*parts[1:])
-                    if relative.is_absolute() or ".." in relative.parts or not self._wanted_file(relative):
-                        continue
-                    extracted_bytes += info.file_size
-                    if extracted_bytes > extracted_limit or file_count >= 5000:
-                        break
-                    content = bundle.read(info)
-                    if b"\x00" in content[:4096]:
-                        continue
-                    destination = (target / relative).resolve()
-                    if not destination.is_relative_to(target.resolve()):
-                        continue
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    destination.write_bytes(content)
-                    file_count += 1
-                    source_chars += len(content.decode("utf-8", errors="replace"))
-            readmes = sorted(
-                (path for path in target.rglob("*") if path.is_file() and path.name.lower().startswith("readme")),
-                key=lambda path: (len(path.relative_to(target).parts), path.name.lower()),
-            )
-            readme_path = str(readmes[0]) if readmes else ""
-            return file_count, source_chars, readme_path
+            return self._extract_archive(archive, target)
+        except Exception:
+            self._remove_target(target)
+            raise
         finally:
             archive.unlink(missing_ok=True)
 
+    @classmethod
+    def _selective_priority(cls, relative: Path, size: int) -> tuple[int, int, int, str]:
+        lower = relative.as_posix().lower()
+        name = relative.name.lower()
+        depth = len(relative.parts)
+        priority = 0
+        if depth == 1 and name.startswith("readme"):
+            priority += 200
+        elif depth == 1 and name in {
+            "pyproject.toml", "requirements.txt", "package.json", "setup.py", "cargo.toml", "go.mod", "dockerfile",
+        }:
+            priority += 180
+        elif depth == 1 and re.fullmatch(r"(main|app|server|cli|run|train|inference|infer)\.(py|js|ts|tsx|go|rs|java)", name):
+            priority += 160
+        route = cls._reading_route(relative.as_posix())
+        if route:
+            priority += route[2]
+        if any(marker in lower for marker in ("model", "agent", "policy", "network", "module", "config")):
+            priority += 25
+        return (-priority, depth, size, lower)
+
+    @staticmethod
+    def _raw_file_url(full_name: str, branch: str, relative: Path) -> str:
+        return (
+            f"https://raw.githubusercontent.com/{full_name}/"
+            f"{urllib.parse.quote(branch, safe='')}/{urllib.parse.quote(relative.as_posix(), safe='/')}"
+        )
+
+    def _github_tree(self, full_name: str, branch: str) -> list[dict[str, Any]]:
+        request = urllib.request.Request(
+            f"https://api.github.com/repos/{full_name}/git/trees/{urllib.parse.quote(branch or 'HEAD', safe='')}?recursive=1",
+            headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"},
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            raw = response.read(8 * 1024 * 1024)
+        payload = json.loads(raw.decode("utf-8"))
+        tree = payload.get("tree", []) if isinstance(payload, dict) else []
+        return [item for item in tree if isinstance(item, dict)]
+
+    def _download_raw_file(self, url: str, timeout: int = 20) -> bytes:
+        maximum = 1024 * 1024
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/plain,*/*;q=0.8"})
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            content_length = int(response.headers.get("Content-Length", "0") or 0)
+            if content_length > maximum:
+                raise ValueError("单个源码文件超过 1 MB 限制")
+            chunks = []
+            total = 0
+            while True:
+                chunk = response.read(1024 * 128)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > maximum:
+                    raise ValueError("单个源码文件超过 1 MB 限制")
+                chunks.append(chunk)
+        return b"".join(chunks)
+
+    def _download_selective(self, project: dict[str, Any], target: Path) -> tuple[int, int, str]:
+        full_name = project["full_name"]
+        branch = compact_text(project.get("default_branch")) or "HEAD"
+        fallback_paths = (
+            "README.md", "README.rst", "README.txt", "README", "pyproject.toml", "requirements.txt", "package.json",
+            "setup.py", "environment.yml", "Dockerfile", "compose.yaml", "docker-compose.yml", "main.py", "app.py",
+            "server.py", "run.py", "train.py", "inference.py", "infer.py",
+        )
+        candidates: dict[str, tuple[Path, int]] = {}
+        tree_error: Exception | None = None
+        try:
+            for item in self._github_tree(full_name, branch):
+                if item.get("type") != "blob":
+                    continue
+                relative = Path(str(item.get("path", "")))
+                try:
+                    size = int(item.get("size", 0) or 0)
+                except (TypeError, ValueError):
+                    size = 0
+                if relative.is_absolute() or ".." in relative.parts or size > 1024 * 1024 or not self._wanted_file(relative):
+                    continue
+                candidates[relative.as_posix()] = (relative, size)
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ConnectionError, OSError, ValueError, json.JSONDecodeError) as error:
+            tree_error = error
+        for item in fallback_paths:
+            relative = Path(item)
+            if self._wanted_file(relative):
+                candidates.setdefault(relative.as_posix(), (relative, 0))
+        ordered = sorted(candidates.values(), key=lambda item: self._selective_priority(item[0], item[1]))
+        maximum_files = self._limit_from_environment("PAPERFIELD_PROJECT_SELECTIVE_MAX_FILES", 180, 20, 800)
+        maximum_bytes = self._limit_from_environment("PAPERFIELD_PROJECT_SELECTIVE_TEXT_MAX_MB", 24, 5, 512) * 1024 * 1024
+        worker_count = self._limit_from_environment("PAPERFIELD_PROJECT_SELECTIVE_WORKERS", 6, 1, 12)
+        file_timeout = self._limit_from_environment("PAPERFIELD_PROJECT_SELECTIVE_FILE_TIMEOUT_SECONDS", 12, 5, 60)
+        self._clear_target(target)
+        file_count = 0
+        source_chars = 0
+        downloaded_bytes = 0
+        candidate_iter = iter(ordered)
+
+        def submit_next(executor: concurrent.futures.ThreadPoolExecutor, pending: dict[Any, Path]) -> bool:
+            try:
+                relative, _ = next(candidate_iter)
+            except StopIteration:
+                return False
+            future = executor.submit(
+                self._download_raw_file,
+                self._raw_file_url(full_name, branch, relative),
+                file_timeout,
+            )
+            pending[future] = relative
+            return True
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+            pending: dict[Any, Path] = {}
+            for _ in range(min(worker_count, maximum_files)):
+                if not submit_next(executor, pending):
+                    break
+            while pending and file_count < maximum_files and downloaded_bytes < maximum_bytes:
+                completed, _ = concurrent.futures.wait(
+                    pending, return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+                for future in completed:
+                    relative = pending.pop(future)
+                    try:
+                        content = future.result()
+                    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ConnectionError, OSError, ValueError):
+                        content = b""
+                    if content and b"\x00" not in content[:4096] and downloaded_bytes + len(content) <= maximum_bytes:
+                        destination = (target / relative).resolve()
+                        if destination.is_relative_to(target.resolve()):
+                            destination.parent.mkdir(parents=True, exist_ok=True)
+                            destination.write_bytes(content)
+                            file_count += 1
+                            downloaded_bytes += len(content)
+                            source_chars += len(content.decode("utf-8", errors="replace"))
+                    if file_count < maximum_files and downloaded_bytes < maximum_bytes:
+                        submit_next(executor, pending)
+            for future in pending:
+                future.cancel()
+        if file_count:
+            return file_count, source_chars, self._readme_path(target)
+        self._remove_target(target)
+        if tree_error:
+            raise RuntimeError(f"GitHub 文件目录读取失败：{self._display_fetch_error(tree_error)}") from tree_error
+        raise RuntimeError("GitHub 未提供可安全读取的文本源码")
+
+    def _download(self, project: dict[str, Any], target: Path) -> tuple[int, int, str]:
+        full_name = project["full_name"]
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", full_name):
+            raise ValueError("GitHub 仓库名称不合法")
+        try:
+            result = self._download_archive(project, target)
+            if result[0]:
+                return result
+            raise ValueError("仓库压缩包中没有可安全显示的文本源码")
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ConnectionError, OSError, ValueError, zipfile.BadZipFile, json.JSONDecodeError) as archive_error:
+            try:
+                return self._download_selective(project, target)
+            except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ConnectionError, OSError, ValueError, RuntimeError, json.JSONDecodeError) as selective_error:
+                raise RuntimeError(
+                    "完整仓库下载不可用（"
+                    f"{self._display_fetch_error(archive_error)}）；精选源码抓取也失败（{self._display_fetch_error(selective_error)}）"
+                ) from selective_error
+
+    def _job_status(self, full_name: str) -> dict[str, Any] | None:
+        with self._lock:
+            value = self._jobs.get(full_name)
+            return dict(value) if value else None
+
+    def _set_job_status(self, full_name: str, **payload: Any) -> None:
+        with self._lock:
+            current = self._jobs.get(full_name, {})
+            self._jobs[full_name] = {**current, **payload}
+
+    def _prepare_worker(self, project: dict[str, Any]) -> None:
+        full_name = project["full_name"]
+        target = self._repo_path(full_name)
+        staging = PROJECT_REPO_DIR / f"{self._cache_key(full_name)}.staging"
+        try:
+            self._remove_target(staging)
+            self._set_job_status(full_name, message="正在等待可用的源码下载通道")
+            with self._download_slots:
+                self._set_job_status(full_name, message="正在下载公开仓库源码")
+                file_count, source_chars, readme_path = self._download(project, staging)
+            readme_relative = ""
+            if readme_path:
+                try:
+                    readme_relative = Path(readme_path).resolve().relative_to(staging.resolve()).as_posix()
+                except ValueError:
+                    pass
+            self._remove_target(target)
+            staging.replace(target)
+            asset = self.store.save_project_asset(
+                full_name,
+                {
+                    "local_repo_path": str(target),
+                    "readme_path": str(target / readme_relative) if readme_relative else "",
+                    "file_count": file_count,
+                    "source_chars": source_chars,
+                    "error_text": "" if file_count else "仓库中没有可安全显示的文本源码",
+                },
+            )
+            self._set_job_status(
+                full_name,
+                state="ready",
+                message=f"已缓存 {asset.get('file_count', file_count)} 个可阅读文本文件",
+                finished_at=utc_now().isoformat(),
+            )
+        except Exception as error:
+            self._remove_target(staging)
+            message = f"源码抓取失败：{self._display_fetch_error(error)}"
+            self.store.save_project_asset(full_name, {"error_text": message})
+            self._set_job_status(full_name, state="failed", message=message, finished_at=utc_now().isoformat())
+
+    def _start_prepare(self, project: dict[str, Any]) -> None:
+        full_name = project["full_name"]
+        with self._lock:
+            current = self._jobs.get(full_name, {})
+            if current.get("state") == "running":
+                return
+            self._jobs[full_name] = {
+                "state": "running",
+                "message": "正在后台准备公开仓库源码；大型仓库会自动精简为 README、配置和核心文件",
+                "started_at": utc_now().isoformat(),
+            }
+        threading.Thread(
+            target=self._prepare_worker,
+            args=(dict(project),),
+            name=f"paperfield-project-{self._cache_key(full_name)[:8]}",
+            daemon=True,
+        ).start()
+
     def prepare(self, project: dict[str, Any], force: bool = False) -> dict[str, Any]:
+        asset = self.store.get_project_asset(project["full_name"]) or {}
+        repo_path = Path(asset.get("local_repo_path", "")) if asset.get("local_repo_path") else None
+        cache_is_fresh = False
+        if repo_path and repo_path.exists() and asset.get("checked_at"):
+            try:
+                cache_is_fresh = (utc_now() - datetime.fromisoformat(asset["checked_at"])).days < 7
+            except ValueError:
+                pass
+        if force or not cache_is_fresh:
+            self._start_prepare(project)
+        return self.workspace(project, asset)
         with self._lock:
             asset = self.store.get_project_asset(project["full_name"]) or {}
             repo_path = Path(asset.get("local_repo_path", "")) if asset.get("local_repo_path") else None
@@ -2821,6 +3127,7 @@ class ProjectAssetService:
 
     def workspace(self, project: dict[str, Any], asset: dict[str, Any] | None = None) -> dict[str, Any]:
         value = asset or self.store.get_project_asset(project["full_name"]) or {}
+        job = self._job_status(project["full_name"])
         files = self.files(project["full_name"], value)
         readme = ""
         readme_path = Path(value.get("readme_path", "")) if value.get("readme_path") else None
@@ -2849,6 +3156,8 @@ class ProjectAssetService:
             "checked_at": value.get("checked_at", ""),
             "error": value.get("error_text", ""),
             "explanation": value.get("explanation"),
+            "preparing": bool(job and job.get("state") == "running"),
+            "preparation": job or {},
         }
 
     @staticmethod
@@ -2910,7 +3219,8 @@ class ProjectExplainer:
     def explain(self, project: dict[str, Any]) -> dict[str, Any]:
         workspace = self.assets.prepare(project)
         if not workspace.get("ready"):
-            result = self._fallback(project, workspace, f"源码尚不可用：{workspace.get('error') or '未找到文本源码'}")
+            notice = workspace.get("preparation", {}).get("message") if workspace.get("preparing") else ""
+            result = self._fallback(project, workspace, f"源码尚不可用：{notice or workspace.get('error') or '未找到文本源码'}")
             self.store.save_project_explanation(project["full_name"], result)
             return result
         connection = self.ai.connection()
@@ -3245,6 +3555,7 @@ class RuntimeSettings:
             "shared_storage_max_mb": int(os.environ.get("PAPERFIELD_SHARED_STORAGE_MAX_MB", "2048")),
             "r2_billing_cycle_day": int(os.environ.get("PAPERFIELD_R2_BILLING_CYCLE_DAY", "1")),
             "recommendation_weights": dict(DEFAULT_RECOMMENDATION_WEIGHTS),
+            "ai_model_override": "",
         }
 
     @staticmethod
@@ -3285,6 +3596,9 @@ class RuntimeSettings:
         billing_day = int(payload.get("r2_billing_cycle_day", 1))
         if billing_day < 1 or billing_day > 28:
             raise ValueError("R2 账期起始日需在 1 到 28 之间")
+        ai_model_override = compact_text(str(payload.get("ai_model_override", "")))
+        if len(ai_model_override) > 200:
+            raise ValueError("AI 模型名称不能超过 200 个字符")
         return {
             "pdf_storage_mode": mode, "local_pdf_dir": str(local_path),
             "local_cache_max_mb": cache_mb, "shared_storage_max_mb": shared_storage_mb,
@@ -3292,6 +3606,7 @@ class RuntimeSettings:
             "recommendation_weights": cls.validate_recommendation_weights(
                 payload.get("recommendation_weights", DEFAULT_RECOMMENDATION_WEIGHTS)
             ),
+            "ai_model_override": ai_model_override,
         }
 
     def get(self) -> dict[str, Any]:
@@ -3311,6 +3626,15 @@ class RuntimeSettings:
             self._values["recommendation_weights"] = weights
             self._persist()
             return dict(weights)
+
+    def update_ai_model_override(self, model: Any) -> str:
+        with self._lock:
+            value = compact_text(str(model or ""))
+            if len(value) > 200:
+                raise ValueError("AI 模型名称不能超过 200 个字符")
+            self._values["ai_model_override"] = value
+            self._persist()
+            return value
 
     def _persist(self) -> None:
         if not self.path:
@@ -4312,58 +4636,135 @@ class ProjectDocumentTranslationService:
 
 
 class PaperExplainer:
-    @staticmethod
-    def connection() -> dict[str, str] | None:
+    _wire_lock = threading.RLock()
+    _wire_preferences: dict[tuple[str, str, str, str], str] = {}
+
+    @classmethod
+    def connection(cls) -> dict[str, str] | None:
         override_key = os.environ.get("PAPERFIELD_OPENAI_API_KEY", "").strip()
         if override_key:
-            return {
+            connection = {
                 "key": override_key,
                 "base_url": os.environ.get("PAPERFIELD_OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
                 "model": os.environ.get("PAPERFIELD_OPENAI_MODEL", "gpt-5-mini").strip(),
                 "provider": "Paperfield 环境变量",
+                "wire_api": os.environ.get("PAPERFIELD_OPENAI_WIRE_API", "responses").strip(),
             }
+        else:
+            connection = None
+            codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+            codex_config = codex_home / "config.toml"
+            codex_auth = codex_home / "auth.json"
+            if codex_config.exists() and codex_auth.exists():
+                try:
+                    config_text = codex_config.read_text(encoding="utf-8")
+                    provider_match = re.search(r'^model_provider\s*=\s*"([^"]+)"', config_text, flags=re.M)
+                    model_match = re.search(r'^model\s*=\s*"([^"]+)"', config_text, flags=re.M)
+                    auth = json.loads(codex_auth.read_text(encoding="utf-8"))
+                    key = compact_text(auth.get("OPENAI_API_KEY"))
+                    if provider_match and model_match and key:
+                        provider_id = provider_match.group(1)
+                        section_match = re.search(
+                            rf'^\[model_providers\.{re.escape(provider_id)}\]\s*(.*?)(?=^\[|\Z)',
+                            config_text,
+                            flags=re.M | re.S,
+                        )
+                        provider_section = section_match.group(1) if section_match else ""
+                        base_match = re.search(r'^base_url\s*=\s*"([^"]+)"', provider_section, flags=re.M)
+                        wire_match = re.search(r'^wire_api\s*=\s*"([^"]+)"', provider_section, flags=re.M)
+                        base_url = base_match.group(1).rstrip("/") if base_match else "https://api.openai.com/v1"
+                        connection = {
+                            "key": key,
+                            "base_url": base_url,
+                            "model": model_match.group(1),
+                            "provider": f"CC Switch / {provider_id}",
+                            "wire_api": wire_match.group(1) if wire_match else "responses",
+                        }
+                except (OSError, ValueError, json.JSONDecodeError):
+                    pass
 
-        codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
-        codex_config = codex_home / "config.toml"
-        codex_auth = codex_home / "auth.json"
-        if codex_config.exists() and codex_auth.exists():
-            try:
-                config_text = codex_config.read_text(encoding="utf-8")
-                provider_match = re.search(r'^model_provider\s*=\s*"([^"]+)"', config_text, flags=re.M)
-                model_match = re.search(r'^model\s*=\s*"([^"]+)"', config_text, flags=re.M)
-                auth = json.loads(codex_auth.read_text(encoding="utf-8"))
-                key = compact_text(auth.get("OPENAI_API_KEY"))
-                if provider_match and model_match and key:
-                    provider_id = provider_match.group(1)
-                    section_match = re.search(
-                        rf'^\[model_providers\.{re.escape(provider_id)}\]\s*(.*?)(?=^\[|\Z)',
-                        config_text,
-                        flags=re.M | re.S,
-                    )
-                    provider_section = section_match.group(1) if section_match else ""
-                    base_match = re.search(r'^base_url\s*=\s*"([^"]+)"', provider_section, flags=re.M)
-                    wire_match = re.search(r'^wire_api\s*=\s*"([^"]+)"', provider_section, flags=re.M)
-                    base_url = base_match.group(1).rstrip("/") if base_match else "https://api.openai.com/v1"
-                    return {
+            if connection is None:
+                key = os.environ.get("OPENAI_API_KEY", "").strip()
+                if key:
+                    connection = {
                         "key": key,
-                        "base_url": base_url,
-                        "model": model_match.group(1),
-                        "provider": f"CC Switch / {provider_id}",
-                        "wire_api": wire_match.group(1) if wire_match else "responses",
+                        "base_url": os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
+                        "model": os.environ.get("OPENAI_MODEL", "gpt-5-mini").strip(),
+                        "provider": "OpenAI 环境变量",
+                        "wire_api": os.environ.get("OPENAI_WIRE_API", "responses").strip(),
                     }
-            except (OSError, ValueError, json.JSONDecodeError):
-                pass
+        if connection is None:
+            return None
 
-        key = os.environ.get("OPENAI_API_KEY", "").strip()
-        if key:
-            return {
-                "key": key,
-                "base_url": os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/"),
-                "model": os.environ.get("OPENAI_MODEL", "gpt-5-mini").strip(),
-                "provider": "OpenAI 环境变量",
-                "wire_api": os.environ.get("OPENAI_WIRE_API", "responses").strip(),
-            }
-        return None
+        settings = globals().get("SETTINGS")
+        selected_model = ""
+        if settings:
+            try:
+                selected_model = compact_text(settings.get().get("ai_model_override", ""))
+            except (AttributeError, OSError, ValueError, TypeError):
+                pass
+        if selected_model:
+            connection["configured_model"] = connection["model"]
+            connection["model"] = selected_model
+            connection["model_source"] = "Paperfield 网页选择"
+        else:
+            connection["model_source"] = "CC Switch / 环境默认"
+        return connection
+
+    @staticmethod
+    def _wire_name(value: str | None) -> str:
+        return "chat_completions" if compact_text(value).lower() in {"chat", "chat_completions", "chat-completions"} else "responses"
+
+    @staticmethod
+    def _wire_label(wire: str) -> str:
+        return "Chat Completions" if wire == "chat_completions" else "Responses"
+
+    @classmethod
+    def connection_status(cls) -> dict[str, Any]:
+        connection = cls.connection()
+        if not connection:
+            return {"available": False, "provider": "", "model": "", "wire_api": "", "base_host": ""}
+        return {
+            "available": True,
+            "provider": connection["provider"],
+            "model": connection["model"],
+            "configured_model": connection.get("configured_model", connection["model"]),
+            "model_source": connection.get("model_source", ""),
+            "wire_api": cls._wire_name(connection.get("wire_api", "responses")),
+            "base_host": urllib.parse.urlparse(connection["base_url"]).netloc,
+        }
+
+    @classmethod
+    def available_models(cls) -> dict[str, Any]:
+        connection = cls.connection()
+        status = cls.connection_status()
+        if not connection:
+            return {**status, "models": [], "error": "当前没有可用的大模型配置"}
+        request = urllib.request.Request(
+            f"{connection['base_url']}/models",
+            headers={"Authorization": f"Bearer {connection['key']}", "Accept": "application/json", "User-Agent": USER_AGENT},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                raw = response.read(2 * 1024 * 1024)
+            if not raw.strip():
+                raise AIRequestError("模型列表接口返回空响应")
+            payload = json.loads(raw.decode("utf-8"))
+            candidates = payload.get("data", payload.get("models", [])) if isinstance(payload, dict) else payload
+            models = []
+            for item in candidates if isinstance(candidates, list) else []:
+                value = compact_text(item.get("id") or item.get("name")) if isinstance(item, dict) else compact_text(str(item))
+                if value and value not in models:
+                    models.append(value)
+            active = connection["model"]
+            if active and active not in models:
+                models.append(active)
+            models.sort(key=lambda item: (item != active, item.lower()))
+            return {**status, "models": models[:500], "error": ""}
+        except urllib.error.HTTPError as error:
+            return {**status, "models": [connection["model"]], "error": f"模型列表接口返回 HTTP {error.code}"}
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, ValueError, json.JSONDecodeError):
+            return {**status, "models": [connection["model"]], "error": "暂时无法读取模型列表，可手动填写可用模型名称"}
 
     @staticmethod
     def _paper_context(fulltext: str, limit: int = 115000) -> str:
@@ -4412,42 +4813,126 @@ class PaperExplainer:
                 return fallback
         return self._fallback(paper)
 
-    def _request_text(self, prompt: str, connection: dict[str, str], timeout: int = 180) -> str:
-        model = connection["model"]
-        wire_api = connection.get("wire_api", "responses").lower()
-        if wire_api in {"chat", "chat_completions", "chat-completions"}:
+    @staticmethod
+    def _content_text(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        if not isinstance(value, list):
+            return ""
+        pieces = []
+        for item in value:
+            if isinstance(item, str):
+                pieces.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content") or ""
+                if isinstance(text, str):
+                    pieces.append(text)
+        return "".join(pieces)
+
+    @classmethod
+    def _output_text(cls, payload: Any, wire: str) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        chat_output = ""
+        choices = payload.get("choices") or []
+        if choices and isinstance(choices[0], dict):
+            message = choices[0].get("message") or {}
+            chat_output = cls._content_text(message.get("content") if isinstance(message, dict) else "")
+            if not chat_output:
+                chat_output = cls._content_text(choices[0].get("text"))
+        response_output = cls._content_text(payload.get("output_text"))
+        if not response_output:
+            pieces = []
+            for item in payload.get("output", []) or []:
+                if not isinstance(item, dict):
+                    continue
+                for content in item.get("content", []) or []:
+                    if isinstance(content, dict) and content.get("type") in {"output_text", "text"}:
+                        pieces.append(cls._content_text(content.get("text")))
+            response_output = "".join(pieces)
+        if wire == "chat_completions":
+            return chat_output or response_output
+        # Some compatibility gateways return the other OpenAI response envelope.
+        return response_output or chat_output
+
+    @classmethod
+    def _request_once(cls, prompt: str, connection: dict[str, str], wire: str, timeout: int) -> str:
+        if wire == "chat_completions":
             endpoint = "chat/completions"
-            request_payload = {"model": model, "messages": [{"role": "user", "content": prompt}]}
+            request_payload = {"model": connection["model"], "messages": [{"role": "user", "content": prompt}]}
         else:
             endpoint = "responses"
             request_payload = {
-                "model": model,
+                "model": connection["model"],
                 "input": [{"role": "user", "content": [{"type": "input_text", "text": prompt}]}],
             }
-        body = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(
             f"{connection['base_url']}/{endpoint}",
-            data=body,
-            headers={"Authorization": f"Bearer {connection['key']}", "Content-Type": "application/json"},
+            data=json.dumps(request_payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {connection['key']}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": USER_AGENT,
+            },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        if endpoint == "chat/completions":
-            choices = payload.get("choices") or []
-            output_text = ((choices[0].get("message") or {}).get("content") or "") if choices else ""
-        else:
-            output_text = payload.get("output_text") or ""
-            if not output_text:
-                pieces = []
-                for output in payload.get("output", []):
-                    for content in output.get("content", []):
-                        if content.get("type") in {"output_text", "text"}:
-                            pieces.append(content.get("text", ""))
-                output_text = "".join(pieces)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                raw = response.read()
+                content_type = response.headers.get("Content-Type", "")
+        except urllib.error.HTTPError as error:
+            retryable = error.code not in {401, 403, 429}
+            raise AIRequestError(
+                f"{cls._wire_label(wire)} 接口返回 HTTP {error.code}", retry_with_other_wire=retryable,
+            ) from error
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as error:
+            raise AIRequestError(
+                f"{cls._wire_label(wire)} 接口暂时无法连接", retry_with_other_wire=True,
+            ) from error
+        if not raw.strip():
+            raise AIRequestError(
+                f"{cls._wire_label(wire)} 接口返回空响应", retry_with_other_wire=True,
+            )
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            label = content_type.split(";", 1)[0] or "未知内容类型"
+            raise AIRequestError(
+                f"{cls._wire_label(wire)} 接口未返回 JSON（{label}）", retry_with_other_wire=True,
+            ) from error
+        output_text = cls._output_text(payload, wire).strip()
         if not output_text:
-            raise ValueError("模型没有返回文本")
+            raise AIRequestError(
+                f"{cls._wire_label(wire)} 接口没有返回可读取的文本", retry_with_other_wire=True,
+            )
         return output_text
+
+    @classmethod
+    def _request_text(cls, prompt: str, connection: dict[str, str], timeout: int = 180) -> str:
+        configured_wire = cls._wire_name(connection.get("wire_api", "responses"))
+        preference_key = (
+            connection.get("provider", ""), connection.get("base_url", ""),
+            connection.get("model", ""), configured_wire,
+        )
+        with cls._wire_lock:
+            preferred_wire = cls._wire_preferences.get(preference_key, configured_wire)
+        wires = [preferred_wire]
+        alternate_wire = "chat_completions" if preferred_wire == "responses" else "responses"
+        if alternate_wire not in wires:
+            wires.append(alternate_wire)
+        failures: list[str] = []
+        for index, wire in enumerate(wires):
+            try:
+                output = cls._request_once(prompt, connection, wire, timeout)
+                with cls._wire_lock:
+                    cls._wire_preferences[preference_key] = wire
+                return output
+            except AIRequestError as error:
+                failures.append(str(error))
+                if index == len(wires) - 1 or not error.retry_with_other_wire:
+                    break
+        raise RuntimeError("AI 上游没有返回可用文本：" + "；随后 ".join(failures))
 
     def _openai_explain(
         self,
@@ -6158,6 +6643,11 @@ class AppHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/recommendation-weights":
             self.send_json({"weights": SETTINGS.get()["recommendation_weights"]})
             return
+        if parsed.path == "/api/ai/models":
+            if not self.require_host_ai():
+                return
+            self.send_json(EXPLAINER.available_models())
+            return
         if parsed.path == "/api/connectors/search":
             query = (params.get("q") or [""])[0].strip()
             if not query:
@@ -6198,6 +6688,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                     "ai_provider": ai_connection["provider"] if ai_connection else "",
                     "ai_model": ai_connection["model"] if ai_connection else "",
                     "ai_wire_api": ai_connection.get("wire_api", "responses") if ai_connection else "",
+                    "ai_model_source": ai_connection.get("model_source", "") if ai_connection else "",
                 }
             )
             return
@@ -6260,6 +6751,16 @@ class AppHandler(SimpleHTTPRequestHandler):
                 updated = SETTINGS.update(self.read_json(), CLOUD.configured)
                 CLOUD.set_shared_storage_limit(updated["shared_storage_max_mb"])
                 self.send_json(updated)
+            except (OSError, TypeError, ValueError) as error:
+                self.send_json({"error": str(error)}, 400)
+            return
+        if parsed.path == "/api/ai/model":
+            if not self.require_host_ai():
+                return
+            try:
+                payload = self.read_json()
+                model = SETTINGS.update_ai_model_override(payload.get("model", ""))
+                self.send_json({**EXPLAINER.connection_status(), "selected_model": model})
             except (OSError, TypeError, ValueError) as error:
                 self.send_json({"error": str(error)}, 400)
             return

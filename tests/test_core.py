@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -91,6 +92,42 @@ class ExplanationTests(unittest.TestCase):
         self.assertIn("BEGIN", context)
         self.assertIn("MIDDLE", context)
         self.assertIn("END", context)
+
+    def test_ai_request_falls_back_to_chat_when_responses_is_empty(self):
+        class FakeResponse:
+            def __init__(self, content):
+                self.content = content
+                self.headers = {"Content-Type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return self.content
+
+        calls = []
+        response_payload = json.dumps({"choices": [{"message": {"content": "chat fallback works"}}]}).encode("utf-8")
+
+        def fake_urlopen(request, timeout=0):
+            calls.append(request.full_url)
+            return FakeResponse(b"" if request.full_url.endswith("/responses") else response_payload)
+
+        connection = {
+            "key": "test-key",
+            "base_url": "https://example.test/v1",
+            "model": "test-model",
+            "provider": "test-provider",
+            "wire_api": "responses",
+        }
+        APP.PaperExplainer._wire_preferences.clear()
+        with mock.patch.object(APP.urllib.request, "urlopen", side_effect=fake_urlopen):
+            output = APP.PaperExplainer._request_text("hello", connection, timeout=3)
+
+        self.assertEqual(output, "chat fallback works")
+        self.assertEqual(calls, ["https://example.test/v1/responses", "https://example.test/v1/chat/completions"])
 
 
 class FeedTests(unittest.TestCase):
@@ -443,6 +480,9 @@ class FeedTests(unittest.TestCase):
             )
             self.assertEqual(decimal_weights["academic"], 20.5)
             self.assertEqual(sum(decimal_weights.values()), 100)
+            self.assertEqual(settings.update_ai_model_override("gpt-test-model"), "gpt-test-model")
+            self.assertEqual(APP.RuntimeSettings(root / "settings.json").get()["ai_model_override"], "gpt-test-model")
+            self.assertEqual(settings.update_ai_model_override(""), "")
             with self.assertRaisesRegex(ValueError, "之和必须等于 100"):
                 settings.update_recommendation_weights({**weights, "academic": 21})
 
@@ -829,6 +869,81 @@ class FeedTests(unittest.TestCase):
                 self.assertEqual(source["language"], "Python")
                 self.assertEqual(source["line_count"], 1)
                 self.assertIsNone(assets.file("owner/project", "../secret.txt"))
+            finally:
+                APP.PROJECT_REPO_DIR = original_repo_dir
+
+    def test_project_prepare_returns_immediately_and_finishes_in_background(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_repo_dir = APP.PROJECT_REPO_DIR
+            APP.PROJECT_REPO_DIR = Path(directory) / "repos"
+            started = threading.Event()
+            release = threading.Event()
+            try:
+                store = APP.PaperStore(Path(directory) / "papers.db")
+                assets = APP.ProjectAssetService(store)
+                project = {
+                    "full_name": "owner/project",
+                    "default_branch": "main",
+                    "description": "test repository",
+                    "language": "Python",
+                    "stars": 0,
+                    "linked_paper_count": 0,
+                    "papers": [],
+                }
+
+                def fake_download(_project, target):
+                    target.mkdir(parents=True, exist_ok=True)
+                    (target / "README.md").write_text("# Test repository", encoding="utf-8")
+                    (target / "main.py").write_text("print('ready')", encoding="utf-8")
+                    started.set()
+                    self.assertTrue(release.wait(3))
+                    return 2, 31, str(target / "README.md")
+
+                with mock.patch.object(assets, "_download", side_effect=fake_download):
+                    initial = assets.prepare(project)
+                    self.assertTrue(started.wait(2))
+                    self.assertTrue(initial["preparing"])
+                    self.assertFalse(initial["ready"])
+                    release.set()
+                    deadline = time.monotonic() + 3
+                    finished = assets.workspace(project)
+                    while finished["preparing"] and time.monotonic() < deadline:
+                        time.sleep(0.03)
+                        finished = assets.workspace(project)
+
+                self.assertTrue(finished["ready"])
+                self.assertFalse(finished["preparing"])
+                self.assertEqual(finished["readme_path"], "README.md")
+                self.assertIn("# Test repository", finished["readme"])
+            finally:
+                APP.PROJECT_REPO_DIR = original_repo_dir
+
+    def test_large_project_skips_full_archive_before_network_download(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_repo_dir = APP.PROJECT_REPO_DIR
+            APP.PROJECT_REPO_DIR = Path(directory) / "repos"
+            try:
+                assets = APP.ProjectAssetService(APP.PaperStore(Path(directory) / "papers.db"))
+                project = {"full_name": "owner/project", "default_branch": "main", "size_kb": 97 * 1024}
+                with mock.patch.object(APP.urllib.request, "urlopen") as request:
+                    with self.assertRaisesRegex(ValueError, "超过完整压缩包抓取阈值"):
+                        assets._download_archive(project, assets._repo_path(project["full_name"]))
+                request.assert_not_called()
+            finally:
+                APP.PROJECT_REPO_DIR = original_repo_dir
+
+    def test_project_download_uses_selective_fallback_after_archive_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_repo_dir = APP.PROJECT_REPO_DIR
+            APP.PROJECT_REPO_DIR = Path(directory) / "repos"
+            try:
+                assets = APP.ProjectAssetService(APP.PaperStore(Path(directory) / "papers.db"))
+                project = {"full_name": "owner/project", "default_branch": "main"}
+                expected = (3, 120, "README.md")
+                with mock.patch.object(assets, "_download_archive", side_effect=TimeoutError("slow")):
+                    with mock.patch.object(assets, "_download_selective", return_value=expected) as selective:
+                        self.assertEqual(assets._download(project, assets._repo_path(project["full_name"])), expected)
+                selective.assert_called_once()
             finally:
                 APP.PROJECT_REPO_DIR = original_repo_dir
 

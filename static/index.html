@@ -345,7 +345,7 @@
 
   <dialog class="storage-dialog" id="storageDialog" aria-labelledby="storageTitle">
     <header class="connector-header">
-      <div><h2 id="storageTitle">存储与用量</h2><p>本地 PDF、缓存上限与 Cloudflare R2 额度</p></div>
+      <div><h2 id="storageTitle">存储与模型</h2><p>本地 PDF、缓存上限、Cloudflare R2 与当前实例的 AI 模型</p></div>
       <button class="reader-close" id="storageClose" type="button" aria-label="关闭存储设置" title="关闭">×</button>
     </header>
     <div class="storage-dialog-body">
@@ -363,11 +363,18 @@
         <label>R2 账期起始日<div class="storage-size-input"><input id="r2BillingCycleDay" type="number" min="1" max="28" step="1"><span>日</span></div></label>
         <div class="storage-form-actions"><span>修改文件夹只影响后续下载，已有论文仍保留原路径。</span><button class="button button-primary" type="submit">保存设置</button></div>
       </form>
+      <section class="storage-settings" id="aiSettingsSection" hidden aria-labelledby="aiSettingsTitle">
+        <h3 id="aiSettingsTitle">AI 模型</h3>
+        <p class="storage-notice" id="aiModelMeta">正在读取当前 API 配置</p>
+        <label>模型名称<input id="aiModelInput" list="aiModelOptions" type="text" spellcheck="false" placeholder="跟随 CC Switch 默认模型"></label>
+        <datalist id="aiModelOptions"></datalist>
+        <div class="storage-form-actions"><span id="aiModelNotice">仅管理当前设备或当前部署的 API，不会显示其他用户的模型或密钥。</span><div><button class="text-button" id="refreshAiModels" type="button">刷新模型</button><button class="button button-primary" id="saveAiModel" type="button">应用模型</button></div></div>
+      </section>
     </div>
   </dialog>
 
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
   <script src="/vendor/pdfjs/pdf.min.js?v=3.11.174"></script>
-  <script src="/app.js?v=0.12.3" defer></script>
+  <script src="/app.js?v=0.12.4" defer></script>
 </body>
 </html>
