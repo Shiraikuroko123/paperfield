@@ -345,10 +345,12 @@ class FeedTests(unittest.TestCase):
             )
             first = service.get()
             repeated = service.get()
+            rebuilt = service.rebuild()
 
         self.assertEqual([paper["id"] for paper in first["items"]], ["a", "b"])
         self.assertEqual([paper["id"] for paper in repeated["items"]], ["a", "b"])
-        self.assertEqual(len(calls), 1)
+        self.assertEqual([paper["id"] for paper in rebuilt["items"]], ["c", "b"])
+        self.assertEqual(len(calls), 2)
         self.assertTrue(first["items"][0]["fulltext_cached"])
 
     def test_runtime_settings_persist_pdf_directory_cache_and_billing_day(self):
@@ -370,6 +372,19 @@ class FeedTests(unittest.TestCase):
             self.assertTrue((root / "library").is_dir())
             self.assertEqual(loaded["shared_storage_max_mb"], 3072)
             self.assertEqual(loaded["r2_billing_cycle_day"], 11)
+            weights = settings.update_recommendation_weights(
+                {
+                    "academic": 20,
+                    "relevance": 40,
+                    "freshness": 15,
+                    "evidence": 15,
+                    "impact_reproducibility": 10,
+                }
+            )
+            self.assertEqual(weights["relevance"], 40)
+            self.assertEqual(APP.RuntimeSettings(root / "settings.json").get()["recommendation_weights"], weights)
+            with self.assertRaisesRegex(ValueError, "之和必须等于 100"):
+                settings.update_recommendation_weights({**weights, "academic": 21})
 
     def test_cloud_operations_are_counted_and_inventory_is_recorded(self):
         class FakeBody(io.BytesIO):

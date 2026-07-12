@@ -59,9 +59,19 @@ SETTINGS_PATH = Path(os.environ.get("PAPERFIELD_SETTINGS_PATH", DATA_DIR / "sett
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
 INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", ROOT / "institutions.json")).expanduser().resolve()
-APP_VERSION = "0.11.1"
+APP_VERSION = "0.12.0"
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
+RECOMMENDATION_WEIGHT_KEYS = (
+    "academic", "relevance", "freshness", "evidence", "impact_reproducibility",
+)
+DEFAULT_RECOMMENDATION_WEIGHTS = {
+    "academic": 30,
+    "relevance": 25,
+    "freshness": 20,
+    "evidence": 15,
+    "impact_reproducibility": 10,
+}
 
 
 def utc_now() -> datetime:
@@ -1385,13 +1395,7 @@ class PaperClassifier:
         asset: dict[str, Any] | None = None,
         has_project: bool = False,
     ) -> dict[str, Any]:
-        weights = self.config.get("recommendation_weights") or {
-            "academic": 30,
-            "relevance": 25,
-            "freshness": 20,
-            "evidence": 15,
-            "impact_reproducibility": 10,
-        }
+        weights = self.config.get("recommendation_weights") or DEFAULT_RECOMMENDATION_WEIGHTS
         tier_ratio = {
             "顶级会议": 1.0,
             "顶级期刊": 1.0,
@@ -3239,7 +3243,25 @@ class RuntimeSettings:
             "local_cache_max_mb": int(os.environ.get("PAPERFIELD_LOCAL_CACHE_MAX_MB", "2048")),
             "shared_storage_max_mb": int(os.environ.get("PAPERFIELD_SHARED_STORAGE_MAX_MB", "2048")),
             "r2_billing_cycle_day": int(os.environ.get("PAPERFIELD_R2_BILLING_CYCLE_DAY", "1")),
+            "recommendation_weights": dict(DEFAULT_RECOMMENDATION_WEIGHTS),
         }
+
+    @staticmethod
+    def validate_recommendation_weights(payload: Any) -> dict[str, int]:
+        if not isinstance(payload, dict):
+            raise ValueError("评分权重格式无效")
+        weights: dict[str, int] = {}
+        for key in RECOMMENDATION_WEIGHT_KEYS:
+            try:
+                value = int(payload.get(key, -1))
+            except (TypeError, ValueError) as error:
+                raise ValueError("评分权重必须是整数") from error
+            if value < 0 or value > 100:
+                raise ValueError("每项评分权重需在 0 到 100 之间")
+            weights[key] = value
+        if sum(weights.values()) != 100:
+            raise ValueError("五项评分权重之和必须等于 100")
+        return weights
 
     @classmethod
     def _validated(cls, payload: dict[str, Any], cloud_configured: bool) -> dict[str, Any]:
@@ -3266,6 +3288,9 @@ class RuntimeSettings:
             "pdf_storage_mode": mode, "local_pdf_dir": str(local_path),
             "local_cache_max_mb": cache_mb, "shared_storage_max_mb": shared_storage_mb,
             "r2_billing_cycle_day": billing_day,
+            "recommendation_weights": cls.validate_recommendation_weights(
+                payload.get("recommendation_weights", DEFAULT_RECOMMENDATION_WEIGHTS)
+            ),
         }
 
     def get(self) -> dict[str, Any]:
@@ -3276,12 +3301,23 @@ class RuntimeSettings:
         with self._lock:
             merged = {**self._values, **payload}
             self._values = self._validated(merged, cloud_configured)
-            if self.path:
-                self.path.parent.mkdir(parents=True, exist_ok=True)
-                temporary = self.path.with_suffix(".json.tmp")
-                temporary.write_text(json.dumps(self._values, ensure_ascii=False, indent=2), encoding="utf-8")
-                temporary.replace(self.path)
+            self._persist()
             return dict(self._values)
+
+    def update_recommendation_weights(self, payload: Any) -> dict[str, int]:
+        with self._lock:
+            weights = self.validate_recommendation_weights(payload)
+            self._values["recommendation_weights"] = weights
+            self._persist()
+            return dict(weights)
+
+    def _persist(self) -> None:
+        if not self.path:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(self._values, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(self.path)
 
     @property
     def pdf_dir(self) -> Path:
@@ -4594,6 +4630,7 @@ EXPLAINER = PaperExplainer()
 PROJECT_ASSETS = ProjectAssetService(STORE)
 PROJECT_EXPLAINER = ProjectExplainer(STORE, PROJECT_ASSETS, EXPLAINER)
 SETTINGS = RuntimeSettings(SETTINGS_PATH)
+CONFIG["recommendation_weights"] = SETTINGS.get()["recommendation_weights"]
 CLOUD = S3ObjectStorage(STORE)
 CLOUD.set_shared_storage_limit(SETTINGS.get()["shared_storage_max_mb"])
 READING_ARCHIVE = ReadingArchiveService(STORE, CLOUD)
@@ -4839,6 +4876,7 @@ def refresh_all() -> dict[str, Any]:
         STORE.finish_sync(run_id, "error", inserted, str(error))
         return {"running": False, "inserted": inserted, "sources": source_results, "errors": [str(error)]}
     finally:
+        clear_recommendation_score_cache()
         REFRESH_STATE["running"] = False
         REFRESH_STATE["message"] = ""
 
@@ -5046,6 +5084,12 @@ class WeeklySelectionService:
             "weights": self.config.get("recommendation_weights", {}),
             "generated_at": state.get("selected_at", ""),
         }
+
+    def rebuild(self) -> dict[str, Any]:
+        configured_limit = max(1, min(10, int(self.config.get("daily_recommendations_per_topic", 5))))
+        with self._lock:
+            self._select(configured_limit)
+        return self.get()
 
 
 class WeeklyPreparationService:
@@ -5441,6 +5485,44 @@ def daily_project_recommendations(limit: int | None = None) -> dict[str, Any]:
     return weekly_project_recommendations(limit)
 
 
+RECOMMENDATION_SCORE_CACHE: dict[str, Any] = {"lock": threading.RLock(), "entries": {}}
+
+
+def clear_recommendation_score_cache() -> None:
+    with RECOMMENDATION_SCORE_CACHE["lock"]:
+        RECOMMENDATION_SCORE_CACHE["entries"].clear()
+
+
+def score_papers_for_ranking(papers: list[dict[str, Any]], topic: str = "") -> list[dict[str, Any]]:
+    weights_key = tuple(CONFIG["recommendation_weights"][key] for key in RECOMMENDATION_WEIGHT_KEYS)
+    cache_key = f"{topic}\0{weights_key}"
+    with RECOMMENDATION_SCORE_CACHE["lock"]:
+        entries = RECOMMENDATION_SCORE_CACHE["entries"]
+        entry = entries.get(cache_key)
+        if not entry or time.monotonic() - entry["created_at"] > 300:
+            entry = {"created_at": time.monotonic(), "scores": {}}
+            entries[cache_key] = entry
+        missing = [paper for paper in papers if paper["id"] not in entry["scores"]]
+        if missing:
+            paper_ids = [paper["id"] for paper in missing]
+            assets = STORE.assets_for_papers(paper_ids)
+            linked_papers = STORE.paper_ids_with_projects(paper_ids)
+            for paper in missing:
+                ranking_topic = topic or next(iter(paper.get("topics", [])), "相关研究")
+                score = CLASSIFIER.recommendation(
+                    paper,
+                    ranking_topic,
+                    assets.get(paper["id"]),
+                    paper["id"] in linked_papers,
+                )
+                entry["scores"][paper["id"]] = {
+                    "recommendation_topic": ranking_topic,
+                    "recommendation_score": score["total"],
+                    "score_breakdown": score["components"],
+                }
+        return [{**paper, **entry["scores"][paper["id"]]} for paper in papers]
+
+
 def filter_papers(papers: list[dict[str, Any]], params: dict[str, list[str]]) -> list[dict[str, Any]]:
     get = lambda name, default="": (params.get(name) or [default])[0].strip()
     query = get("q").lower()
@@ -5503,13 +5585,17 @@ def filter_papers(papers: list[dict[str, Any]], params: dict[str, list[str]]) ->
             continue
         result.append(paper)
     paper_sorters = {
+        "recommendation": (lambda item: float(item.get("recommendation_score", 0) or 0), True),
         "quality": (lambda item: float(item.get("quality_score", 0) or 0), True),
         "date": (lambda item: item.get("published", ""), True),
         "citations": (lambda item: int(item.get("citation_count", 0) or 0), True),
         "title": (lambda item: item.get("title", "").casefold(), False),
         "venue": (lambda item: item.get("venue", "").casefold(), False),
     }
-    fallback = {"quality": "date", "date": "quality", "citations": "quality", "title": "date", "venue": "date"}
+    fallback = {
+        "recommendation": "date", "quality": "date", "date": "recommendation",
+        "citations": "recommendation", "title": "date", "venue": "date",
+    }
     apply_multi_sort(result, sort, sort_secondary or fallback.get(sort, "date"), paper_sorters)
     return result
 
@@ -5759,7 +5845,10 @@ class AppHandler(SimpleHTTPRequestHandler):
             return super().do_GET()
         params = urllib.parse.parse_qs(parsed.query)
         if parsed.path == "/api/papers":
-            papers = filter_papers(STORE.list_papers(), params)
+            ranking_topic = (params.get("topic") or [""])[0].strip()
+            filter_params = {**params, "sort": ["quality"], "sort_secondary": ["date"]}
+            matching = filter_papers(STORE.list_papers(), filter_params)
+            papers = filter_papers(score_papers_for_ranking(matching, ranking_topic), params)
             limit = max(1, min(500, int((params.get("limit") or ["100"])[0])))
             offset = max(0, int((params.get("offset") or ["0"])[0]))
             self.send_json(
@@ -5936,6 +6025,9 @@ class AppHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/settings":
             self.send_json(SETTINGS.get())
             return
+        if parsed.path == "/api/recommendation-weights":
+            self.send_json({"weights": SETTINGS.get()["recommendation_weights"]})
+            return
         if parsed.path == "/api/connectors/search":
             query = (params.get("q") or [""])[0].strip()
             if not query:
@@ -6038,6 +6130,27 @@ class AppHandler(SimpleHTTPRequestHandler):
                 updated = SETTINGS.update(self.read_json(), CLOUD.configured)
                 CLOUD.set_shared_storage_limit(updated["shared_storage_max_mb"])
                 self.send_json(updated)
+            except (OSError, TypeError, ValueError) as error:
+                self.send_json({"error": str(error)}, 400)
+            return
+        if parsed.path == "/api/recommendation-weights":
+            if AUTH.enabled and not self.host_ai_allowed():
+                self.send_json({"error": "只有内测账户可以修改共享评分标准"}, 403)
+                return
+            try:
+                payload = self.read_json()
+                weights = SETTINGS.update_recommendation_weights(payload.get("weights", payload))
+                CONFIG["recommendation_weights"] = weights
+                clear_recommendation_score_cache()
+                recommendations = WEEKLY_SELECTION.rebuild()
+                WEEKLY_PREPARATION.start(recommendations, force=True)
+                self.send_json(
+                    {
+                        "weights": weights,
+                        "recalculated": recommendations["total"],
+                        "rotation_week_start": recommendations["rotation_week_start"],
+                    }
+                )
             except (OSError, TypeError, ValueError) as error:
                 self.send_json({"error": str(error)}, 400)
             return

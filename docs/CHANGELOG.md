@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.0
+
+- Added an interactive five-part scoring ring with draggable normalized weights and persistent settings.
+- Applying a scoring profile now rebuilds the weekly paper selection and re-ranks the full paper stream with cached composite scores.
+- Background sharing now detects a stale running Paperfield version and restarts it automatically.
+
 ## 0.11.1
 
 - Filled the weekly explanation quota from papers with successfully extracted full text instead of consuming slots on papers without public PDFs.

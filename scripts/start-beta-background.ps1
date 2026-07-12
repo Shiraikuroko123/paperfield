@@ -18,6 +18,23 @@ function Test-ListeningPort([int]$Port) {
     return [bool](Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
 }
 
+function Get-ExpectedAppVersion {
+    $appPath = Join-Path $root "app.py"
+    $match = Select-String -LiteralPath $appPath -Pattern '^APP_VERSION\s*=\s*"([^"]+)"' | Select-Object -First 1
+    if ($match -and $match.Matches.Count -gt 0) {
+        return $match.Matches[0].Groups[1].Value
+    }
+    return ""
+}
+
+function Get-RunningAppVersion {
+    try {
+        return (Invoke-RestMethod -Uri "http://127.0.0.1:8876/api/health" -TimeoutSec 2).version
+    } catch {
+        return ""
+    }
+}
+
 if ($Stop) {
     & (Join-Path $PSScriptRoot "stop-beta-share.ps1") | Out-Null
     Remove-Item -LiteralPath $urlPath -ErrorAction SilentlyContinue
@@ -27,7 +44,11 @@ if ($Stop) {
 
 New-Item -ItemType Directory -Force -Path $profile | Out-Null
 $shareUrl = ""
-if ((Test-ListeningPort 8876) -and (Test-ListeningPort 4040) -and (Test-Path -LiteralPath $urlPath)) {
+$serviceReady = (Test-ListeningPort 8876) -and (Test-ListeningPort 4040) -and (Test-Path -LiteralPath $urlPath)
+$expectedVersion = Get-ExpectedAppVersion
+$runningVersion = if ($serviceReady) { Get-RunningAppVersion } else { "" }
+$versionMatches = -not $expectedVersion -or $runningVersion -eq $expectedVersion
+if ($serviceReady -and $versionMatches) {
     $shareUrl = (Get-Content -LiteralPath $urlPath -Raw).Trim()
 } else {
     & (Join-Path $PSScriptRoot "stop-beta-share.ps1") | Out-Null

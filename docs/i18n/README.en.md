@@ -7,6 +7,7 @@ Paperfield is a desktop research workstation for embodied intelligence, large la
 ## Highlights
 
 - Weekly paper recommendations by research field, capped at five papers per field with explainable scores.
+- An interactive five-segment scoring ring adjusts academic quality, relevance, freshness, evidence, and reproducibility weights, then re-ranks the paper stream and weekly picks.
 - Background preparation resolves public PDFs for weekly picks and generates full-text readings for priority papers, rotating on the next natural week.
 - Coverage of top conferences, journals, preprints, and public scholarly metadata, with formal publications separated from unconfirmed preprints.
 - A split PDF reader with full-text analysis, page translation, and source-grounded questions.

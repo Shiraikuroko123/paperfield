@@ -26,6 +26,24 @@ const state = {
   projectCodeWrapped: false,
   projectDocument: null,
   auth: null,
+  recommendationWeights: null,
+  appliedRecommendationWeights: null,
+};
+
+const SCORE_DIMENSIONS = [
+  { key: "academic", label: "学术质量", color: "oklch(0.66 0.17 145)" },
+  { key: "relevance", label: "方向匹配", color: "oklch(0.68 0.14 225)" },
+  { key: "freshness", label: "时效性", color: "oklch(0.78 0.15 85)" },
+  { key: "evidence", label: "证据完整度", color: "oklch(0.68 0.12 190)" },
+  { key: "impact_reproducibility", label: "影响与复现", color: "oklch(0.68 0.16 25)" },
+];
+
+const DEFAULT_SCORE_WEIGHTS = {
+  academic: 30,
+  relevance: 25,
+  freshness: 20,
+  evidence: 15,
+  impact_reproducibility: 10,
 };
 
 const el = (id) => document.getElementById(id);
@@ -68,6 +86,7 @@ async function loadAuthUser() {
       ? "内测账户可使用主机 API"
       : "普通账户需在自己的电脑上运行 Paperfield 并连接本地 API";
   }
+  if (state.recommendationWeights) renderScoreEditor();
 }
 
 const debounce = (fn, delay = 260) => {
@@ -84,6 +103,91 @@ function toast(message, error = false) {
   item.textContent = message;
   el("toastRegion").append(item);
   setTimeout(() => item.remove(), 3200);
+}
+
+const sameWeights = (left, right) => SCORE_DIMENSIONS.every(({ key }) => Number(left?.[key]) === Number(right?.[key]));
+
+function distributeWeight(total, values, keys) {
+  const currentTotal = keys.reduce((sum, key) => sum + Number(values[key] || 0), 0);
+  const raw = keys.map((key, index) => ({
+    key,
+    index,
+    value: currentTotal > 0 ? Number(values[key] || 0) / currentTotal * total : total / keys.length,
+  }));
+  const result = Object.fromEntries(raw.map((item) => [item.key, Math.floor(item.value)]));
+  let remainder = total - Object.values(result).reduce((sum, value) => sum + value, 0);
+  raw.sort((left, right) => (right.value - Math.floor(right.value)) - (left.value - Math.floor(left.value)) || left.index - right.index);
+  for (let index = 0; index < remainder; index += 1) result[raw[index % raw.length].key] += 1;
+  return result;
+}
+
+function rebalanceScoreWeights(changedKey, nextValue) {
+  const current = { ...(state.recommendationWeights || DEFAULT_SCORE_WEIGHTS) };
+  const value = Math.max(0, Math.min(100, Math.round(Number(nextValue) || 0)));
+  const otherKeys = SCORE_DIMENSIONS.map(({ key }) => key).filter((key) => key !== changedKey);
+  const distributed = distributeWeight(100 - value, current, otherKeys);
+  state.recommendationWeights = { ...current, ...distributed, [changedKey]: value };
+  renderScoreEditor();
+}
+
+function renderScoreEditor() {
+  const weights = state.recommendationWeights || DEFAULT_SCORE_WEIGHTS;
+  const controls = el("scoreWeightControls");
+  controls.innerHTML = SCORE_DIMENSIONS.map(({ key, label, color }) => `
+    <label class="score-weight-row" style="--weight-color:${color}">
+      <span><i aria-hidden="true"></i><b>${label}</b><output for="score-weight-${key}">${weights[key]}%</output></span>
+      <input id="score-weight-${key}" type="range" min="0" max="100" step="1" value="${weights[key]}" data-score-weight="${key}" aria-label="${label}权重">
+    </label>`).join("");
+
+  let cursor = 0;
+  const segments = SCORE_DIMENSIONS.map(({ key, color }) => {
+    const start = cursor;
+    cursor += Number(weights[key] || 0);
+    return `${color} ${start}% ${cursor}%`;
+  });
+  el("scoreWeightRing").style.background = `conic-gradient(${segments.join(", ")})`;
+  el("scoreWeightTotal").textContent = SCORE_DIMENSIONS.reduce((sum, { key }) => sum + Number(weights[key] || 0), 0);
+  el("scoreGuideSummary").textContent = SCORE_DIMENSIONS.map(({ key }) => weights[key]).join(" / ");
+
+  const locked = Boolean(state.auth?.enabled && !state.auth.host_ai_allowed);
+  const dirty = !sameWeights(weights, state.appliedRecommendationWeights || weights);
+  controls.querySelectorAll("input").forEach((input) => { input.disabled = locked; });
+  el("resetScoreWeights").disabled = locked;
+  el("applyScoreWeights").disabled = locked || !dirty;
+  el("scoreWeightStatus").textContent = locked ? "当前账户只读" : dirty ? "尚未应用" : "已应用";
+  el("scoreWeightStatus").className = locked ? "" : dirty ? "is-dirty" : "is-applied";
+}
+
+async function loadScoreWeights() {
+  const payload = await api("/api/recommendation-weights");
+  state.appliedRecommendationWeights = { ...payload.weights };
+  state.recommendationWeights = { ...payload.weights };
+  renderScoreEditor();
+}
+
+async function applyScoreWeights() {
+  const button = el("applyScoreWeights");
+  button.disabled = true;
+  button.textContent = "正在重排";
+  try {
+    const payload = await api("/api/recommendation-weights", {
+      method: "POST",
+      body: JSON.stringify({ weights: state.recommendationWeights }),
+    });
+    state.appliedRecommendationWeights = { ...payload.weights };
+    state.recommendationWeights = { ...payload.weights };
+    el("sortFilter").value = "recommendation";
+    renderScoreEditor();
+    button.textContent = "应用并重排";
+    el("scoreGuide").open = false;
+    toast(`评分标准已应用，${payload.recalculated} 篇本周候选已重新排序`);
+    await loadPapers({ preserveSelection: false });
+  } catch (error) {
+    toast(error.message, true);
+    renderScoreEditor();
+  } finally {
+    button.textContent = "应用并重排";
+  }
 }
 
 function renderConnectorResults(items = []) {
@@ -186,10 +290,7 @@ function applyViewMode() {
   document.querySelectorAll(".paper-only-filter").forEach((item) => { item.hidden = projectMode || recommendedMode; });
   document.querySelectorAll(".project-only-filter").forEach((item) => { item.hidden = !projectMode; });
   el("dateFilter").closest("label").hidden = recommendedMode;
-  document.querySelector(".score-guide").hidden = projectMode;
-  el("scoreGuideContent").textContent = recommendedMode && state.weeklyKind === "projects"
-    ? "方向匹配 20 · 近期活跃 25 · 社区采用 20 · 论文关联 25 · 仓库完整度 10"
-    : "学术质量 30 · 方向匹配 25 · 时效性 20 · 证据完整度 15 · 影响与复现 10";
+  document.querySelector(".score-guide").hidden = projectMode || (recommendedMode && state.weeklyKind === "projects");
   el("streamTitle").textContent = projectMode ? "GitHub 项目" : recommendedMode ? "每周精选" : "论文流";
   el("loadMoreButton").textContent = projectMode ? "加载更多项目" : "加载更多论文";
   el("weeklyKindTabs").hidden = !recommendedMode;
@@ -801,7 +902,7 @@ function renderPapers() {
       <div class="paper-score">
         <button class="favorite-toggle${paper.favorite ? " is-active" : ""}" type="button" aria-label="${paper.favorite ? "取消收藏" : "收藏论文"}" data-favorite>${paper.favorite ? "★" : "☆"}</button>
         <strong>${Math.round(paper.recommendation_score ?? paper.quality_score)}</strong>
-        <span>${paper.is_recommended ? "精选分" : "推荐分"}</span>
+        <span>${paper.is_recommended ? "精选分" : "综合分"}</span>
         ${paper.is_recommended ? weeklyPaperAssetStatus(paper) : ""}
       </div>`;
     row.addEventListener("click", (event) => {
@@ -1033,7 +1134,7 @@ async function generateExplanation(paperId) {
 }
 
 function recommendationFor(paperId) {
-  return state.papers.find((paper) => paper.id === paperId && paper.is_recommended) || null;
+  return state.papers.find((paper) => paper.id === paperId && paper.score_breakdown?.length) || null;
 }
 
 function renderReaderScore(paper) {
@@ -1044,7 +1145,7 @@ function renderReaderScore(paper) {
   }
   el("readerScore").innerHTML = `
     <section class="reader-score-block">
-      <div class="reader-score-total"><strong>${Math.round(recommendation.recommendation_score)}</strong><span>${escapeHtml(recommendation.recommendation_topic)}精选分</span></div>
+      <div class="reader-score-total"><strong>${Math.round(recommendation.recommendation_score)}</strong><span>${recommendation.is_recommended ? `${escapeHtml(recommendation.recommendation_topic)}精选分` : "综合评分"}</span></div>
       <div class="score-components">${recommendation.score_breakdown.map((item) => `
         <div title="${escapeHtml(item.reason)}"><span>${escapeHtml(item.name)}</span><b>${item.score}/${item.max}</b><i style="--score-width:${Math.max(0, Math.min(100, item.score / item.max * 100))}%"></i></div>`).join("")}</div>
     </section>`;
@@ -1529,6 +1630,15 @@ function clearFilters() {
 
 function bindEvents() {
   const reload = debounce(() => loadPapers({ preserveSelection: false }));
+  el("scoreWeightControls").addEventListener("input", (event) => {
+    const input = event.target.closest("[data-score-weight]");
+    if (input) rebalanceScoreWeights(input.dataset.scoreWeight, input.value);
+  });
+  el("resetScoreWeights").addEventListener("click", () => {
+    state.recommendationWeights = { ...DEFAULT_SCORE_WEIGHTS };
+    renderScoreEditor();
+  });
+  el("applyScoreWeights").addEventListener("click", applyScoreWeights);
   el("searchInput").addEventListener("input", reload);
   el("authorFilter").addEventListener("input", reload);
   ["topicFilter", "tierFilter", "platformFilter", "venueFilter", "institutionFilter", "sourceFilter", "dateFilter", "sortFilter", "secondarySortFilter"].forEach((id) => el(id).addEventListener("change", () => {
@@ -1743,11 +1853,14 @@ async function init() {
   if (requestedView === "project-recommended") state.view = "recommended";
   else if (requestedView === "projects" || (initialProject && requestedView !== "recommended")) state.view = "projects";
   el("overviewDate").textContent = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric", weekday: "long" }).format(now);
+  state.recommendationWeights = { ...DEFAULT_SCORE_WEIGHTS };
+  state.appliedRecommendationWeights = { ...DEFAULT_SCORE_WEIGHTS };
+  renderScoreEditor();
   bindEvents();
   applyViewMode();
   document.querySelectorAll(".rail-link").forEach((item) => item.classList.toggle("is-active", item.dataset.view === state.view));
   try {
-    await Promise.all([loadAuthUser(), loadOptions(), loadStats(), loadStorageStatus(), loadPapers({ preserveSelection: false })]);
+    await Promise.all([loadAuthUser(), loadOptions(), loadStats(), loadStorageStatus(), loadScoreWeights(), loadPapers({ preserveSelection: false })]);
     if (initialPaperId) await openPaper(initialPaperId, false);
     if (initialProject) await openProjectReader(initialProject);
   } catch (error) {

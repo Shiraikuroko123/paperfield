@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="具身智能与大模型论文、开源项目每周研究工作台">
   <title>Paperfield</title>
-  <link rel="stylesheet" href="/styles.css?v=0.11.1">
+  <link rel="stylesheet" href="/styles.css?v=0.12.0">
 </head>
 <body>
   <div class="app-shell">
@@ -96,8 +96,8 @@
         <label class="paper-only-filter">数据源<select id="sourceFilter"><option value="">全部数据源</option></select></label>
         <label class="project-only-filter" hidden>语言<select id="projectLanguageFilter"><option value="">全部语言</option></select></label>
         <label>起始日期<input id="dateFilter" type="date"></label>
-        <label class="paper-only-filter">主排序<select id="sortFilter"><option value="quality">推荐分高优先</option><option value="date">最新发表优先</option><option value="citations">引用数高优先</option><option value="title">标题 A-Z</option><option value="venue">刊物 A-Z</option></select></label>
-        <label class="paper-only-filter">次排序<select id="secondarySortFilter"><option value="">自动</option><option value="quality">推荐分高优先</option><option value="date">最新发表优先</option><option value="citations">引用数高优先</option><option value="title">标题 A-Z</option><option value="venue">刊物 A-Z</option></select></label>
+        <label class="paper-only-filter">主排序<select id="sortFilter"><option value="recommendation">综合评分高优先</option><option value="quality">基础质量高优先</option><option value="date">最新发表优先</option><option value="citations">引用数高优先</option><option value="title">标题 A-Z</option><option value="venue">刊物 A-Z</option></select></label>
+        <label class="paper-only-filter">次排序<select id="secondarySortFilter"><option value="">自动</option><option value="recommendation">综合评分高优先</option><option value="quality">基础质量高优先</option><option value="date">最新发表优先</option><option value="citations">引用数高优先</option><option value="title">标题 A-Z</option><option value="venue">刊物 A-Z</option></select></label>
         <label class="project-only-filter" hidden>主排序<select id="projectSortFilter"><option value="updated">最近更新优先</option><option value="links">关联论文多优先</option><option value="stars">Stars 多优先</option><option value="forks">Forks 多优先</option><option value="issues">Issue 多优先</option><option value="name">名称 A-Z</option></select></label>
         <label class="project-only-filter" hidden>次排序<select id="projectSecondarySortFilter"><option value="">自动</option><option value="updated">最近更新优先</option><option value="links">关联论文多优先</option><option value="stars">Stars 多优先</option><option value="forks">Forks 多优先</option><option value="issues">Issue 多优先</option><option value="name">名称 A-Z</option></select></label>
         <button class="text-button" id="clearFilters" type="button">清除筛选</button>
@@ -109,9 +109,22 @@
           <div class="stream-head">
             <div class="stream-identity">
               <div><h2 id="streamTitle">每周精选</h2><span id="resultCount">正在载入</span></div>
-              <details class="score-guide">
-                <summary>评分标准</summary>
-                <div id="scoreGuideContent">学术质量 30 · 方向匹配 25 · 时效性 20 · 证据完整度 15 · 影响与复现 10</div>
+              <details class="score-guide" id="scoreGuide">
+                <summary>评分标准 <span id="scoreGuideSummary">30 / 25 / 20 / 15 / 10</span></summary>
+                <div class="score-editor" id="scoreGuideContent">
+                  <div class="score-editor-visual">
+                    <div class="score-weight-ring" id="scoreWeightRing" role="img" aria-label="五项评分权重环">
+                      <div><strong id="scoreWeightTotal">100</strong><span>总权重</span></div>
+                    </div>
+                    <div class="score-ring-caption"><strong>综合评分模型</strong><span>当前比例实时预览</span></div>
+                  </div>
+                  <div class="score-weight-controls" id="scoreWeightControls"></div>
+                  <div class="score-editor-actions">
+                    <span id="scoreWeightStatus" aria-live="polite">已应用</span>
+                    <button class="text-button" id="resetScoreWeights" type="button">恢复默认</button>
+                    <button class="button button-primary" id="applyScoreWeights" type="button" disabled>应用并重排</button>
+                  </div>
+                </div>
               </details>
             </div>
             <div class="status-tabs weekly-kind-tabs" id="weeklyKindTabs" role="tablist" aria-label="每周精选类型" hidden>
@@ -344,6 +357,6 @@
   </dialog>
 
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
-  <script src="/app.js?v=0.11.1" defer></script>
+  <script src="/app.js?v=0.12.0" defer></script>
 </body>
 </html>
