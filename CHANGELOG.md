@@ -7,6 +7,8 @@
 - Rendered any selected Markdown file in the document pane with a one-click return to the root README.
 - Renamed the default paper list to weekly picks and kept each natural week's selection stable.
 - Added automatic R2 backup and restore for paper/project explanations, reading state, notes, and complete chats.
+- Restored complete paper and project conversations in the reader instead of showing only the latest messages.
+- Added Chinese, English, and Japanese views for important project Markdown documents with local and R2 translation caches.
 
 ## 0.8.1
 

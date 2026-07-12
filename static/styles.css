@@ -482,6 +482,12 @@ a { color: var(--primary); text-underline-offset: 3px; }
 .project-document-toolbar { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 38px; padding: 0 20px; border-bottom: 1px solid var(--line); background: var(--bg); }
 .project-document-toolbar span { min-width: 0; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .project-document-toolbar button { flex: 0 0 auto; font-size: 9px; }
+.project-document-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+.project-document-languages { display: flex; padding: 2px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface); }
+.project-document-languages[hidden] { display: none; }
+.project-document-languages button { min-width: 26px; padding: 3px 6px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; }
+.project-document-languages button:hover { color: var(--ink); }
+.project-document-languages button.is-active { background: var(--primary); color: white; }
 .project-readme { max-width: 78ch; color: var(--ink-soft); font-size: 12px; line-height: 1.72; overflow-wrap: anywhere; }
 .project-document-panel .project-readme { padding: 18px 20px 34px; }
 .project-readme > :first-child { margin-top: 0; }

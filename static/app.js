@@ -19,6 +19,7 @@ const state = {
   projectFileMode: "guide",
   projectCurrentContent: "",
   projectCodeWrapped: false,
+  projectDocument: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -443,12 +444,54 @@ function renderProjectCode(content) {
   code.append(fragment);
 }
 
+function renderProjectDocument(path, htmlContent, important = false) {
+  state.projectDocument = {
+    path,
+    important,
+    html: { en: htmlContent },
+    language: "en",
+  };
+  el("projectDocumentPath").textContent = path || "README";
+  el("projectDocumentLanguages").hidden = !important;
+  document.querySelectorAll("[data-project-doc-lang]").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.projectDocLang === "en");
+    button.disabled = false;
+  });
+  el("projectReadmeContent").innerHTML = htmlContent || "<p>文档内容为空。</p>";
+}
+
+async function setProjectDocumentLanguage(target) {
+  const workspace = state.projectWorkspace;
+  const documentState = state.projectDocument;
+  if (!workspace || !documentState?.important || !["en", "zh", "ja"].includes(target)) return;
+  document.querySelectorAll("[data-project-doc-lang]").forEach((button) => { button.disabled = true; });
+  try {
+    if (!documentState.html[target]) {
+      el("projectReadmeContent").innerHTML = `<div class="reader-explain-empty"><strong>正在生成${target === "zh" ? "中文" : "日文"}文档</strong><p>保留标题、列表、链接与代码块</p></div>`;
+      const payload = await api(`/api/projects/${encodeURIComponent(workspace.project.full_name)}/document`, {
+        method: "POST",
+        body: JSON.stringify({ path: documentState.path, target }),
+      });
+      documentState.html[target] = payload.html;
+    }
+    documentState.language = target;
+    el("projectReadmeContent").innerHTML = documentState.html[target];
+    document.querySelectorAll("[data-project-doc-lang]").forEach((button) => button.classList.toggle("is-active", button.dataset.projectDocLang === target));
+  } catch (error) {
+    el("projectReadmeContent").innerHTML = documentState.html.en;
+    documentState.language = "en";
+    toast(error.message, true);
+  } finally {
+    document.querySelectorAll("[data-project-doc-lang]").forEach((button) => { button.disabled = false; });
+  }
+}
+
 function restoreProjectReadme() {
   const workspace = state.projectWorkspace;
   if (!workspace) return;
-  el("projectDocumentPath").textContent = workspace.readme_path || "README";
   el("projectRootReadme").hidden = true;
-  el("projectReadmeContent").innerHTML = workspace.readme_html || "<p>仓库没有找到 README。</p>";
+  const important = (workspace.important_documents || []).some((item) => item.path === workspace.readme_path);
+  renderProjectDocument(workspace.readme_path || "README", workspace.readme_html || "<p>仓库没有找到 README。</p>", important);
 }
 
 async function loadProjectFile(path) {
@@ -465,9 +508,8 @@ async function loadProjectFile(path) {
     renderProjectCode(payload.content || "");
     el("projectCodeMeta").textContent = `${payload.language} · ${Number(payload.line_count || 0).toLocaleString()} 行${payload.truncated ? " · 已截断" : ""}`;
     if (payload.rendered_html) {
-      el("projectDocumentPath").textContent = payload.path;
       el("projectRootReadme").hidden = payload.path === workspace.readme_path;
-      el("projectReadmeContent").innerHTML = payload.rendered_html;
+      renderProjectDocument(payload.path, payload.rendered_html, payload.important_document);
       setProjectTab("readme");
     }
   } catch (error) {
@@ -539,6 +581,7 @@ async function openProjectReader(fullName, force = false) {
   state.projectFileMode = "guide";
   state.projectCurrentContent = "";
   state.projectCodeWrapped = false;
+  state.projectDocument = null;
   setProjectTab("readme");
   el("projectReaderTitle").textContent = fullName;
   el("projectReaderMeta").textContent = "正在缓存公开仓库源码";
@@ -552,6 +595,7 @@ async function openProjectReader(fullName, force = false) {
   el("projectCodeContent").textContent = "下载并校验公开源码压缩包";
   el("projectReadmeContent").textContent = "正在读取 README";
   el("projectDocumentPath").textContent = "README";
+  el("projectDocumentLanguages").hidden = true;
   el("projectRootReadme").hidden = true;
   el("projectExplanation").innerHTML = "";
   renderProjectChatHistory([]);
@@ -1461,6 +1505,7 @@ function bindEvents() {
     filterProjectFiles();
   });
   el("projectRootReadme").addEventListener("click", restoreProjectReadme);
+  document.querySelectorAll("[data-project-doc-lang]").forEach((button) => button.addEventListener("click", () => setProjectDocumentLanguage(button.dataset.projectDocLang)));
   el("projectCodeWrap").addEventListener("click", () => {
     state.projectCodeWrapped = !state.projectCodeWrapped;
     el("projectCodeContent").classList.toggle("is-wrapped", state.projectCodeWrapped);

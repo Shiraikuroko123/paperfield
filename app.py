@@ -41,6 +41,9 @@ DB_PATH = Path(os.environ.get("PAPERFIELD_DB_PATH", DATA_DIR / "papers.db")).exp
 PDF_DIR = Path(os.environ.get("PAPERFIELD_PDF_DIR", DATA_DIR / "pdfs")).expanduser().resolve()
 FULLTEXT_DIR = Path(os.environ.get("PAPERFIELD_FULLTEXT_DIR", DATA_DIR / "fulltext")).expanduser().resolve()
 PROJECT_REPO_DIR = Path(os.environ.get("PAPERFIELD_PROJECT_REPO_DIR", DATA_DIR / "repos")).expanduser().resolve()
+PROJECT_DOC_TRANSLATION_DIR = Path(
+    os.environ.get("PAPERFIELD_PROJECT_DOC_TRANSLATION_DIR", DATA_DIR / "project-doc-translations")
+).expanduser().resolve()
 SETTINGS_PATH = Path(os.environ.get("PAPERFIELD_SETTINGS_PATH", DATA_DIR / "settings.json")).expanduser().resolve()
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
@@ -2504,6 +2507,24 @@ class ProjectAssetService:
                 sections.append({"key": key, "label": label, "items": items})
         return sections
 
+    def important_documents(self, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        documents = []
+        for entry in entries:
+            if Path(entry["path"]).suffix.lower() != ".md":
+                continue
+            route = self._reading_route(entry["path"])
+            if not route or route[0] not in {"start", "docs", "flow"}:
+                continue
+            documents.append({**entry, "reason": route[1], "priority": route[2]})
+        return sorted(
+            documents,
+            key=lambda item: (-item["priority"], len(Path(item["path"]).parts), item["path"].lower()),
+        )[:12]
+
+    def is_important_document(self, path: str) -> bool:
+        route = self._reading_route(path)
+        return Path(path).suffix.lower() == ".md" and bool(route and route[0] in {"start", "docs", "flow"})
+
     @staticmethod
     def _unwrap_markdown_divs(value: str) -> str:
         output: list[str] = []
@@ -2577,6 +2598,7 @@ class ProjectAssetService:
             payload["rendered_html"] = self._readme_html(
                 content, full_name, project.get("default_branch", ""), path,
             )
+            payload["important_document"] = self.is_important_document(path)
         return payload
 
     def workspace(self, project: dict[str, Any], asset: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -2598,6 +2620,7 @@ class ProjectAssetService:
             "file_groups": self.file_groups(files),
             "file_entries": entries,
             "reading_sections": self.reading_sections(entries),
+            "important_documents": self.important_documents(entries),
             "readme": readme,
             "readme_html": self._readme_html(
                 readme, project["full_name"], project.get("default_branch", ""), readme_relative,
@@ -2899,6 +2922,85 @@ class ReadmeLinkRewriter(HTMLParser):
     def rewrite(self, value: str) -> str:
         self.feed(value)
         return "".join(self.parts)
+
+
+class TranslatableHtml(HTMLParser):
+    SKIP_TAGS = {"code", "pre", "kbd", "samp", "script", "style"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.tokens: list[dict[str, Any]] = []
+        self.skip_depth = 0
+
+    @staticmethod
+    def _tag(tag: str, attrs: list[tuple[str, str | None]], closing: str = ">") -> str:
+        values = "".join(
+            f' {name}="{html.escape(value or "", quote=True)}"' for name, value in attrs
+        )
+        return f"<{tag}{values}{closing}"
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.tokens.append({"kind": "html", "value": self._tag(tag, attrs)})
+        if tag in self.SKIP_TAGS:
+            self.skip_depth += 1
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.tokens.append({"kind": "html", "value": self._tag(tag, attrs, " />")})
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self.SKIP_TAGS and self.skip_depth:
+            self.skip_depth -= 1
+        self.tokens.append({"kind": "html", "value": f"</{tag}>"})
+
+    def handle_data(self, data: str) -> None:
+        should_translate = not self.skip_depth and bool(re.search(r"[A-Za-z]{2,}", data))
+        self.tokens.append({"kind": "text", "value": data, "translate": should_translate})
+
+    def handle_entityref(self, name: str) -> None:
+        self.tokens.append({"kind": "html", "value": f"&{name};"})
+
+    def handle_charref(self, name: str) -> None:
+        self.tokens.append({"kind": "html", "value": f"&#{name};"})
+
+    def translated_html(self, translator: "TranslationService", target: str) -> tuple[str, str]:
+        indexes = [index for index, token in enumerate(self.tokens) if token.get("translate")]
+        provider = ""
+        batches: list[list[int]] = []
+        current: list[int] = []
+        current_chars = 0
+        for index in indexes:
+            size = len(self.tokens[index]["value"])
+            if current and (len(current) >= 24 or current_chars + size > 10000):
+                batches.append(current)
+                current = []
+                current_chars = 0
+            current.append(index)
+            current_chars += size
+        if current:
+            batches.append(current)
+        for batch in batches:
+            markers = [f"[[[PF_SEGMENT_{index:06d}]]]" for index in batch]
+            source = "\n".join(
+                f"{marker}\n{self.tokens[index]['value'].strip()}" for marker, index in zip(markers, batch)
+            )
+            result = translator.translate(source, "en", target)
+            provider = result.get("provider", provider)
+            translated = result.get("text", "")
+            matches = list(re.finditer(r"\[\[\[PF_SEGMENT_(\d{6})\]\]\]\s*", translated))
+            if len(matches) != len(batch):
+                raise RuntimeError("翻译服务未保留文档分段标记")
+            for position, match in enumerate(matches):
+                token_index = int(match.group(1))
+                end = matches[position + 1].start() if position + 1 < len(matches) else len(translated)
+                original = self.tokens[token_index]["value"]
+                prefix = re.match(r"^\s*", original).group(0)
+                suffix = re.search(r"\s*$", original).group(0)
+                self.tokens[token_index]["value"] = f"{prefix}{translated[match.end():end].strip()}{suffix}"
+        rendered = "".join(
+            token["value"] if token["kind"] == "html" else html.escape(token["value"])
+            for token in self.tokens
+        )
+        return rendered, provider
 
 
 class RuntimeSettings:
@@ -3773,6 +3875,103 @@ class TranslationService:
         return {"text": "\n\n".join(translated_chunks), "provider": "Google 免费翻译端点", "uses_gpt": False}
 
 
+class ProjectDocumentTranslationService:
+    def __init__(
+        self,
+        store: PaperStore,
+        cloud: S3ObjectStorage,
+        assets: ProjectAssetService,
+        translator: TranslationService,
+    ) -> None:
+        self.store = store
+        self.cloud = cloud
+        self.assets = assets
+        self.translator = translator
+        self._lock = threading.RLock()
+        PROJECT_DOC_TRANSLATION_DIR.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _project_key(full_name: str) -> str:
+        return hashlib.sha256(full_name.encode("utf-8")).hexdigest()[:24]
+
+    @staticmethod
+    def _document_key(path: str) -> str:
+        return hashlib.sha256(path.encode("utf-8")).hexdigest()[:24]
+
+    def _local_path(self, full_name: str, path: str, target: str) -> Path:
+        directory = PROJECT_DOC_TRANSLATION_DIR / self._project_key(full_name)
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory / f"{self._document_key(path)}.{target}.json"
+
+    def _cloud_key(self, full_name: str, path: str, target: str) -> str:
+        return (
+            f"projects/{self._project_key(full_name)}/document-translations/"
+            f"{self._document_key(path)}-{target}.json"
+        )
+
+    @staticmethod
+    def _valid(payload: dict[str, Any], source_hash: str, path: str, target: str) -> bool:
+        return bool(
+            payload.get("html")
+            and payload.get("source_hash") == source_hash
+            and payload.get("path") == path
+            and payload.get("target") == target
+        )
+
+    def translate(self, full_name: str, path: str, target: str) -> dict[str, Any]:
+        if target not in {"zh", "ja"}:
+            raise ValueError("文档目标语言必须是中文或日文")
+        source = self.assets.file(full_name, path)
+        if not source or not source.get("rendered_html"):
+            raise ValueError("Markdown 文档不存在或无法渲染")
+        if not source.get("important_document"):
+            raise ValueError("当前文档不在重要 Markdown 导读范围内")
+        source_hash = hashlib.sha256(source["content"].encode("utf-8")).hexdigest()
+        local_path = self._local_path(full_name, path, target)
+        cloud_key = self._cloud_key(full_name, path, target)
+        with self._lock:
+            if local_path.exists():
+                try:
+                    cached = json.loads(local_path.read_text(encoding="utf-8"))
+                    if self._valid(cached, source_hash, path, target):
+                        return {**cached, "cached": True, "cloud_backed_up": self.store.has_cloud_object(cloud_key)}
+                except (OSError, ValueError, json.JSONDecodeError):
+                    pass
+            if self.cloud.configured and self.store.has_cloud_object(cloud_key):
+                try:
+                    cached = json.loads(self.cloud.download_bytes(cloud_key).decode("utf-8"))
+                    if self._valid(cached, source_hash, path, target):
+                        local_path.write_text(json.dumps(cached, ensure_ascii=False), encoding="utf-8")
+                        return {**cached, "cached": True, "cloud_backed_up": True}
+                except (OSError, ValueError, json.JSONDecodeError):
+                    pass
+            document = TranslatableHtml()
+            document.feed(source["rendered_html"])
+            rendered, provider = document.translated_html(self.translator, target)
+            payload = {
+                "schema_version": 1,
+                "project_full_name": full_name,
+                "path": path,
+                "target": target,
+                "source_hash": source_hash,
+                "provider": provider,
+                "html": rendered,
+                "generated_at": utc_now().isoformat(),
+            }
+            local_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            cloud_backed_up = False
+            if self.cloud.configured:
+                try:
+                    self.cloud.upload_bytes(
+                        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+                        cloud_key,
+                    )
+                    cloud_backed_up = True
+                except Exception as error:
+                    print(f"Cloud document translation backup failed for {full_name}/{path}/{target}: {error}")
+            return {**payload, "cached": False, "cloud_backed_up": cloud_backed_up}
+
+
 class PaperExplainer:
     @staticmethod
     def connection() -> dict[str, str] | None:
@@ -4128,6 +4327,7 @@ CLOUD = S3ObjectStorage(STORE)
 READING_ARCHIVE = ReadingArchiveService(STORE, CLOUD)
 ASSETS = PaperAssetService(STORE, CLOUD, SETTINGS)
 TRANSLATOR = TranslationService()
+PROJECT_DOCUMENTS = ProjectDocumentTranslationService(STORE, CLOUD, PROJECT_ASSETS, TRANSLATOR)
 REFRESH_STATE: dict[str, Any] = {"running": False, "message": "", "lock": threading.Lock()}
 
 
@@ -4844,7 +5044,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 source_file = PROJECT_ASSETS.file(full_name, relative_path)
                 self.send_json(source_file or {"error": "源码文件不存在"}, 200 if source_file else 404)
                 return
-            self.send_json({"items": STORE.project_chat_history(full_name), "project_full_name": full_name})
+            self.send_json({"items": STORE.project_chat_history(full_name, 0), "project_full_name": full_name})
             return
         if parsed.path.startswith("/api/projects/"):
             full_name = urllib.parse.unquote(parsed.path.removeprefix("/api/projects/"))
@@ -4894,7 +5094,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                     return
                 self.send_json(page or {"error": "该页全文尚不可用"}, 200 if page else 404)
                 return
-            self.send_json({"items": STORE.chat_history(paper_id), "paper_id": paper_id})
+            self.send_json({"items": STORE.chat_history(paper_id, 0), "paper_id": paper_id})
             return
         if parsed.path.startswith("/api/papers/"):
             paper_id = urllib.parse.unquote(parsed.path.removeprefix("/api/papers/"))
@@ -5017,7 +5217,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             except (TypeError, ValueError) as error:
                 self.send_json({"error": str(error)}, 400)
             return
-        project_action = re.fullmatch(r"/api/projects/(.+)/(workspace|explain|chat)", parsed.path)
+        project_action = re.fullmatch(r"/api/projects/(.+)/(workspace|explain|chat|document)", parsed.path)
         if project_action:
             full_name = urllib.parse.unquote(project_action.group(1))
             action = project_action.group(2)
@@ -5035,6 +5235,19 @@ class AppHandler(SimpleHTTPRequestHandler):
                 workspace["reading_backup_available"] = READING_ARCHIVE.project_backup_available(full_name)
                 workspace["reading_backup_pending"] = READING_ARCHIVE.project_backup_pending(full_name)
                 self.send_json(workspace)
+                return
+            if action == "document":
+                payload = self.read_json()
+                try:
+                    self.send_json(
+                        PROJECT_DOCUMENTS.translate(
+                            full_name,
+                            compact_text(str(payload.get("path", ""))),
+                            compact_text(str(payload.get("target", ""))).lower(),
+                        )
+                    )
+                except (OSError, RuntimeError, TypeError, ValueError) as error:
+                    self.send_json({"error": str(error)}, 503)
                 return
             if action == "explain":
                 try:

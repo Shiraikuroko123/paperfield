@@ -6,11 +6,11 @@ product
 
 ## Users
 
-The primary user is a Chinese graduate student or early-stage researcher who follows embodied intelligence and large language model research every day. They work primarily on a desktop, often in long reading sessions, and need to move quickly from discovery to filtering, explanation, saving, and later review.
+The primary user is a Chinese graduate student or early-stage researcher who follows embodied intelligence and large language model research continuously. They work primarily on a desktop, often in long reading sessions, and need to move quickly from discovery to filtering, explanation, saving, and later review.
 
 ## Product Purpose
 
-Paperfield collects recent research and public GitHub projects, selects small high-quality daily reading lists, resolves legal open-access PDFs, and turns papers and source code into Chinese reading workflows. Success means the user can identify the few papers and projects worth studying today, inspect source evidence, understand methods and implementations, ask grounded questions, and preserve a useful research trail without maintaining spreadsheets or browser tabs.
+Paperfield collects recent research and public GitHub projects, selects a small high-quality weekly paper list and a compact daily project list, resolves legal open-access PDFs, and turns papers and source code into multilingual reading workflows. Success means the user can identify the few papers and projects worth studying next, inspect source evidence, understand methods and implementations, ask grounded questions, and preserve a useful research trail without maintaining spreadsheets or browser tabs.
 
 ## Brand Personality
 

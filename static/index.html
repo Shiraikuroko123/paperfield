@@ -278,7 +278,17 @@
             <button role="tab" aria-selected="false" data-project-tab="chat">问答</button>
           </div>
           <section class="project-reader-panel project-document-panel is-active" id="projectReadmePanel" role="tabpanel">
-            <div class="project-document-toolbar"><span id="projectDocumentPath">README</span><button class="text-button" id="projectRootReadme" type="button" hidden>项目 README</button></div>
+            <div class="project-document-toolbar">
+              <span id="projectDocumentPath">README</span>
+              <div class="project-document-actions">
+                <div class="project-document-languages" id="projectDocumentLanguages" role="group" aria-label="文档语言" hidden>
+                  <button type="button" data-project-doc-lang="zh">中</button>
+                  <button class="is-active" type="button" data-project-doc-lang="en">英</button>
+                  <button type="button" data-project-doc-lang="ja">日</button>
+                </div>
+                <button class="text-button" id="projectRootReadme" type="button" hidden>项目 README</button>
+              </div>
+            </div>
             <article class="project-readme" id="projectReadmeContent"></article>
           </section>
           <section class="project-reader-panel" id="projectExplainPanel" role="tabpanel" hidden><div id="projectExplanation"></div></section>

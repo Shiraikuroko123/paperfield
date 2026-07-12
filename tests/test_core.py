@@ -198,8 +198,13 @@ class FeedTests(unittest.TestCase):
             )
             store.update_state("paper", {"status": "read", "favorite": True, "notes": "important"})
             store.save_explanation("paper", {"mode": "fulltext", "one_sentence": "explained"})
-            store.add_chat_message("paper", "user", "question")
-            store.add_chat_message("paper", "assistant", "answer")
+            expected_chat = []
+            for index in range(14):
+                question = f"question-{index}"
+                answer = f"answer-{index}"
+                store.add_chat_message("paper", "user", question)
+                store.add_chat_message("paper", "assistant", answer)
+                expected_chat.extend([question, answer])
             archive = APP.ReadingArchiveService(store, FakeCloud(store))
             self.assertTrue(archive.backup_paper("paper"))
 
@@ -214,7 +219,10 @@ class FeedTests(unittest.TestCase):
             restored = store.get_paper("paper")
             self.assertEqual(restored["status"], "read")
             self.assertEqual(restored["explanation"]["one_sentence"], "explained")
-            self.assertEqual([item["content"] for item in store.chat_history("paper")], ["question", "answer"])
+            self.assertEqual(
+                [item["content"] for item in store.chat_history("paper", 0)],
+                expected_chat,
+            )
 
     def test_project_workspace_groups_files_and_sanitizes_readme(self):
         files = ["README.md", "src/model.py", "scripts/train.py", "configs/base.yaml", "tests/test_model.py"]
@@ -223,6 +231,7 @@ class FeedTests(unittest.TestCase):
             groups = {item["label"]: item["files"] for item in service.file_groups(files)}
             entries = service.file_entries(files)
             sections = {item["label"]: [entry["path"] for entry in item["items"]] for item in service.reading_sections(entries)}
+            important = [item["path"] for item in service.important_documents(entries)]
             rendered = service._readme_html(
                 "# Project\n<script>alert(1)</script>\n[Guide](docs/guide.md)\n<div align=\"center\">\n    <a href=\"https://example.com\">Author</a>\n    ![](assets/demo.png)\n</div>",
                 "owner/project", "main", "README.md",
@@ -231,6 +240,7 @@ class FeedTests(unittest.TestCase):
             self.assertIn("scripts/train.py", groups["训练与推理"])
             self.assertIn("README.md", sections["从这里开始"])
             self.assertIn("scripts/train.py", sections["运行链路"])
+            self.assertIn("README.md", important)
             self.assertEqual(next(item for item in entries if item["path"] == "src/model.py")["language"], "Python")
             self.assertNotIn("<script", rendered)
             self.assertNotIn("alert(1)", rendered)
@@ -238,6 +248,80 @@ class FeedTests(unittest.TestCase):
             self.assertIn("raw.githubusercontent.com/owner/project/main/assets/demo.png", rendered)
             self.assertIn('<a href="https://example.com">Author</a>', rendered)
             self.assertNotIn("&lt;a href", rendered)
+
+    def test_html_translation_preserves_code_and_document_structure(self):
+        class FakeTranslator:
+            @staticmethod
+            def translate(text, source="en", target="zh"):
+                return {
+                    "text": text.replace("Hello world", "你好，世界").replace("Run the model", "运行模型"),
+                    "provider": "test",
+                }
+
+        document = APP.TranslatableHtml()
+        document.feed(
+            "<h1>Hello world</h1>"
+            "<pre><code>pip install package</code></pre>"
+            "<p>Run the model</p>"
+        )
+        rendered, provider = document.translated_html(FakeTranslator(), "zh")
+        self.assertIn("<h1>你好，世界</h1>", rendered)
+        self.assertIn("<code>pip install package</code>", rendered)
+        self.assertIn("<p>运行模型</p>", rendered)
+        self.assertEqual(provider, "test")
+
+    def test_project_document_translation_restores_from_cloud_cache(self):
+        class FakeAssets:
+            @staticmethod
+            def file(full_name, path):
+                return {
+                    "content": "# Hello world",
+                    "rendered_html": "<h1>Hello world</h1><pre><code>pip install package</code></pre>",
+                    "important_document": True,
+                }
+
+        class FakeTranslator:
+            def __init__(self):
+                self.calls = 0
+
+            def translate(self, text, source="en", target="zh"):
+                self.calls += 1
+                return {"text": text.replace("Hello world", "你好，世界"), "provider": "test"}
+
+        class FakeCloud:
+            configured = True
+
+            def __init__(self, store):
+                self.store = store
+                self.objects = {}
+
+            def upload_bytes(self, content, key, content_type="application/json"):
+                self.objects[key] = content
+                self.store.save_cloud_object(key, len(content))
+
+            def download_bytes(self, key):
+                return self.objects[key]
+
+        with tempfile.TemporaryDirectory() as directory:
+            original_translation_dir = APP.PROJECT_DOC_TRANSLATION_DIR
+            APP.PROJECT_DOC_TRANSLATION_DIR = Path(directory) / "translations"
+            try:
+                store = APP.PaperStore(Path(directory) / "papers.db")
+                cloud = FakeCloud(store)
+                translator = FakeTranslator()
+                service = APP.ProjectDocumentTranslationService(store, cloud, FakeAssets(), translator)
+                generated = service.translate("owner/project", "README.md", "zh")
+                service._local_path("owner/project", "README.md", "zh").unlink()
+                restored = service.translate("owner/project", "README.md", "zh")
+
+                self.assertFalse(generated["cached"])
+                self.assertTrue(generated["cloud_backed_up"])
+                self.assertTrue(restored["cached"])
+                self.assertTrue(restored["cloud_backed_up"])
+                self.assertIn("<h1>你好，世界</h1>", restored["html"])
+                self.assertEqual(translator.calls, 1)
+            finally:
+                APP.PROJECT_DOC_TRANSLATION_DIR = original_translation_dir
 
     def test_daily_project_recommendations_are_capped_at_four(self):
         now = APP.utc_now().isoformat()

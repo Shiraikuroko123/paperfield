@@ -2,14 +2,15 @@
 
 一个面向具身智能、大模型和开源项目追踪的个人研究工作台。
 
-Paperfield is a local research client for daily embodied-intelligence and large-model paper discovery. It keeps a broad candidate pool, selects a small daily reading list, resolves legal open-access PDF copies, caches full text locally, and provides page-grounded Chinese explanations and paper chat.
+Paperfield is a local research client for embodied-intelligence and large-model paper discovery. It keeps a broad candidate pool, selects a small weekly reading list, resolves legal open-access PDF copies, caches full text locally, and provides page-grounded Chinese explanations and paper chat.
 
-## Daily reading workflow
+## Weekly reading workflow
 
 - `每周精选` is the default view: 5 papers per configured research field, selected from the full local collection and kept stable for the natural week.
 - The score is transparent and editable in `config.json`: academic quality 30, topic relevance 25, freshness 20, evidence completeness 15, impact and reproducibility 10.
 - Clicking a recommended paper opens a focused workstation with PDF on the left and explanation, chat, and translation on the right.
 - GitHub projects open with a curated code-reading route, a separate complete file index, rendered Markdown documents, and a line-numbered source viewer.
+- Important project Markdown documents can switch between Chinese, English, and Japanese. Generated translations preserve headings, lists, links, and code blocks, use the free translation path instead of GPT tokens, and are cached locally and in R2.
 - Recommended PDFs are resolved from existing source links, OpenAlex, Semantic Scholar, arXiv, OpenReview, and Europe PMC, then cached under ignored `data/` paths.
 - Paperfield never bypasses a paywall or institutional login. When no public copy exists, it keeps the publisher/source page available and labels the PDF as unavailable.
 
@@ -100,7 +101,7 @@ docker compose up --build -d
 
 ## Optional cloud PDF archive
 
-Paperfield supports private S3-compatible storage for long-term PDF copies. Files can be saved locally, in Cloudflare R2, or in both places and downloaded again when opened. Explanations, reading state, notes, and complete paper/project chats are backed up independently so local PDF mode still preserves the learning history in R2. The in-app storage panel controls the local PDF directory and cache limit, inventories the private bucket daily, tracks Paperfield's Class A/Class B requests by billing cycle, and estimates R2 free-tier overage. Operation counts exclude requests made outside Paperfield; current bucket capacity is a point-in-time estimate rather than Cloudflare's average GB-month bill.
+Paperfield supports private S3-compatible storage for long-term PDF copies. Files can be saved locally, in Cloudflare R2, or in both places and downloaded again when opened. Explanations, reading state, notes, and complete paper/project chats are backed up independently so local PDF mode still preserves the learning history in R2. Reopening a paper or project restores the full visible conversation, while model prompts continue to use a bounded recent context to control token cost. The in-app storage panel controls the local PDF directory and cache limit, inventories the private bucket daily, tracks Paperfield's Class A/Class B requests by billing cycle, and estimates R2 free-tier overage. Operation counts exclude requests made outside Paperfield; current bucket capacity is a point-in-time estimate rather than Cloudflare's average GB-month bill.
 
 Configuration and current price comparison: [`docs/CLOUD_STORAGE.md`](docs/CLOUD_STORAGE.md)
 
