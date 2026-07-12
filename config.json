@@ -62,6 +62,7 @@
   "github_queries": [
     {"category": "具身智能", "query": "topic:embodied-ai"},
     {"category": "具身智能", "query": "\"vision-language-action\" in:name,description"},
+    {"category": "具身智能", "query": "\"robotic manipulation\" in:name,description"},
     {"category": "触觉与灵巧操作", "query": "\"robot learning\" in:name,description"},
     {"category": "大语言模型", "query": "topic:large-language-model"},
     {"category": "多模态大模型", "query": "\"multimodal llm\" in:name,description"},
@@ -82,5 +83,12 @@
     "NeurIPS", "ICML", "ICLR", "CVPR", "ICCV", "ECCV", "ACL", "EMNLP", "NAACL",
     "RSS", "CoRL", "ICRA", "IROS", "RA-L", "T-RO", "IJRR", "TPAMI", "JMLR", "TMLR"
   ],
-  "arxiv_categories": ["cs.AI", "cs.CL", "cs.CV", "cs.RO", "cs.LG"]
+  "arxiv_categories": ["cs.AI", "cs.CL", "cs.CV", "cs.RO", "cs.LG"],
+  "arxiv_focus_pages": 2,
+  "arxiv_focus_queries": [
+    "all:\"digital twin\"",
+    "all:\"robot manipulation\" OR all:\"robotic manipulation\" OR all:\"vision language action\"",
+    "all:\"embodied\" OR all:\"humanoid\" OR all:\"dexterous\" OR all:\"tactile\"",
+    "all:\"large language model\" OR all:\"multimodal language model\" OR all:\"language model agent\" OR all:\"retrieval augmented\""
+  ]
 }

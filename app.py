@@ -55,7 +55,7 @@ SETTINGS_PATH = Path(os.environ.get("PAPERFIELD_SETTINGS_PATH", DATA_DIR / "sett
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
 INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", ROOT / "institutions.json")).expanduser().resolve()
-APP_VERSION = "0.10.2"
+APP_VERSION = "0.10.3"
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
 
@@ -1520,49 +1520,67 @@ class PaperSources:
 
     def fetch_arxiv(self) -> list[dict[str, Any]]:
         categories = self.config["arxiv_categories"]
-        query = " OR ".join(f"cat:{category}" for category in categories)
-        params = urllib.parse.urlencode(
-            {
-                "search_query": f"({query})",
-                "start": 0,
-                "max_results": self.config["max_results_per_source"],
-                "sortBy": "submittedDate",
-                "sortOrder": "descending",
-            }
+        category_query = " OR ".join(f"cat:{category}" for category in categories)
+        query_specs = [(f"({category_query})", "submittedDate", 1)]
+        focus_pages = max(1, int(self.config.get("arxiv_focus_pages", 2)))
+        query_specs.extend(
+            (f"({category_query}) AND ({focus_query})", "lastUpdatedDate", focus_pages)
+            for focus_query in self.config.get("arxiv_focus_queries", [])
         )
-        url = f"https://export.arxiv.org/api/query?{params}"
-        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(request, timeout=35) as response:
-            root = ET.fromstring(response.read())
         ns = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
-        papers = []
-        for entry in root.findall("atom:entry", ns):
-            entry_url = compact_text(entry.findtext("atom:id", default="", namespaces=ns))
-            arxiv_id = entry_url.rsplit("/", 1)[-1]
-            links = {link.attrib.get("type", ""): link.attrib.get("href", "") for link in entry.findall("atom:link", ns)}
-            authors = [compact_text(node.findtext("atom:name", default="", namespaces=ns)) for node in entry.findall("atom:author", ns)]
-            journal_ref = compact_text(entry.findtext("arxiv:journal_ref", default="", namespaces=ns))
-            paper = {
-                "id": f"arxiv:{arxiv_id}",
-                "title": compact_text(entry.findtext("atom:title", default="", namespaces=ns)),
-                "abstract": compact_text(entry.findtext("atom:summary", default="", namespaces=ns)),
-                "authors": authors,
-                "venue": journal_ref or "arXiv",
-                "published": iso_date(entry.findtext("atom:published", default="", namespaces=ns)),
-                "updated": iso_date(entry.findtext("atom:updated", default="", namespaces=ns)),
-                "source": "arXiv",
-                "source_url": entry_url,
-                "pdf_url": links.get("application/pdf", f"https://arxiv.org/pdf/{arxiv_id}"),
-                "doi": compact_text(entry.findtext("arxiv:doi", default="", namespaces=ns)),
-                "journal_ref": journal_ref,
-                "citation_count": 0,
-            }
-            self.classifier.enrich(paper)
-            paper["topics"] = self.classifier.classify(paper)
-            if paper["topics"] != ["其他相关"]:
-                paper["quality_score"] = self.classifier.quality(paper)
-                papers.append(paper)
-        return papers
+        papers: dict[str, dict[str, Any]] = {}
+        request_count = 0
+        page_size = max(1, int(self.config["max_results_per_source"]))
+        for search_query, sort_by, max_pages in query_specs:
+            for page in range(max_pages):
+                if request_count:
+                    time.sleep(3)
+                params = urllib.parse.urlencode(
+                    {
+                        "search_query": search_query,
+                        "start": page * page_size,
+                        "max_results": page_size,
+                        "sortBy": sort_by,
+                        "sortOrder": "descending",
+                    }
+                )
+                request = urllib.request.Request(
+                    f"https://export.arxiv.org/api/query?{params}", headers={"User-Agent": USER_AGENT},
+                )
+                with urllib.request.urlopen(request, timeout=35) as response:
+                    root = ET.fromstring(response.read())
+                request_count += 1
+                entries = root.findall("atom:entry", ns)
+                for entry in entries:
+                    entry_url = compact_text(entry.findtext("atom:id", default="", namespaces=ns))
+                    raw_arxiv_id = entry_url.rsplit("/", 1)[-1]
+                    arxiv_id = re.sub(r"v\d+$", "", raw_arxiv_id)
+                    links = {link.attrib.get("type", ""): link.attrib.get("href", "") for link in entry.findall("atom:link", ns)}
+                    authors = [compact_text(node.findtext("atom:name", default="", namespaces=ns)) for node in entry.findall("atom:author", ns)]
+                    journal_ref = compact_text(entry.findtext("arxiv:journal_ref", default="", namespaces=ns))
+                    paper = {
+                        "id": f"arxiv:{arxiv_id}",
+                        "title": compact_text(entry.findtext("atom:title", default="", namespaces=ns)),
+                        "abstract": compact_text(entry.findtext("atom:summary", default="", namespaces=ns)),
+                        "authors": authors,
+                        "venue": journal_ref or "arXiv",
+                        "published": iso_date(entry.findtext("atom:published", default="", namespaces=ns)),
+                        "updated": iso_date(entry.findtext("atom:updated", default="", namespaces=ns)),
+                        "source": "arXiv",
+                        "source_url": f"https://arxiv.org/abs/{arxiv_id}",
+                        "pdf_url": links.get("application/pdf", f"https://arxiv.org/pdf/{arxiv_id}"),
+                        "doi": compact_text(entry.findtext("arxiv:doi", default="", namespaces=ns)),
+                        "journal_ref": journal_ref,
+                        "citation_count": 0,
+                    }
+                    self.classifier.enrich(paper)
+                    paper["topics"] = self.classifier.classify(paper)
+                    if paper["topics"] != ["其他相关"]:
+                        paper["quality_score"] = self.classifier.quality(paper)
+                        papers[paper["id"]] = paper
+                if len(entries) < page_size:
+                    break
+        return list(papers.values())
 
     @staticmethod
     def abstract_from_inverted_index(index: dict[str, list[int]] | None) -> str:

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.3
+
+- Added focused arXiv update-date searches with bounded pagination so recently revised papers are not hidden by the latest-submission window.
+- Normalized versioned arXiv identifiers to prevent duplicate records across revisions and connector imports.
+- Expanded GitHub discovery for robotic-manipulation repositories and verified TwinRL paper-to-code linking.
+
 ## 0.10.2
 
 - Merged project recommendations into the weekly picks page below the selected papers.

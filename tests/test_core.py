@@ -94,6 +94,58 @@ class ExplanationTests(unittest.TestCase):
 
 
 class FeedTests(unittest.TestCase):
+    def test_arxiv_focus_queries_use_updated_date_and_deduplicate(self):
+        config = {
+            "arxiv_categories": ["cs.RO"],
+            "arxiv_focus_queries": ['all:"digital twin"'],
+            "arxiv_focus_pages": 2,
+            "max_results_per_source": 1,
+        }
+        classifier = mock.Mock()
+        classifier.classify.return_value = ["embodied-ai"]
+        classifier.quality.return_value = 80
+        source = APP.PaperSources(config, classifier)
+
+        def feed(arxiv_id, title):
+            return f"""<?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+          <entry>
+            <id>https://arxiv.org/abs/{arxiv_id}</id>
+            <updated>2026-05-21T08:00:00Z</updated>
+            <published>2026-02-10T08:00:00Z</published>
+            <title>{title}</title>
+            <summary>Digital twin robot learning for real-world manipulation.</summary>
+            <author><name>Rui Zhou</name></author>
+            <link href="https://arxiv.org/pdf/{arxiv_id}" type="application/pdf" />
+          </entry>
+        </feed>""".encode()
+        requests = []
+
+        def fake_urlopen(request, timeout=0):
+            requests.append(request.full_url)
+            params = APP.urllib.parse.parse_qs(APP.urllib.parse.urlsplit(request.full_url).query)
+            if params["sortBy"] == ["submittedDate"]:
+                return io.BytesIO(feed("2602.09023v1", "TwinRL: Digital Twin-Driven Reinforcement Learning"))
+            if params["start"] == ["0"]:
+                return io.BytesIO(feed("2607.00001v1", "A New Digital Twin Paper"))
+            return io.BytesIO(feed("2602.09023v4", "TwinRL: Digital Twin-Driven Reinforcement Learning"))
+
+        with mock.patch.object(APP.urllib.request, "urlopen", side_effect=fake_urlopen), mock.patch.object(
+            APP.time, "sleep"
+        ) as sleep:
+            papers = source.fetch_arxiv()
+
+        self.assertEqual({paper["id"] for paper in papers}, {"arxiv:2602.09023", "arxiv:2607.00001"})
+        self.assertEqual(len(requests), 3)
+        normal = APP.urllib.parse.parse_qs(APP.urllib.parse.urlsplit(requests[0]).query)
+        focused = APP.urllib.parse.parse_qs(APP.urllib.parse.urlsplit(requests[1]).query)
+        focused_page_two = APP.urllib.parse.parse_qs(APP.urllib.parse.urlsplit(requests[2]).query)
+        self.assertEqual(normal["sortBy"], ["submittedDate"])
+        self.assertEqual(focused["sortBy"], ["lastUpdatedDate"])
+        self.assertIn('all:"digital twin"', focused["search_query"][0])
+        self.assertEqual(focused_page_two["start"], ["1"])
+        self.assertEqual(sleep.call_args_list, [mock.call(3), mock.call(3)])
+
     def test_beta_auth_hashes_password_and_limits_accounts(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "auth-users.json"
