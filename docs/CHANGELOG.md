@@ -7,6 +7,7 @@
 - Required a sharing-rights confirmation before manually uploaded PDFs enter the shared cloud library.
 - Made the Chinese/English/Japanese Markdown language control easier to locate.
 - Replaced Cloudflare Quick Tunnel beta sharing with ngrok so testers only need a browser.
+- Added one-click desktop shortcuts for starting and stopping protected sharing in the background.
 
 ## 0.10.0
 

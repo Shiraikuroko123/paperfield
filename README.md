@@ -1,131 +1,83 @@
 # Paperfield
 
-一个面向具身智能、大模型和开源项目追踪的个人研究工作台。
+[中文](README.md) | [English](docs/i18n/README.en.md) | [日本語](docs/i18n/README.ja.md)
 
-Paperfield is a local research client for embodied-intelligence and large-model paper discovery. It keeps a broad candidate pool, selects a small weekly reading list, resolves legal open-access PDF copies, caches full text locally, and provides page-grounded Chinese explanations and paper chat.
+Paperfield 是面向具身智能、大语言模型和开源项目追踪的桌面研究工作台。它维护完整候选池，每周筛选少量值得精读的论文，寻找合法公开 PDF，并把论文、代码、讲解与问答历史放在一个连续工作流中。
 
-## Weekly reading workflow
+## 核心能力
 
-- `每周精选` is the default view: 5 papers per configured research field, selected from the full local collection and kept stable for the natural week.
-- The score is transparent and editable in `config.json`: academic quality 30, topic relevance 25, freshness 20, evidence completeness 15, impact and reproducibility 10.
-- Clicking a recommended paper opens a focused workstation with PDF on the left and explanation, chat, and translation on the right.
-- GitHub projects open with a curated code-reading route, a separate complete file index, rendered Markdown documents, and a line-numbered source viewer.
-- Important project Markdown documents can switch between Chinese, English, and Japanese. Generated translations preserve headings, lists, links, and code blocks, use the free translation path instead of GPT tokens, and are cached locally and in R2.
-- Recommended PDFs are resolved from existing source links, OpenAlex, Semantic Scholar, arXiv, OpenReview, and Europe PMC, then cached under ignored `data/` paths.
-- Paperfield never bypasses a paywall or institutional login. When no public copy exists, it keeps the publisher/source page available and labels the PDF as unavailable.
+- 每周按研究方向推荐论文，每个方向最多 5 篇，并展示可解释评分。
+- 聚合顶会、顶刊、预印本与公开学术元数据，区分正式发表和未确认预印本。
+- 在阅读器左侧显示 PDF，右侧提供全文精读、分页翻译和基于原文的问答。
+- 每日推荐不超过 4 个 GitHub 项目，并关联对应论文、README 与源码阅读路径。
+- 支持本地、Cloudflare R2 或混合 PDF 存储，以及讲解和聊天历史备份。
+- 支持最多 4 个内测账号的登录保护共享模式。
 
-## Coverage
+## Markdown 三语说明
 
-- Official proceedings: PMLR (ICML, CoRL, AISTATS) and CVF Open Access (CVPR, ICCV, WACV)
-- Dedicated collectors: ACM MM and IEEE Transactions on Robotics (IEEE T-RO)
-- Discovery and metadata: arXiv, OpenAlex, Crossref, and targeted Crossref venue queries
-- Fixed DBLP archives: selected conference proceedings and journal volumes that broad search misses
-- Curated catalog: 62 top or important conferences and journals across robotics, vision, language, machine learning, retrieval, agents, and ML systems
-- Optional DBLP supplement: set `PAPERFIELD_ENABLE_DBLP=1` when the DBLP API is reachable
-- GitHub project radar: tracks recently pushed embodied-AI and LLM repositories, with language/topic filters and high-confidence paper links
-- Daily project selection: recommends up to four active repositories using topic relevance, freshness, Stars, paper links, and repository completeness
+Paperfield 自己的主 README 保存了三份静态版本：
 
-Formal publications, important specialist venues, and unconfirmed arXiv preprints are labeled separately. The first full import is larger; later updates use indexed batch writes and normally finish much faster.
-The venue selector distinguishes papers available now, records with future publication dates, sources waiting for collection, and sources blocked by platform verification. See [`docs/COVERAGE_AUDIT.md`](docs/COVERAGE_AUDIT.md) for the latest audit and source limitations.
+- 中文：[README.md](README.md)
+- English：[docs/i18n/README.en.md](docs/i18n/README.en.md)
+- 日本語：[docs/i18n/README.ja.md](docs/i18n/README.ja.md)
 
-Representative institutions and laboratories are marked from public affiliation metadata. These markers are informational and do not affect recommendation scores.
+在 Paperfield 的 GitHub 项目阅读器中，所有 `.md` 文件都会标记 `中/英/日`。英文视图显示仓库原文，中文和日文在第一次点击时通过免费翻译端点按需生成，不使用 GPT Token，并缓存到本地；配置 R2 后也会备份到云端。
 
-Recommended GitHub projects open in a dedicated code workspace. Paperfield downloads only public text source files, ignores dependency/build/data directories, never executes repository code, and presents a file tree, README, Chinese code explanation, and source-grounded project chat.
+其他维护文档没有伪装成三份人工翻译。它们的语言状态和位置统一列在 [文档地图](docs/README.md) 中。
 
-## Run
+## 本地运行
 
 ```powershell
 cd G:\ps\paper-scout
 python app.py
 ```
 
-Open `http://127.0.0.1:8765`.
+打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)。首次运行会加载离线种子数据，之后应用每 24 小时自动检查更新，也可以点击页面中的更新按钮。
 
-To share an isolated password-protected beta instance with up to four testers, use the free Cloudflare Quick Tunnel workflow in [`docs/BETA_SHARING.md`](docs/BETA_SHARING.md). The beta profile keeps its own reading state and does not inherit personal PDFs, chats, project caches, or R2 credentials.
-
-也可以使用项目脚本：
+常用脚本：
 
 ```powershell
-./scripts/run.cmd
-./scripts/check.cmd
-./scripts/refresh.cmd
+.\scripts\run.cmd
+.\scripts\check.cmd
+.\scripts\refresh.cmd
 ```
 
-The first launch seeds a small offline dataset so the interface is usable immediately. Click `更新论文` to fetch current public metadata.
+## AI 与翻译
 
-## Full-text explanations and paper chat
+Paperfield 会读取本机 CC Switch/Codex 的 OpenAI 兼容配置，也可以使用 `PAPERFIELD_OPENAI_API_KEY`、`PAPERFIELD_OPENAI_BASE_URL` 和 `PAPERFIELD_OPENAI_MODEL` 显式覆盖。没有 GPT Key 时仍可阅读 PDF、使用免费翻译并生成标注为摘要导读的基础说明。
 
-Paperfield automatically detects the active CC Switch/Codex provider from `~/.codex/config.toml` and its key from `~/.codex/auth.json`. This supports Responses-compatible custom providers without copying the key into the project.
-The active provider's `wire_api` is respected; both Responses API and Chat Completions-compatible providers are supported.
+论文和项目 Markdown 翻译依次尝试浏览器翻译能力、配置的 LibreTranslate 端点和无需 Key 的 Google Translate 端点。免费端点可能限流，因此结果会在本地和可选 R2 中缓存。
+
+## 分享给朋友
+
+按照 [内测分享说明](docs/BETA_SHARING.md) 配置 ngrok 和账号。Windows 用户可以安装桌面快捷方式：
 
 ```powershell
-$env:OPENAI_API_KEY="your-key"
-$env:OPENAI_MODEL="gpt-5-mini"
-python app.py
+powershell -ExecutionPolicy Bypass -File .\scripts\install-beta-shortcuts.ps1
 ```
 
-When a public PDF is available, Paperfield extracts page-aware full text, builds cached reading notes in bounded chunks, and asks the model to produce method, derivation, experiment, conclusion, limitation, and evidence sections. Answers cite page numbers where the source material supports them.
+之后双击桌面的 **Paperfield Share** 后台启动，双击 **Stop Paperfield Share** 停止。朋友只需要浏览器，不需要安装 Tailscale 或 ngrok。
 
-Without a key, Paperfield generates a clearly labeled abstract-based Chinese reading guide. PDF reading and translation still work without GPT.
+## 数据来源与合规
 
-You can also add a paper by DOI, arXiv identifier, URL, or title through the built-in connector. Any selected paper accepts a local PDF upload; Paperfield validates the file, extracts page-aware text, opens it in the reader, and can immediately generate a full-text Chinese analysis.
+Paperfield 从 PMLR、CVF Open Access、arXiv、OpenAlex、Crossref、DBLP 等公开来源收集元数据，并专门覆盖 ACM MM、IEEE T-RO 等平台。它不会绕过付费墙或机构登录；找不到合法公开 PDF 时只保留来源页。
 
-For an explicit Paperfield-only override, use `PAPERFIELD_OPENAI_API_KEY`, `PAPERFIELD_OPENAI_BASE_URL`, and `PAPERFIELD_OPENAI_MODEL`.
+详细覆盖范围见 [来源覆盖审计](docs/COVERAGE_AUDIT.md)，云端存储见 [Cloudflare R2 配置](docs/CLOUD_STORAGE.md)。
 
-## Translation without GPT tokens
+## 开发
 
-The reader translates extracted pages without calling the GPT provider:
+- [文档地图](docs/README.md)
+- [架构](docs/ARCHITECTURE.md)
+- [部署](docs/DEPLOYMENT.md)
+- [路线图](docs/ROADMAP.md)
+- [变更记录](docs/CHANGELOG.md)
+- [贡献指南](.github/CONTRIBUTING.md)
+- [安全策略](.github/SECURITY.md)
 
-1. Chrome/Edge built-in Translator API when available.
-2. A configured LibreTranslate-compatible endpoint.
-3. A best-effort no-key Google Translate endpoint.
-
-Configure a private LibreTranslate service with `PAPERFIELD_TRANSLATE_ENDPOINT` and optional `PAPERFIELD_TRANSLATE_API_KEY`. Free endpoints can rate-limit or change behavior, so local browser translation or a self-hosted service is more reliable.
-
-## Refresh from the command line
+运行检查：
 
 ```powershell
-python app.py --refresh
+python -m unittest discover -s tests -v
+node --check static\app.js
+docker compose config --quiet
 ```
-
-The running server also refreshes automatically according to `config.json`.
-It refreshes every 24 hours while running and catches up on the next launch after the computer has been off.
-
-GitHub works without a token and automatically respects the anonymous search rate limit. Setting `GITHUB_TOKEN` is optional and only speeds up project refreshes. `OPENAI_API_KEY` is separate and is used only for Chinese paper explanations.
-
-## Docker
-
-```powershell
-docker compose up --build -d
-```
-
-容器使用持久化数据卷，并通过 `/api/health` 提供健康检查。云端环境需要通过环境变量配置 AI Key，不能依赖本机 CC Switch 文件。
-
-## Optional cloud PDF archive
-
-Paperfield supports private S3-compatible storage for long-term PDF copies. Files can be saved locally, in Cloudflare R2, or in both places and downloaded again when opened. Explanations, reading state, notes, and complete paper/project chats are backed up independently so local PDF mode still preserves the learning history in R2. Reopening a paper or project restores the full visible conversation, while model prompts continue to use a bounded recent context to control token cost. The in-app storage panel controls the local PDF directory and cache limit, inventories the private bucket daily, tracks Paperfield's Class A/Class B requests by billing cycle, and estimates R2 free-tier overage. Operation counts exclude requests made outside Paperfield; current bucket capacity is a point-in-time estimate rather than Cloudflare's average GB-month bill.
-
-Configuration and current price comparison: [`docs/CLOUD_STORAGE.md`](docs/CLOUD_STORAGE.md)
-
-On Windows, run `powershell -ExecutionPolicy Bypass -File .\scripts\configure-r2.ps1` to create the ignored local `.env` without echoing the Secret Access Key.
-
-## GitHub project workflow
-
-这个仓库已包含：
-
-- GitHub Actions 自动测试和 Docker 构建。
-- Bug 与功能需求 Issue 模板。
-- Pull Request 模板。
-- Dockerfile、Compose 和环境变量示例。
-- 贡献、安全和版本变更文档。
-
-学习 Git 和 GitHub：[`docs/GITHUB_GUIDE.md`](docs/GITHUB_GUIDE.md)
-
-## Architecture and future deployment
-
-- 当前架构与多用户演进：[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-- Docker 和云端部署：[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
-- 后续路线：[`docs/ROADMAP.md`](docs/ROADMAP.md)
-- 同类开源项目调研：[`docs/READER_RESEARCH.md`](docs/READER_RESEARCH.md)
-
-当前版本仍是单用户本地应用。实现认证和 PostgreSQL 迁移前，不应直接暴露到公网。

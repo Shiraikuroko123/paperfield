@@ -411,7 +411,7 @@ function projectExplanationMarkup(explanation) {
 
 function projectFileItemMarkup(item, showReason = false) {
   return `<button class="project-file-item" type="button" title="${escapeHtml(item.path)}" data-project-file="${escapeHtml(item.path)}">
-    <strong>${escapeHtml(item.name)}</strong>
+    <span class="project-file-name"><strong>${escapeHtml(item.name)}</strong>${item.important_document ? `<b class="project-file-trilingual">中/英/日</b>` : ""}</span>
     <span>${escapeHtml(item.directory || "仓库根目录")}</span>
     ${showReason && item.reason ? `<em>${escapeHtml(item.reason)}</em>` : ""}
   </button>`;

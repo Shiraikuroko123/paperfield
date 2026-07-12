@@ -6,6 +6,7 @@ $pidPath = Join-Path $profile "paperfield.pid"
 $tunnelPidPath = Join-Path $profile "cloudflared.pid"
 $ngrokPidPath = Join-Path $profile "ngrok.pid"
 $launcherPidPath = Join-Path $profile "share-launcher.pid"
+$shareUrlPath = Join-Path $profile "share-url.txt"
 
 if (Test-Path -LiteralPath $ngrokPidPath) {
     $ngrokId = [int](Get-Content -LiteralPath $ngrokPidPath -Raw).Trim()
@@ -46,6 +47,7 @@ if ($listener) {
     }
 }
 Remove-Item -LiteralPath $launcherPidPath -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $shareUrlPath -ErrorAction SilentlyContinue
 
 if (-not (Test-Path -LiteralPath $pidPath) -and -not (Test-Path -LiteralPath $tunnelPidPath)) {
     Write-Host "Paperfield beta sharing is stopped."

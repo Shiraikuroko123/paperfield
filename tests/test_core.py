@@ -366,7 +366,10 @@ class FeedTests(unittest.TestCase):
             )
 
     def test_project_workspace_groups_files_and_sanitizes_readme(self):
-        files = ["README.md", "src/model.py", "scripts/train.py", "configs/base.yaml", "tests/test_model.py"]
+        files = [
+            "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "docs/guide.md",
+            "src/model.py", "scripts/train.py", "configs/base.yaml", "tests/test_model.py",
+        ]
         with tempfile.TemporaryDirectory() as directory:
             service = APP.ProjectAssetService(APP.PaperStore(Path(directory) / "papers.db"))
             groups = {item["label"]: item["files"] for item in service.file_groups(files)}
@@ -382,6 +385,10 @@ class FeedTests(unittest.TestCase):
             self.assertIn("README.md", sections["从这里开始"])
             self.assertIn("scripts/train.py", sections["运行链路"])
             self.assertIn("README.md", important)
+            self.assertIn("CHANGELOG.md", important)
+            self.assertIn("CONTRIBUTING.md", important)
+            self.assertTrue(all(item["important_document"] for item in entries if item["path"].endswith(".md")))
+            self.assertFalse(next(item for item in entries if item["path"] == "src/model.py")["important_document"])
             self.assertEqual(next(item for item in entries if item["path"] == "src/model.py")["language"], "Python")
             self.assertNotIn("<script", rendered)
             self.assertNotIn("alert(1)", rendered)

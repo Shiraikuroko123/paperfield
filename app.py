@@ -2639,6 +2639,7 @@ class ProjectAssetService:
                     "group_key": key,
                     "group_label": label,
                     "language": self._language(path),
+                    "important_document": self.is_important_document(path),
                 }
             )
         return entries
@@ -2704,17 +2705,16 @@ class ProjectAssetService:
             if Path(entry["path"]).suffix.lower() != ".md":
                 continue
             route = self._reading_route(entry["path"])
-            if not route or route[0] not in {"start", "docs", "flow"}:
-                continue
-            documents.append({**entry, "reason": route[1], "priority": route[2]})
+            reason = route[1] if route else "Markdown 文档，支持中英日按需阅读"
+            priority = route[2] if route else 60 - min(len(Path(entry["path"]).parts), 8)
+            documents.append({**entry, "reason": reason, "priority": priority})
         return sorted(
             documents,
             key=lambda item: (-item["priority"], len(Path(item["path"]).parts), item["path"].lower()),
         )[:12]
 
     def is_important_document(self, path: str) -> bool:
-        route = self._reading_route(path)
-        return Path(path).suffix.lower() == ".md" and bool(route and route[0] in {"start", "docs", "flow"})
+        return Path(path).suffix.lower() == ".md"
 
     @staticmethod
     def _unwrap_markdown_divs(value: str) -> str:

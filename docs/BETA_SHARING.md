@@ -77,7 +77,15 @@ Free ngrok accounts currently require agent version `3.20.0` or newer. Run `ngro
 
 ## Start Sharing
 
-Run:
+For one-click background sharing on Windows, install the desktop shortcuts once:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-beta-shortcuts.ps1
+```
+
+Double-click **Paperfield Share** to start the protected service in a hidden background process. Paperfield copies the current HTTPS address to the clipboard and opens it in the default browser. Double-click **Stop Paperfield Share** when sharing is finished. No PowerShell window needs to remain visible, and sharing does not start automatically with Windows.
+
+The command-line workflow remains available for troubleshooting. Run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\start-beta-ngrok.ps1
