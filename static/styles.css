@@ -94,7 +94,8 @@ a { color: var(--primary); text-underline-offset: 3px; }
 .brand-block strong { display: block; color: var(--rail-ink); font-size: 15px; letter-spacing: 0; }
 .brand-block span { display: block; color: var(--rail-muted); font-size: 11px; margin-top: 2px; }
 
-.rail-nav { display: grid; gap: 3px; }
+.rail-nav { display: flex; flex: 1; flex-direction: column; gap: 3px; }
+.rail-project-link { margin-top: auto; }
 
 .rail-link {
   width: 100%;
@@ -706,7 +707,8 @@ a { color: var(--primary); text-underline-offset: 3px; }
   .app-shell { display: block; }
   .app-rail { position: static; width: 100%; height: auto; padding: 10px 12px; border-right: 0; border-bottom: 1px solid var(--line); }
   .brand-block, .rail-foot { display: none; }
-  .rail-nav { display: flex; overflow-x: auto; gap: 5px; }
+  .rail-nav { display: flex; flex: none; overflow-x: auto; gap: 5px; }
+  .rail-project-link { margin-top: 0; }
   .rail-link { width: auto; min-width: max-content; gap: 8px; padding: 7px 9px; }
   .workspace-header { top: 0; height: 58px; padding: 0 12px; }
   #openConnectorButton { display: none; }

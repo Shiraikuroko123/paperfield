@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="具身智能与大模型论文、开源项目每周研究工作台">
   <title>Paperfield</title>
-  <link rel="stylesheet" href="/styles.css?v=0.12.3">
+  <link rel="stylesheet" href="/styles.css?v=0.12.5">
 </head>
 <body>
   <div class="app-shell">
@@ -28,9 +28,6 @@
         <button class="rail-link" data-view="top">
           <span>顶会顶刊</span><b id="navTopCount">0</b>
         </button>
-        <button class="rail-link" data-view="projects">
-          <span>GitHub 项目</span><b id="navProjectCount">0</b>
-        </button>
         <button class="rail-link" data-topic="具身智能">
           <span>具身智能</span><b id="navEmbodiedCount">0</b>
         </button>
@@ -42,6 +39,9 @@
         </button>
         <button class="rail-link" data-view="favorites">
           <span>收藏</span><b id="navFavoriteCount">0</b>
+        </button>
+        <button class="rail-link rail-project-link" data-view="projects">
+          <span>GitHub 项目</span><b id="navProjectCount">0</b>
         </button>
       </nav>
 
@@ -375,6 +375,6 @@
 
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
   <script src="/vendor/pdfjs/pdf.min.js?v=3.11.174"></script>
-  <script src="/app.js?v=0.12.4" defer></script>
+  <script src="/app.js?v=0.12.5" defer></script>
 </body>
 </html>

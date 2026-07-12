@@ -343,6 +343,7 @@ const isProjectMode = () => state.view === "projects";
 function applyViewMode() {
   const projectMode = isProjectMode();
   const recommendedMode = state.view === "recommended";
+  const topicMode = Boolean(state.topic) && !projectMode && !recommendedMode;
   document.querySelector(".filter-strip").hidden = recommendedMode && state.weeklyKind === "projects";
   const contentGrid = document.querySelector(".content-grid");
   contentGrid.classList.toggle("is-recommended", recommendedMode);
@@ -352,7 +353,7 @@ function applyViewMode() {
   document.querySelectorAll(".project-only-filter").forEach((item) => { item.hidden = !projectMode; });
   el("dateFilter").closest("label").hidden = recommendedMode;
   document.querySelector(".score-guide").hidden = projectMode || (recommendedMode && state.weeklyKind === "projects");
-  el("streamTitle").textContent = projectMode ? "GitHub 项目" : recommendedMode ? "每周精选" : "论文流";
+  el("streamTitle").textContent = projectMode ? "GitHub 项目" : recommendedMode ? "每周精选" : topicMode ? `${state.topic}论文` : "论文流";
   el("loadMoreButton").textContent = projectMode ? "加载更多项目" : "加载更多论文";
   el("weeklyKindTabs").hidden = !recommendedMode;
   el("weeklyPreparation").hidden = !recommendedMode || state.weeklyKind !== "papers" || !state.weeklyPreparation;
@@ -362,8 +363,8 @@ function applyViewMode() {
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-selected", String(active));
   });
-  el("overviewTitle").textContent = projectMode ? "今天有哪些项目在更新" : recommendedMode ? "本周先读与复现" : "今天值得读什么";
-  el("overviewMessage").textContent = projectMode ? "开源仓库变更与论文关联信号" : recommendedMode ? "自然周研究队列 · 资料后台预处理" : "公开论文元数据与阅读状态";
+  el("overviewTitle").textContent = projectMode ? "今天有哪些项目在更新" : recommendedMode ? "本周先读与复现" : topicMode ? `${state.topic}论文流` : "今天值得读什么";
+  el("overviewMessage").textContent = projectMode ? "开源仓库变更与论文关联信号" : recommendedMode ? "自然周研究队列 · 资料后台预处理" : topicMode ? `浏览全部${state.topic}论文，不受每周精选数量限制` : "公开论文元数据与阅读状态";
   el("statTotalLabel").textContent = projectMode ? "GitHub 项目" : recommendedMode ? "论文精选" : "收录论文";
   el("statUnreadLabel").textContent = projectMode ? "今日更新" : recommendedMode ? "候选论文" : "未读";
   el("statFavoriteLabel").textContent = projectMode ? "论文关联" : recommendedMode ? "项目精选" : "已收藏";
@@ -947,6 +948,7 @@ async function loadPapers({ preserveSelection = true, append = false } = {}) {
     state.total = payload.total;
     renderPapers();
     el("resultCount").textContent = `${payload.total} 篇`;
+    if (state.stats && state.topic) el("statTotal").textContent = payload.total;
     el("loadMoreWrap").hidden = !payload.has_more;
     if (append) return;
     if (!preserveSelection || !state.papers.some((paper) => paper.id === state.selectedId)) {
@@ -1891,6 +1893,7 @@ async function loadOptions() {
     select.innerHTML = `<option value="">${placeholder}</option>${values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("")}`;
   };
   fill(el("topicFilter"), options.topics, "全部主题");
+  if (state.topic && options.topics.includes(state.topic)) el("topicFilter").value = state.topic;
   fill(el("tierFilter"), options.tiers, "全部层级");
   fill(el("platformFilter"), options.platforms, "全部平台");
   const coverageItems = options.venue_coverage?.items || [];
@@ -2098,8 +2101,10 @@ function bindEvents() {
   }));
 
   document.querySelectorAll(".rail-link").forEach((button) => button.addEventListener("click", () => {
-    state.topic = button.dataset.topic || "";
-    state.view = button.dataset.view || "recommended";
+    const topic = button.dataset.topic || "";
+    state.topic = topic;
+    state.view = topic ? "all" : button.dataset.view || "recommended";
+    el("topicFilter").value = topic;
     applyViewMode();
     document.querySelectorAll(".rail-link").forEach((item) => item.classList.toggle("is-active", item === button));
     loadPapers({ preserveSelection: false });

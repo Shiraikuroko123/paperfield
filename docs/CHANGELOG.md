@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.5
+
+- Fixed topic navigation so 具身智能、大语言模型 and 多模态 open their complete filtered paper streams rather than the small weekly recommendation subset.
+- Moved GitHub 项目 to the bottom of the desktop sidebar navigation.
+
 ## 0.12.4
 
 - Added a safe in-app model picker that queries only the current instance's OpenAI-compatible `/models` endpoint and persists a Paperfield-specific model override without exposing credentials.
