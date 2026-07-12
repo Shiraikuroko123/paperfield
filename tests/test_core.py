@@ -386,6 +386,16 @@ class FeedTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "之和必须等于 100"):
                 settings.update_recommendation_weights({**weights, "academic": 21})
 
+    def test_pdf_cache_removal_tolerates_open_windows_file(self):
+        locked = mock.Mock()
+        locked.unlink.side_effect = PermissionError("in use")
+        self.assertFalse(APP.PaperAssetService._try_remove(locked))
+
+        removable = mock.Mock()
+        removable.exists.return_value = False
+        self.assertTrue(APP.PaperAssetService._try_remove(removable))
+        removable.unlink.assert_called_once_with(missing_ok=True)
+
     def test_cloud_operations_are_counted_and_inventory_is_recorded(self):
         class FakeBody(io.BytesIO):
             pass

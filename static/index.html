@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="具身智能与大模型论文、开源项目每周研究工作台">
   <title>Paperfield</title>
-  <link rel="stylesheet" href="/styles.css?v=0.12.1">
+  <link rel="stylesheet" href="/styles.css?v=0.12.2">
 </head>
 <body>
   <div class="app-shell">
@@ -197,10 +197,14 @@
 
       <div class="reader-grid">
         <section class="pdf-workspace" aria-label="论文 PDF">
+          <div class="pdf-actions" id="pdfActions" hidden>
+            <a id="pdfOpenButton" href="#" target="_blank" rel="noreferrer">新窗口打开</a>
+          </div>
           <div class="pdf-status" id="pdfStatus">
             <strong>正在寻找公开 PDF</strong>
             <span>依次检查公开来源与作者存档</span>
           </div>
+          <div class="pdf-canvas-viewer" id="pdfCanvasViewer" hidden></div>
           <iframe id="pdfFrame" title="论文 PDF 阅读器" hidden></iframe>
           <div class="pdf-unavailable" id="pdfUnavailable" hidden>
             <strong>暂未找到公开 PDF 副本</strong>
@@ -325,7 +329,7 @@
             <form class="chat-form" id="projectChatForm">
               <label for="projectChatQuestion">向代码提问</label>
               <textarea id="projectChatQuestion" rows="3" placeholder="例如：这个项目的推理入口和数据流在哪里？"></textarea>
-              <button class="button button-primary" type="submit">发送问题</button>
+              <button class="button button-primary" id="projectChatSubmit" type="button">发送问题</button>
             </form>
           </section>
         </aside>
@@ -357,6 +361,7 @@
   </dialog>
 
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
-  <script src="/app.js?v=0.12.1" defer></script>
+  <script src="/vendor/pdfjs/pdf.min.js?v=3.11.174"></script>
+  <script src="/app.js?v=0.12.2" defer></script>
 </body>
 </html>

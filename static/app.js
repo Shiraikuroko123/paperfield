@@ -10,6 +10,10 @@ const state = {
   selectedProject: null,
   readerPaper: null,
   readerAsset: null,
+  readerPdfObjectUrl: "",
+  readerPdfDocument: null,
+  readerPdfObserver: null,
+  readerPdfToken: 0,
   status: "",
   topic: "",
   view: "recommended",
@@ -47,6 +51,8 @@ const DEFAULT_SCORE_WEIGHTS = {
 };
 
 const el = (id) => document.getElementById(id);
+const NGROK_BYPASS_HEADERS = { "ngrok-skip-browser-warning": "paperfield" };
+if (globalThis.pdfjsLib) globalThis.pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.min.js?v=3.11.174";
 
 const escapeHtml = (value = "") => String(value)
   .replaceAll("&", "&amp;")
@@ -56,11 +62,20 @@ const escapeHtml = (value = "") => String(value)
   .replaceAll("'", "&#039;");
 
 const api = async (path, options = {}) => {
+  const { headers = {}, ...requestOptions } = options;
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options,
+    credentials: "same-origin",
+    ...requestOptions,
+    headers: { "Content-Type": "application/json", Accept: "application/json", ...NGROK_BYPASS_HEADERS, ...headers },
   });
-  const payload = await response.json();
+  const raw = await response.text();
+  let payload;
+  try {
+    payload = raw ? JSON.parse(raw) : {};
+  } catch {
+    const ngrokWarning = raw.includes("ERR_NGROK_6024") || raw.includes("ngrok-free");
+    throw new Error(ngrokWarning ? "ngrok 访问确认页拦截了接口请求，请刷新页面后重试" : "服务返回了网页而不是接口数据");
+  }
   if (response.status === 401 && payload.auth_required) {
     const next = `${window.location.pathname}${window.location.search}`;
     window.location.replace(`/login?next=${encodeURIComponent(next)}`);
@@ -70,8 +85,14 @@ const api = async (path, options = {}) => {
 };
 
 async function loadAuthUser() {
-  const response = await fetch("/api/auth/me", { headers: { Accept: "application/json" } });
-  const payload = await response.json();
+  const response = await fetch("/api/auth/me", { credentials: "same-origin", headers: { Accept: "application/json", ...NGROK_BYPASS_HEADERS } });
+  const raw = await response.text();
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    throw new Error(raw.includes("ERR_NGROK_6024") ? "请先通过 ngrok 访问确认页" : "登录状态接口返回异常");
+  }
   if (response.status === 401) {
     const next = `${window.location.pathname}${window.location.search}`;
     window.location.replace(`/login?next=${encodeURIComponent(next)}`);
@@ -673,12 +694,66 @@ function renderProjectChatHistory(items = []) {
   history.scrollTop = history.scrollHeight;
 }
 
-async function loadProjectChatHistory(fullName) {
+async function loadProjectChatHistory(fullName, force = false) {
   try {
     const payload = await api(`/api/projects/${encodeURIComponent(fullName)}/chat`);
+    if (state.projectWorkspace?.project?.full_name !== fullName) return;
+    if (!force && el("projectChatSubmit").dataset.busy === "1") return;
     renderProjectChatHistory(payload.items);
   } catch (error) {
+    if (!force && el("projectChatSubmit").dataset.busy === "1") return;
     renderProjectChatHistory([]);
+  }
+}
+
+function appendProjectChatMessage(role, content, pending = false) {
+  const history = el("projectChatHistory");
+  history.querySelector(".chat-empty")?.remove();
+  const message = document.createElement("div");
+  message.className = `chat-message is-${role}${pending ? " is-pending" : ""}`;
+  message.innerHTML = `<strong>${role === "user" ? "你" : "代码导师"}</strong><p>${escapeHtml(content)}</p>`;
+  history.append(message);
+  history.scrollTop = history.scrollHeight;
+  return message;
+}
+
+async function submitProjectQuestion(event) {
+  event?.preventDefault();
+  const workspace = state.projectWorkspace;
+  const input = el("projectChatQuestion");
+  const button = el("projectChatSubmit");
+  const question = input.value.trim();
+  if (button.dataset.busy === "1") return;
+  if (!workspace) {
+    toast("项目源码尚未载入", true);
+    return;
+  }
+  if (!question) {
+    input.focus();
+    return;
+  }
+  button.dataset.busy = "1";
+  button.disabled = true;
+  button.textContent = "正在回答";
+  input.value = "";
+  appendProjectChatMessage("user", question);
+  const pending = appendProjectChatMessage("assistant", "正在读取当前文件与项目源码…", true);
+  try {
+    await api(`/api/projects/${encodeURIComponent(workspace.project.full_name)}/chat`, {
+      method: "POST",
+      body: JSON.stringify({ question, selected_path: state.projectSelectedPath }),
+    });
+    await loadProjectChatHistory(workspace.project.full_name, true);
+    monitorProjectReadingBackup(workspace.project.full_name);
+  } catch (error) {
+    pending.classList.remove("is-pending");
+    pending.querySelector("p").textContent = `发送失败：${error.message}`;
+    toast(error.message, true);
+  } finally {
+    delete button.dataset.busy;
+    button.disabled = false;
+    button.textContent = "发送问题";
+    input.focus();
   }
 }
 
@@ -1169,7 +1244,136 @@ function setPdfStatus(title, detail = "") {
   el("pdfStatus").hidden = false;
   el("pdfStatus").innerHTML = `<strong>${escapeHtml(title)}</strong>${detail ? `<span>${escapeHtml(detail)}</span>` : ""}`;
   el("pdfFrame").hidden = true;
+  el("pdfActions").hidden = true;
   el("pdfUnavailable").hidden = true;
+}
+
+function releaseReaderPdf() {
+  state.readerPdfToken += 1;
+  state.readerPdfObserver?.disconnect();
+  state.readerPdfObserver = null;
+  const documentTask = state.readerPdfDocument;
+  state.readerPdfDocument = null;
+  if (documentTask?.destroy) Promise.resolve(documentTask.destroy()).catch(() => {});
+  el("pdfCanvasViewer").replaceChildren();
+  el("pdfCanvasViewer").hidden = true;
+  el("pdfFrame").src = "about:blank";
+  el("pdfFrame").hidden = true;
+  el("pdfActions").hidden = true;
+  el("pdfOpenButton").href = "#";
+  if (state.readerPdfObjectUrl) URL.revokeObjectURL(state.readerPdfObjectUrl);
+  state.readerPdfObjectUrl = "";
+}
+
+async function renderPdfPage(pdfDocument, pageNumber, shell, token) {
+  if (shell.dataset.rendered || shell.dataset.rendering || state.readerPdfToken !== token) return;
+  shell.dataset.rendering = "1";
+  shell.classList.add("is-rendering");
+  try {
+    const page = await pdfDocument.getPage(pageNumber);
+    if (state.readerPdfToken !== token) return;
+    const baseViewport = page.getViewport({ scale: 1 });
+    const viewerWidth = Math.max(280, el("pdfCanvasViewer").clientWidth - 36);
+    const viewport = page.getViewport({ scale: viewerWidth / baseViewport.width });
+    const outputScale = Math.min(2, window.devicePixelRatio || 1);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.floor(viewport.width * outputScale);
+    canvas.height = Math.floor(viewport.height * outputScale);
+    canvas.style.width = `${Math.floor(viewport.width)}px`;
+    canvas.style.height = `${Math.floor(viewport.height)}px`;
+    shell.style.minHeight = `${Math.floor(viewport.height)}px`;
+    shell.prepend(canvas);
+    await page.render({
+      canvasContext: canvas.getContext("2d", { alpha: false }),
+      viewport,
+      transform: outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0],
+    }).promise;
+    shell.dataset.rendered = "1";
+  } finally {
+    delete shell.dataset.rendering;
+    shell.classList.remove("is-rendering");
+  }
+}
+
+async function renderPdfDocument(blob, token) {
+  if (!globalThis.pdfjsLib) return false;
+  const loadingTask = globalThis.pdfjsLib.getDocument({ data: new Uint8Array(await blob.arrayBuffer()) });
+  const pdfDocument = await loadingTask.promise;
+  if (state.readerPdfToken !== token) {
+    await pdfDocument.destroy();
+    return true;
+  }
+  state.readerPdfDocument = pdfDocument;
+  const viewer = el("pdfCanvasViewer");
+  const fragment = document.createDocumentFragment();
+  for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
+    const shell = document.createElement("section");
+    shell.className = "pdf-page";
+    shell.dataset.page = String(pageNumber);
+    shell.innerHTML = `<span class="pdf-page-label">${pageNumber} / ${pdfDocument.numPages}</span>`;
+    fragment.append(shell);
+  }
+  viewer.replaceChildren(fragment);
+  viewer.hidden = false;
+  const firstPage = viewer.querySelector('[data-page="1"]');
+  await renderPdfPage(pdfDocument, 1, firstPage, token);
+  state.readerPdfObserver = new IntersectionObserver((entries) => {
+    entries.filter((entry) => entry.isIntersecting).forEach((entry) => {
+      const shell = entry.target;
+      renderPdfPage(pdfDocument, Number(shell.dataset.page), shell, token).catch(() => {});
+      state.readerPdfObserver?.unobserve(shell);
+    });
+  }, { root: viewer, rootMargin: "1200px 0px" });
+  viewer.querySelectorAll(".pdf-page:not([data-rendered])").forEach((shell) => state.readerPdfObserver.observe(shell));
+  return true;
+}
+
+async function loadReaderPdf(asset) {
+  const requestedPaperId = asset.paper_id;
+  releaseReaderPdf();
+  const token = state.readerPdfToken;
+  setPdfStatus("正在载入 PDF", asset.cloud_available && !asset.local_cached ? "正在从云端读取" : "正在读取已缓存文件");
+  try {
+    const response = await fetch(asset.pdf_url, {
+      credentials: "same-origin",
+      headers: { Accept: "application/pdf", ...NGROK_BYPASS_HEADERS },
+    });
+    if (response.status === 401) {
+      const next = `${window.location.pathname}${window.location.search}`;
+      window.location.replace(`/login?next=${encodeURIComponent(next)}`);
+      return;
+    }
+    if (!response.ok) {
+      const raw = await response.text();
+      let message = `PDF 读取失败：${response.status}`;
+      try { message = JSON.parse(raw).error || message; } catch {
+        if (raw.includes("ERR_NGROK_6024")) message = "ngrok 访问确认页拦截了 PDF 请求";
+      }
+      throw new Error(message);
+    }
+    const blob = await response.blob();
+    const signature = new TextDecoder("ascii").decode(await blob.slice(0, 5).arrayBuffer());
+    if (!signature.startsWith("%PDF")) throw new Error("服务返回的内容不是有效 PDF");
+    if (!el("readerDialog").open || state.readerPaper?.id !== requestedPaperId || state.readerPdfToken !== token) return;
+    const pdfBlob = blob.type === "application/pdf" ? blob : new Blob([blob], { type: "application/pdf" });
+    state.readerPdfObjectUrl = URL.createObjectURL(pdfBlob);
+    el("pdfOpenButton").href = state.readerPdfObjectUrl;
+    let renderedWithPdfJs = false;
+    try {
+      renderedWithPdfJs = await renderPdfDocument(pdfBlob, token);
+    } catch (error) {
+      console.warn("PDF.js rendering failed, using the browser viewer", error);
+    }
+    if (!renderedWithPdfJs) {
+      el("pdfFrame").src = `${state.readerPdfObjectUrl}#view=FitH`;
+      el("pdfFrame").hidden = false;
+    }
+    el("pdfStatus").hidden = true;
+    el("pdfUnavailable").hidden = true;
+    el("pdfActions").hidden = false;
+  } catch (error) {
+    setPdfStatus("PDF 载入失败", error.message);
+  }
 }
 
 function updateReaderStorageAction() {
@@ -1211,13 +1415,18 @@ function renderReaderAsset(paper, asset, reloadPdf = true) {
   el("readerStorageMode").value = asset.storage_mode || el("readerStorageMode").value;
   updateReaderStorageAction();
   if (asset.pdf_available) {
-    el("pdfStatus").hidden = true;
     el("pdfUnavailable").hidden = true;
-    if (reloadPdf) el("pdfFrame").src = `${asset.pdf_url}#view=FitH`;
-    el("pdfFrame").hidden = false;
+    if (reloadPdf) loadReaderPdf(asset);
+    else if (state.readerPdfObjectUrl) {
+      el("pdfStatus").hidden = true;
+      if (state.readerPdfDocument) el("pdfCanvasViewer").hidden = false;
+      else el("pdfFrame").hidden = false;
+      el("pdfActions").hidden = false;
+    }
     el("readerCacheButton").textContent = asset.cloud_available && !asset.local_cached ? "从云端读取" : "PDF 已缓存";
     if (asset.fulltext_available) loadTranslationPage(1);
   } else {
+    releaseReaderPdf();
     el("pdfStatus").hidden = true;
     el("pdfFrame").hidden = true;
     el("pdfUnavailable").hidden = false;
@@ -1255,15 +1464,21 @@ async function importReaderPdf(file) {
   try {
     const response = await fetch(`/api/papers/${encodeURIComponent(paper.id)}/import`, {
       method: "POST",
+      credentials: "same-origin",
       headers: {
         "Content-Type": "application/pdf",
+        ...NGROK_BYPASS_HEADERS,
         "X-Paperfield-Filename": encodeURIComponent(file.name),
         "X-Paperfield-Storage": el("readerStorageMode").value,
         "X-Paperfield-Share-Confirmed": el("readerShareConfirmed").checked ? "1" : "0",
       },
       body: file,
     });
-    const asset = await response.json();
+    const raw = await response.text();
+    let asset;
+    try { asset = JSON.parse(raw); } catch {
+      throw new Error(raw.includes("ERR_NGROK_6024") ? "ngrok 访问确认页拦截了上传请求" : "上传接口返回了非 JSON 内容");
+    }
     if (response.status === 401 && asset.auth_required) {
       const next = `${window.location.pathname}${window.location.search}`;
       window.location.replace(`/login?next=${encodeURIComponent(next)}`);
@@ -1405,6 +1620,7 @@ async function loadChatHistory(paperId) {
 
 async function openReader(paperId) {
   const dialog = el("readerDialog");
+  releaseReaderPdf();
   state.selectedId = paperId;
   state.readerPaper = null;
   state.readerAsset = null;
@@ -1757,7 +1973,7 @@ function bindEvents() {
 
   el("readerClose").addEventListener("click", () => el("readerDialog").close());
   el("readerDialog").addEventListener("close", () => {
-    el("pdfFrame").src = "about:blank";
+    releaseReaderPdf();
     state.readerPaper = null;
     state.readerAsset = null;
   });
@@ -1792,26 +2008,10 @@ function bindEvents() {
       toast("浏览器不允许访问剪贴板", true);
     }
   });
-  el("projectChatForm").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const workspace = state.projectWorkspace;
-    const question = el("projectChatQuestion").value.trim();
-    if (!workspace || !question) return;
-    const button = event.submitter || el("projectChatForm").querySelector("button[type=submit]");
-    button.disabled = true;
-    el("projectChatQuestion").value = "";
-    try {
-      await api(`/api/projects/${encodeURIComponent(workspace.project.full_name)}/chat`, {
-        method: "POST",
-        body: JSON.stringify({ question, selected_path: state.projectSelectedPath }),
-      });
-      await loadProjectChatHistory(workspace.project.full_name);
-      monitorProjectReadingBackup(workspace.project.full_name);
-    } catch (error) {
-      toast(error.message, true);
-    } finally {
-      button.disabled = false;
-    }
+  el("projectChatForm").addEventListener("submit", submitProjectQuestion);
+  el("projectChatSubmit").addEventListener("click", submitProjectQuestion);
+  el("projectChatQuestion").addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") submitProjectQuestion(event);
   });
   el("translationPage").addEventListener("change", () => loadTranslationPage(Number(el("translationPage").value) || 1));
   el("translatePageButton").addEventListener("click", translateCurrentPage);

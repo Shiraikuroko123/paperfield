@@ -479,6 +479,16 @@ a { color: var(--primary); text-underline-offset: 3px; }
 .reader-grid { min-height: 0; display: grid; grid-template-columns: minmax(520px, 3fr) minmax(390px, 2fr); }
 .pdf-workspace { min-width: 0; min-height: 0; position: relative; background: var(--rail); border-right: 1px solid var(--rail-line); }
 .pdf-workspace iframe { width: 100%; height: 100%; border: 0; background: var(--rail); }
+.pdf-canvas-viewer { position: absolute; inset: 0; overflow: auto; padding: 16px 18px 42px; background: oklch(0.17 0.008 145); overscroll-behavior: contain; }
+.pdf-canvas-viewer[hidden] { display: none; }
+.pdf-page { position: relative; width: 100%; min-height: 240px; display: grid; place-items: center; margin: 0 auto 16px; background: oklch(0.22 0.008 145); }
+.pdf-page canvas { display: block; max-width: 100%; height: auto; background: white; }
+.pdf-page-label { position: absolute; right: 7px; bottom: 6px; padding: 2px 5px; border-radius: 3px; background: oklch(0.18 0.01 145 / 0.8); color: oklch(0.82 0.01 145); font-family: "Cascadia Mono", Consolas, monospace; font-size: 8px; }
+.pdf-page.is-rendering::before { content: ""; position: absolute; left: calc(50% - 11px); top: calc(50% - 11px); width: 22px; height: 22px; border: 2px solid oklch(0.42 0.02 145); border-top-color: var(--signal); border-radius: 50%; animation: pdf-spin 800ms linear infinite; }
+.pdf-actions { position: absolute; top: 9px; right: 12px; z-index: 3; }
+.pdf-actions[hidden] { display: none; }
+.pdf-actions a { display: inline-flex; align-items: center; min-height: 30px; padding: 5px 9px; border: 1px solid oklch(0.44 0.02 145); border-radius: var(--radius-control); background: oklch(0.22 0.012 145); color: oklch(0.92 0.01 145); font-size: 10px; text-decoration: none; }
+.pdf-actions a:hover { border-color: color-mix(in oklch, var(--signal) 55%, oklch(0.44 0.02 145)); color: var(--signal); }
 .pdf-status, .pdf-unavailable { position: absolute; inset: 0; display: grid; align-content: center; justify-items: center; gap: 8px; padding: 36px; color: oklch(0.92 0.008 145); text-align: center; }
 .pdf-status strong, .pdf-unavailable strong { font-size: 15px; }
 .pdf-status span, .pdf-unavailable p { max-width: 50ch; margin: 0; color: oklch(0.76 0.012 145); font-size: 11px; line-height: 1.6; }
@@ -510,12 +520,19 @@ a { color: var(--primary); text-underline-offset: 3px; }
 .chat-empty { margin: 34px auto; color: var(--muted); font-size: 12px; }
 .chat-message { max-width: 92%; padding: 10px 12px; border-radius: var(--radius-panel); background: var(--surface); }
 .chat-message.is-user { justify-self: end; background: var(--primary-soft); }
+.chat-message.is-pending { color: var(--muted); }
+.chat-message.is-pending p::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 7px; border-radius: 50%; background: var(--primary); animation: pulse 1.1s ease-in-out infinite; }
 .chat-message strong { display: block; margin-bottom: 4px; font-size: 10px; }
 .chat-message p { margin: 0; color: var(--ink-soft); font-size: 12px; line-height: 1.65; white-space: pre-wrap; }
 .chat-form { position: sticky; bottom: -34px; display: grid; gap: 7px; padding-top: 12px; background: var(--bg); border-top: 1px solid var(--line); }
 .chat-form label { font-size: 11px; font-weight: 650; }
 .chat-form textarea { width: 100%; resize: vertical; border: 1px solid var(--line); border-radius: var(--radius-control); padding: 9px 10px; color: var(--ink); background: var(--bg); line-height: 1.5; }
 .chat-form button { justify-self: end; }
+#projectChatPanel { min-height: 0; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; padding-bottom: 18px; }
+#projectChatPanel.is-active { display: grid; }
+#projectChatPanel .chat-history { min-height: 0; overflow: auto; }
+#projectChatPanel .chat-form { position: static; bottom: auto; z-index: 2; }
+#projectChatSubmit { position: relative; z-index: 2; touch-action: manipulation; }
 .translation-toolbar { display: flex; align-items: center; gap: 7px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .translation-toolbar label, .translation-toolbar span { color: var(--muted); font-size: 11px; }
 .translation-toolbar input { width: 70px; border: 1px solid var(--line); border-radius: var(--radius-control); padding: 6px 8px; }
@@ -656,6 +673,7 @@ a { color: var(--primary); text-underline-offset: 3px; }
 @keyframes shimmer { to { background-position: -200% 0; } }
 @keyframes pulse { 50% { opacity: 0.45; } }
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
+@keyframes pdf-spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 1180px) {
   :root { --reading-width: 410px; }

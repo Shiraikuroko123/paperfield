@@ -59,7 +59,7 @@ SETTINGS_PATH = Path(os.environ.get("PAPERFIELD_SETTINGS_PATH", DATA_DIR / "sett
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
 INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", ROOT / "institutions.json")).expanduser().resolve()
-APP_VERSION = "0.12.1"
+APP_VERSION = "0.12.2"
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
 RECOMMENDATION_WEIGHT_KEYS = (
@@ -3816,8 +3816,18 @@ class PaperAssetService:
             if exclude and path.resolve() == exclude.resolve():
                 continue
             size = path.stat().st_size
+            if self._try_remove(path):
+                total -= size
+
+    @staticmethod
+    def _try_remove(path: Path | None) -> bool:
+        if not path:
+            return True
+        try:
             path.unlink(missing_ok=True)
-            total -= size
+            return not path.exists()
+        except PermissionError:
+            return False
 
     def _storage_mode(self, requested: str = "") -> str:
         mode = compact_text(requested).lower() or self.settings.get()["pdf_storage_mode"]
@@ -3835,8 +3845,8 @@ class PaperAssetService:
         if asset.get("cloud_pdf_key"):
             local_pdf_path = str(pdf_path) if pdf_path and pdf_path.exists() else ""
             if mode == "cloud" and pdf_path and pdf_path.exists():
-                pdf_path.unlink(missing_ok=True)
-                local_pdf_path = ""
+                if self._try_remove(pdf_path):
+                    local_pdf_path = ""
             return self.store.save_asset(paper_id, {"storage_mode": mode, "local_pdf_path": local_pdf_path})
         return self.store.get_asset(paper_id) if not pdf_path or not pdf_path.exists() else self._archive_asset(paper_id, mode)
 
@@ -3884,9 +3894,10 @@ class PaperAssetService:
         if existing.get("cloud_pdf_key") and self.cloud.configured:
             local_path = Path(existing.get("local_pdf_path", "")) if existing.get("local_pdf_path") else None
             if remove_local:
-                if local_path and local_path.exists():
-                    local_path.unlink(missing_ok=True)
-                saved = self.store.save_asset(paper_id, {"local_pdf_path": "", "storage_mode": "cloud"})
+                local_pdf_path = str(local_path) if local_path and local_path.exists() else ""
+                if local_path and local_path.exists() and self._try_remove(local_path):
+                    local_pdf_path = ""
+                saved = self.store.save_asset(paper_id, {"local_pdf_path": local_pdf_path, "storage_mode": "cloud"})
             else:
                 if not local_path or not local_path.exists():
                     self.pdf_path(paper_id)
@@ -3910,8 +3921,8 @@ class PaperAssetService:
             self.cloud.upload(text_path, text_key, "application/json")
         local_pdf_path = str(pdf_path)
         if remove_local:
-            pdf_path.unlink(missing_ok=True)
-            local_pdf_path = ""
+            if self._try_remove(pdf_path):
+                local_pdf_path = ""
         saved = self.store.save_asset(
             paper_id,
             {
@@ -4037,7 +4048,7 @@ class PaperAssetService:
                     saved = self._apply_storage_mode(paper["id"], mode)
                     return self.public_asset(paper["id"], saved)
                 except Exception as error:
-                    target.unlink(missing_ok=True)
+                    self._try_remove(target)
                     errors.append(f"{provider}: {error}")
             saved = self.store.save_asset(
                 paper["id"],
@@ -5905,8 +5916,6 @@ class AppHandler(SimpleHTTPRequestHandler):
         if project_action:
             full_name = urllib.parse.unquote(project_action.group(1))
             action = project_action.group(2)
-            if action in {"explain", "chat"} and not self.require_host_ai():
-                return
             project = STORE.get_project(full_name)
             if not project:
                 self.send_json({"error": "项目不存在"}, 404)
@@ -6164,6 +6173,8 @@ class AppHandler(SimpleHTTPRequestHandler):
         if project_action:
             full_name = urllib.parse.unquote(project_action.group(1))
             action = project_action.group(2)
+            if action in {"explain", "chat"} and not self.require_host_ai():
+                return
             project = STORE.get_project(full_name)
             if not project:
                 self.send_json({"error": "项目不存在"}, 404)

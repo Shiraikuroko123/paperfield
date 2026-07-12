@@ -24,10 +24,17 @@ form.addEventListener("submit", async (event) => {
   try {
     const response = await fetch("/api/auth/login", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "paperfield" },
       body: JSON.stringify({ username: username.value.trim(), password: password.value }),
     });
-    const payload = await response.json();
+    const text = await response.text();
+    let payload;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new Error(text.includes("ERR_NGROK_6024") ? "请先通过 ngrok 访问确认页" : "登录接口返回了非 JSON 内容");
+    }
     if (!response.ok) throw new Error(payload.error || "登录失败");
     window.location.replace(nextPath);
   } catch (requestError) {

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.2
+
+- Fixed ngrok warning pages being parsed as API JSON on shared clients.
+- PDF reading now uses an authenticated in-page Blob URL with a mobile-friendly new-window fallback.
+- Windows cache cleanup now tolerates PDFs that are still open instead of terminating the request.
+- Project questions now respond reliably on touch devices, show immediate progress, and preserve pending messages while chat history loads.
+
 ## 0.12.1
 
 - Added an optional Windows sign-in task that keeps private beta sharing available without daily shortcut clicks.
