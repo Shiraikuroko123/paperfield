@@ -95,7 +95,6 @@ a { color: var(--primary); text-underline-offset: 3px; }
 .brand-block span { display: block; color: var(--rail-muted); font-size: 11px; margin-top: 2px; }
 
 .rail-nav { display: flex; flex: 1; flex-direction: column; gap: 3px; }
-.rail-project-link { margin-top: auto; }
 
 .rail-link {
   width: 100%;
