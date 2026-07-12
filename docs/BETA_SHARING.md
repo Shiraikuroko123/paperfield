@@ -7,7 +7,7 @@ Paperfield can expose a temporary HTTPS address through ngrok without purchasing
 The beta profile lives under the ignored path:
 
 ```text
-data/profiles/beta/
+local/data/profiles/beta/
 ```
 
 On first preparation, Paperfield copies the public paper and GitHub project catalog, then removes:
@@ -31,7 +31,7 @@ The beta process can use the host computer's current CC Switch/OpenAI-compatible
 Paperfield allows at most four shared-instance accounts. The ignored registry is:
 
 ```text
-data/profiles/beta/auth-users.json
+local/data/profiles/beta/auth-users.json
 ```
 
 The registry stores PBKDF2 password hashes and random salts, never plaintext passwords.

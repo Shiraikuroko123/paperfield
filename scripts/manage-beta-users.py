@@ -9,10 +9,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from app import AuthService  # noqa: E402
+from app import AuthService, DATA_DIR  # noqa: E402
 
 
-DEFAULT_USERS_PATH = ROOT / "data" / "profiles" / "beta" / "auth-users.json"
+DEFAULT_USERS_PATH = DATA_DIR / "profiles" / "beta" / "auth-users.json"
 
 
 def password_value(use_stdin: bool) -> str:

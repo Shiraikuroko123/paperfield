@@ -6,7 +6,7 @@
 ./scripts/run.cmd
 ```
 
-The default address is `http://127.0.0.1:8765` and the database is stored in `data/papers.db`.
+The default address is `http://127.0.0.1:8765` and new installations store the database in `local/data/papers.db`. Existing `data/papers.db` installations remain compatible.
 
 ## Docker
 
@@ -68,7 +68,7 @@ The beta ngrok workflow provides an authenticated single-instance preview withou
 Stop writes or use SQLite's backup API before copying the database. At minimum, preserve:
 
 ```text
-data/papers.db
+local/data/papers.db
 config.json
 venues.json
 ```

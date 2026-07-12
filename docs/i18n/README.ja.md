@@ -34,6 +34,8 @@ python app.py
 
 [http://127.0.0.1:8765](http://127.0.0.1:8765) を開きます。
 
+データベース、PDF、コードキャッシュ、解説、チャット、秘密情報は、Git 対象外の `local/` に保存されます。詳細は [公開ソースとローカルファイル](PUBLIC_AND_LOCAL.ja.md) を参照してください。テスターは通常 GitHub Releases のクリーンな圧縮ファイルを利用します。
+
 ## テスターとの共有
 
 [ベータ共有ガイド](../BETA_SHARING.md) に従って ngrok とアカウントを設定します。Windows ではデスクトップショートカットを一度だけインストールできます。
@@ -49,6 +51,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-beta-shortcuts.ps1
 - [ドキュメント一覧](../README.md)
 - [アーキテクチャ](../ARCHITECTURE.md)
 - [デプロイ](../DEPLOYMENT.md)
+- [公開ソースとローカルファイル](PUBLIC_AND_LOCAL.ja.md)
 - [ロードマップ](../ROADMAP.md)
 - [変更履歴](../CHANGELOG.md)
 - [コントリビューション](../../.github/CONTRIBUTING.md)

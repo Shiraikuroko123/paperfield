@@ -1,7 +1,9 @@
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$envPath = Join-Path $projectRoot ".env"
+$localRoot = Join-Path $projectRoot "local"
+$envPath = Join-Path $localRoot ".env"
+New-Item -ItemType Directory -Force -Path $localRoot | Out-Null
 
 Write-Host "Paperfield Cloudflare R2 setup" -ForegroundColor Green
 Write-Host "Credentials stay in the local .env file. Secret input is hidden."

@@ -34,6 +34,8 @@ python app.py
 
 Open [http://127.0.0.1:8765](http://127.0.0.1:8765). Paperfield refreshes while running and catches up after the computer has been offline.
 
+The database, PDFs, source cache, explanations, chats, and secrets live under the Git-ignored `local/` directory. See [Public source and local files](PUBLIC_AND_LOCAL.en.md). Testers should normally download the clean archive from GitHub Releases.
+
 ## Share with testers
 
 Follow the [beta-sharing guide](../BETA_SHARING.md) to configure ngrok and beta accounts. On Windows, install the desktop shortcuts once:
@@ -49,6 +51,7 @@ Use **Paperfield Share** to start in the background and **Stop Paperfield Share*
 - [Documentation map](../README.md)
 - [Architecture](../ARCHITECTURE.md)
 - [Deployment](../DEPLOYMENT.md)
+- [Public source and local files](PUBLIC_AND_LOCAL.en.md)
 - [Roadmap](../ROADMAP.md)
 - [Changelog](../CHANGELOG.md)
 - [Contributing](../../.github/CONTRIBUTING.md)

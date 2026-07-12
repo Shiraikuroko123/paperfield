@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.4
+
+- Separated private runtime state into the ignored `local/` directory while retaining legacy `.env` and `data/` compatibility.
+- Added trilingual documentation describing the public/private file boundary and the intended roles of GitHub Releases and Packages.
+- Added a tag-driven GitHub Release workflow that validates the repository and builds a clean Windows archive without private data.
+
 ## 0.10.3
 
 - Added focused arXiv update-date searches with bounded pagination so recently revised papers are not hidden by the latest-submission window.

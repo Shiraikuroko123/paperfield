@@ -6,8 +6,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SOURCE = ROOT / "data" / "papers.db"
-DEFAULT_PROFILE = ROOT / "data" / "profiles" / "beta"
+LEGACY_DATA = ROOT / "data"
+LOCAL_DATA = ROOT / "local" / "data"
+DEFAULT_DATA = LEGACY_DATA if LEGACY_DATA.exists() and not LOCAL_DATA.exists() else LOCAL_DATA
+DEFAULT_SOURCE = DEFAULT_DATA / "papers.db"
+DEFAULT_PROFILE = DEFAULT_DATA / "profiles" / "beta"
 
 
 PRIVATE_TABLES = (

@@ -38,7 +38,7 @@ For mainland-China access, Alibaba Cloud OSS and Tencent Cloud COS may offer bet
 
 ## Paperfield Configuration
 
-Paperfield never sends object-storage credentials to browser JavaScript. For a local installation, place them in the ignored `.env` file at the project root; Docker Compose reads the same file. Environment variables remain supported:
+Paperfield never sends object-storage credentials to browser JavaScript. For a local installation, place them in the ignored `local/.env` file. The legacy root `.env` remains supported, and Docker Compose can continue using it. Environment variables remain supported:
 
 ```env
 PAPERFIELD_S3_PROVIDER=Cloudflare R2
