@@ -58,9 +58,22 @@ try {
     if (-not $ready) { throw "Paperfield beta service did not start. Check $stderr" }
 
     Remove-Item -LiteralPath $ngrokLog -ErrorAction SilentlyContinue
-    $tunnel = Start-Process -FilePath $ngrokPath `
-        -ArgumentList "http", "$port", "--log", $ngrokLog, "--log-format", "json" `
-        -WindowStyle Hidden -PassThru
+    # Windows environment names are case-insensitive, so the canonical names cover both forms.
+    $proxyNames = @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
+    $savedProxy = @{}
+    try {
+        foreach ($name in $proxyNames) {
+            $savedProxy[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+            [Environment]::SetEnvironmentVariable($name, $null, "Process")
+        }
+        $tunnel = Start-Process -FilePath $ngrokPath `
+            -ArgumentList "http", "$port", "--log", $ngrokLog, "--log-format", "json" `
+            -WindowStyle Hidden -PassThru
+    } finally {
+        foreach ($name in $proxyNames) {
+            [Environment]::SetEnvironmentVariable($name, $savedProxy[$name], "Process")
+        }
+    }
     Set-Content -LiteralPath (Join-Path $profile "ngrok.pid") -Value $tunnel.Id
 
     $shareUrl = ""
@@ -74,8 +87,17 @@ try {
         if ($tunnel.HasExited) { break }
     }
     if (-not $shareUrl) {
-        $details = Get-Content $ngrokLog -Tail 8 -ErrorAction SilentlyContinue
-        throw "ngrok did not return an HTTPS URL. Add your free Authtoken first. $details"
+        $details = (Get-Content $ngrokLog -Tail 8 -ErrorAction SilentlyContinue) -join " "
+        if ($details -match "ERR_NGROK_9009") {
+            throw "ngrok rejected an inherited proxy. Paperfield cleared proxy variables for ngrok, so check ngrok.yml for proxy_url."
+        }
+        if ($details -match "ERR_NGROK_121") {
+            throw "ngrok is too old for this account. Run: ngrok update"
+        }
+        if ($details -match "authentication failed|ERR_NGROK_10[0-9]") {
+            throw "ngrok authentication failed. Run: ngrok config add-authtoken <TOKEN>"
+        }
+        throw "ngrok did not return an HTTPS URL. Check $ngrokLog"
     }
     Set-Content -LiteralPath (Join-Path $profile "share-url.txt") -Value $shareUrl
     Write-Host "Paperfield beta is protected by account login." -ForegroundColor Green

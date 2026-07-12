@@ -73,6 +73,8 @@ ngrok config add-authtoken <TOKEN>
 
 This is a one-time setup on the host computer. Testers do not need an ngrok account or application.
 
+Free ngrok accounts currently require agent version `3.20.0` or newer. Run `ngrok update` if startup reports `ERR_NGROK_121`.
+
 ## Start Sharing
 
 Run:
