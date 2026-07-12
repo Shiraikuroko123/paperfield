@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.1
+
+- Added an optional Windows sign-in task that keeps private beta sharing available without daily shortcut clicks.
+- Added stable reserved ngrok domain support through `PAPERFIELD_NGROK_URL`.
+- Scheduled sharing now retries after unexpected ngrok exits while the stop shortcut still ends the current session.
+
 ## 0.12.0
 
 - Added an interactive five-part scoring ring with draggable normalized weights and persistent settings.

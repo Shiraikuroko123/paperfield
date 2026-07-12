@@ -38,6 +38,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-beta-shortcuts.ps1
 
 **Paperfield Share** でバックグラウンド共有を開始し、**Stop Paperfield Share** で停止します。テスター側はブラウザだけで利用できます。
 
+Windows サインイン後に共有を自動起動するには、`powershell -ExecutionPolicy Bypass -File .\scripts\install-beta-autostart.ps1` を一度実行します。固定 URL には `local/.env` の `PAPERFIELD_NGROK_URL` を設定します。
+
 ## ドキュメント
 
 - [ドキュメント一覧](../README.md)

@@ -38,6 +38,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-beta-shortcuts.ps1
 
 Use **Paperfield Share** to start in the background and **Stop Paperfield Share** to stop. Testers only need a browser.
 
+To keep sharing available automatically after Windows sign-in, run `powershell -ExecutionPolicy Bypass -File .\scripts\install-beta-autostart.ps1` once. Set `PAPERFIELD_NGROK_URL` in `local/.env` for a stable reserved address.
+
 ## Documentation
 
 - [Documentation map](../README.md)

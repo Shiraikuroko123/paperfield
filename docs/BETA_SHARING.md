@@ -83,7 +83,31 @@ For one-click background sharing on Windows, install the desktop shortcuts once:
 powershell -ExecutionPolicy Bypass -File .\scripts\install-beta-shortcuts.ps1
 ```
 
-Double-click **Paperfield Share** to start the protected service in a hidden background process. Paperfield copies the current HTTPS address to the clipboard and opens it in the default browser. Double-click **Stop Paperfield Share** when sharing is finished. No PowerShell window needs to remain visible, and sharing does not start automatically with Windows.
+Double-click **Paperfield Share** to start the protected service in a hidden background process. Paperfield copies the current HTTPS address to the clipboard and opens it in the default browser. Double-click **Stop Paperfield Share** when sharing is finished. No PowerShell window needs to remain visible, and sharing does not start automatically with Windows unless the optional task below is installed.
+
+## Start automatically with Windows
+
+To keep the protected share available after every Windows sign-in, register the current-user scheduled task once:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-beta-autostart.ps1
+```
+
+The task runs invisibly, starts immediately, and retries when ngrok exits unexpectedly. Windows shutdown ends the process naturally. **Stop Paperfield Share** stops the current session; the scheduled task starts again at the next sign-in.
+
+Disable and remove automatic startup with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\install-beta-autostart.ps1 -Disable
+```
+
+For a link that remains unchanged after restarts, reserve a domain in the [ngrok dashboard](https://dashboard.ngrok.com/domains), then add it to the ignored `local/.env` file:
+
+```env
+PAPERFIELD_NGROK_URL=https://your-name.ngrok-free.app
+```
+
+Do not set a random temporary ngrok URL here; `--url` only works for a domain assigned to the current ngrok account.
 
 The command-line workflow remains available for troubleshooting. Run:
 

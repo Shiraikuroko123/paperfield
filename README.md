@@ -52,6 +52,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-beta-shortcuts.ps1
 
 之后双击桌面的 **Paperfield Share** 后台启动，双击 **Stop Paperfield Share** 停止。朋友只需要浏览器，不需要安装 Tailscale 或 ngrok。
 
+若希望登录 Windows 后自动保持共享，执行一次 `powershell -ExecutionPolicy Bypass -File .\scripts\install-beta-autostart.ps1`。固定链接可在 `local/.env` 中设置 `PAPERFIELD_NGROK_URL`。
+
 ## 数据来源与合规
 
 Paperfield 从 PMLR、CVF Open Access、arXiv、OpenAlex、Crossref、DBLP 等公开来源收集元数据，并专门覆盖 ACM MM、IEEE T-RO 等平台。它不会绕过付费墙或机构登录；找不到合法公开 PDF 时只保留来源页。

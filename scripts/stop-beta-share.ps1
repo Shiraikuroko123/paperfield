@@ -9,6 +9,13 @@ $tunnelPidPath = Join-Path $profile "cloudflared.pid"
 $ngrokPidPath = Join-Path $profile "ngrok.pid"
 $launcherPidPath = Join-Path $profile "share-launcher.pid"
 $shareUrlPath = Join-Path $profile "share-url.txt"
+$autoStartTaskName = "Paperfield Share Auto Start"
+
+$autoStartTask = Get-ScheduledTask -TaskName $autoStartTaskName -ErrorAction SilentlyContinue
+if ($autoStartTask -and $autoStartTask.State -eq "Running") {
+    Stop-ScheduledTask -TaskName $autoStartTaskName
+    Write-Host "Stopped the Paperfield auto-start task for this session."
+}
 
 if (Test-Path -LiteralPath $ngrokPidPath) {
     $ngrokId = [int](Get-Content -LiteralPath $ngrokPidPath -Raw).Trim()

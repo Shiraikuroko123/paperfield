@@ -7,6 +7,33 @@ $profile = if ((Test-Path -LiteralPath $legacyProfile) -and -not (Test-Path -Lit
 $users = Join-Path $profile "auth-users.json"
 $port = 8876
 
+function Get-PaperfieldEnvValue([string]$Name) {
+    $processValue = [Environment]::GetEnvironmentVariable($Name, "Process")
+    if ($processValue) { return $processValue.Trim() }
+    foreach ($path in @((Join-Path $root "local\.env"), (Join-Path $root ".env"))) {
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        foreach ($line in Get-Content -LiteralPath $path -Encoding UTF8) {
+            if ($line -match "^\s*$([Regex]::Escape($Name))\s*=\s*(.*)$") {
+                $value = $matches[1].Trim()
+                if ($value.Length -ge 2 -and (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'")))) {
+                    $value = $value.Substring(1, $value.Length - 2)
+                }
+                return $value.Trim()
+            }
+        }
+    }
+    return ""
+}
+
+$ngrokUrl = Get-PaperfieldEnvValue "PAPERFIELD_NGROK_URL"
+if ($ngrokUrl -and $ngrokUrl -notmatch '^https?://') { $ngrokUrl = "https://$ngrokUrl" }
+if ($ngrokUrl) {
+    $parsedNgrokUrl = $null
+    if (-not [Uri]::TryCreate($ngrokUrl, [UriKind]::Absolute, [ref]$parsedNgrokUrl) -or $parsedNgrokUrl.Scheme -ne "https" -or $parsedNgrokUrl.PathAndQuery -ne "/") {
+        throw "PAPERFIELD_NGROK_URL must be an HTTPS ngrok domain without a path."
+    }
+}
+
 python (Join-Path $PSScriptRoot "prepare-beta-profile.py")
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if (-not (Test-Path -LiteralPath $users)) {
@@ -68,8 +95,11 @@ try {
             $savedProxy[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
             [Environment]::SetEnvironmentVariable($name, $null, "Process")
         }
+        $ngrokArguments = @("http", "$port")
+        if ($ngrokUrl) { $ngrokArguments += @("--url", $ngrokUrl) }
+        $ngrokArguments += @("--log", "`"$ngrokLog`"", "--log-format", "json")
         $tunnel = Start-Process -FilePath $ngrokPath `
-            -ArgumentList "http", "$port", "--log", $ngrokLog, "--log-format", "json" `
+            -ArgumentList $ngrokArguments `
             -WindowStyle Hidden -PassThru
     } finally {
         foreach ($name in $proxyNames) {
@@ -106,6 +136,7 @@ try {
     Write-Host "Share URL: $shareUrl" -ForegroundColor Cyan
     Write-Host "Keep this window open. Press Ctrl+C to stop sharing." -ForegroundColor Yellow
     Wait-Process -Id $tunnel.Id
+    throw "ngrok tunnel exited unexpectedly."
 } finally {
     if ($tunnel -and -not $tunnel.HasExited) { Stop-Process -Id $tunnel.Id -Force }
     if (-not $paperfield.HasExited) { Stop-Process -Id $paperfield.Id -Force }
