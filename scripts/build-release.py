@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
-EXCLUDED_PREFIXES = (".github/", ".impeccable/", "tests/", "docs/development/")
+EXCLUDED_PREFIXES = (".github/", ".impeccable/", "tests/")
 PRIVATE_PREFIXES = ("data/", "local/")
 PRIVATE_NAMES = {".env", "auth-users.json", "papers.db"}
 
@@ -20,7 +20,7 @@ def tracked_files() -> list[str]:
 
 
 def version() -> str:
-    source = (ROOT / "app.py").read_text(encoding="utf-8")
+    source = (ROOT / "src" / "paperfield" / "app.py").read_text(encoding="utf-8")
     match = re.search(r'^APP_VERSION = "([^"]+)"', source, flags=re.M)
     if not match:
         raise RuntimeError("APP_VERSION was not found")
@@ -55,7 +55,7 @@ def main() -> None:
             if normalized.startswith(EXCLUDED_PREFIXES) or normalized == "scripts/build-release.py":
                 continue
             archive.write(ROOT / path, f"Paperfield/{normalized}")
-        archive.write(ROOT / ".env.example", "Paperfield/local/.env.example")
+        archive.write(ROOT / "deploy" / ".env.example", "Paperfield/local/.env.example")
         archive.writestr(
             "Paperfield/local/README.txt",
             "This folder is private and is never uploaded to GitHub.\n"

@@ -1,4 +1,4 @@
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
-python app.py --refresh
+python src\paperfield\app.py --refresh

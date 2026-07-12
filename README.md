@@ -1,83 +1,148 @@
 # Paperfield
 
-[中文](README.md) | [English](docs/i18n/README.en.md) | [日本語](docs/i18n/README.ja.md)
+Paperfield 是一套面向具身智能、大模型、多模态研究与开源项目跟踪的本地优先研究工作台。它聚合论文和 GitHub 项目，为每周精选预先寻找合法公开 PDF，并把全文精读、翻译、问答、项目源码导读和阅读历史放进同一个持续使用的界面。
 
-Paperfield 是面向具身智能、大语言模型和开源项目追踪的桌面研究工作台。它维护完整候选池，每周筛选少量值得精读的论文，寻找合法公开 PDF，并把论文、代码、讲解与问答历史放在一个连续工作流中。
+这是唯一的正式项目说明。仓库不再维护散落的开发笔记、历史路线图、重复语言副本或备份版文档。
 
-## 核心能力
+## 主要能力
 
-- 每周按研究方向推荐论文，每个方向最多 5 篇，并展示可解释评分。
-- 每周精选优先保留已验证公开 PDF 或公开副本线索；无法合法获取全文的候选会由同方向候补补位，不以付费墙条目凑数。
-- 可通过五段权重圆环调整学术质量、方向匹配、时效性、证据完整度与影响复现占比，并立即重排论文流和本周精选。
-- 后台提前寻找本周精选的公开 PDF，并为优先论文生成基于全文的中文精读；下一自然周自动换批。
-- 聚合顶会、顶刊、预印本与公开学术元数据，区分正式发表和未确认预印本。
-- 在阅读器左侧显示 PDF，右侧提供全文精读、分页翻译和基于原文的问答。
-- 每周推荐不超过 4 个 GitHub 项目，并关联对应论文、README 与源码阅读路径；大型仓库在后台准备，完整压缩包不可用时自动整理 README、配置、入口与核心文本文件。
-- 支持本地、Cloudflare R2 或混合 PDF 存储，以及讲解和聊天历史备份。
-- 支持最多 4 个内测账号的登录保护共享模式。
+- 汇总 arXiv、OpenAlex、Crossref、PMLR、CVF Open Access、DBLP 等公开来源，覆盖具身智能、机器人、视觉、多模态、大模型与智能体方向。
+- 按五项可调整权重筛选每周论文，并优先保留已找到合法公开 PDF 的条目。
+- 在阅读器中并排显示 PDF、全文精读、公式、翻译和基于原文的对话历史。
+- 每周推荐少量相关 GitHub 项目，整理 README、关键入口、依赖和源码阅读路径。
+- 支持本地存储、Cloudflare R2 或其他 S3 兼容对象存储；阅读讲解和问答可同步到共享云端。
+- 支持受登录保护的朋友内测共享；普通用户可以配置自己的 OpenAI 兼容 API，彼此的密钥和模型列表互不共享。
 
-## 本地运行
+## 正式目录
+
+```text
+paper-scout/
+├─ README.md                         唯一面向使用者和开发者的项目说明
+├─ src/
+│  └─ paperfield/                    应用源码包
+│     ├─ __init__.py                 Python 包标记
+│     ├─ app.py                      HTTP 服务、采集、推荐、PDF、AI、存储和账号逻辑
+│     ├─ catalog/                    可公开提交的领域目录和采集策略
+│     │  ├─ config.json              主题、查询与推荐策略
+│     │  ├─ venues.json              顶会、顶刊与来源知识库
+│     │  └─ institutions.json        高校和研究机构标记库
+│     └─ static/                     浏览器客户端
+│        ├─ index.html               主工作台
+│        ├─ app.js                   论文、项目、阅读器和设置交互
+│        ├─ styles.css               清华紫主题与响应式界面
+│        ├─ login.html               内测登录页
+│        ├─ login.js                 登录交互
+│        ├─ login.css                登录页样式
+│        └─ vendor/                  固定版本的 PDF.js 与 KaTeX 前端资源
+├─ deploy/                           可部署配置
+│  ├─ .env.example                  环境变量样例，不含任何密钥
+│  ├─ requirements.txt              Python 运行依赖
+│  ├─ compose.yaml                  Docker Compose 服务定义
+│  └─ docker/
+│     ├─ Dockerfile                 容器构建文件
+│     └─ Dockerfile.dockerignore    Docker 构建上下文过滤规则
+├─ scripts/                          Windows 本地运行、检查、刷新、分享和打包脚本
+│  ├─ run.cmd / run.ps1             启动本地工作台
+│  ├─ refresh.cmd / refresh.ps1     手动刷新论文与项目来源
+│  ├─ check.cmd / check.ps1         运行单元测试和前端语法检查
+│  ├─ manage-beta-users.py          创建、重置、禁用内测账号
+│  ├─ start-beta-*.ps1              启动受保护的 ngrok 共享服务
+│  ├─ stop-beta-share.ps1           停止共享服务
+│  ├─ install-beta-*.ps1            创建桌面快捷方式或开机启动项
+│  └─ build-release.py              生成不含个人数据的 Windows 发布包
+├─ tests/
+│  └─ test_core.py                  后端核心行为回归测试
+├─ .github/                         CI、正式发布工作流与 Issue 模板
+│  ├─ workflows/ci.yml              Python、JavaScript 和 Docker 检查
+│  ├─ workflows/release.yml         标签发布后的 Windows 打包流程
+│  └─ ISSUE_TEMPLATE/               Bug 与功能反馈表单
+├─ .gitignore                       排除个人数据、缓存、密钥和构建产物
+├─ .gitattributes                   Git 文本属性
+├─ local/                           本机私有运行数据，不进入 Git
+├─ data/                            旧版兼容数据目录，不进入 Git
+└─ dist/                            本地生成的发布压缩包，不进入 Git
+```
+
+`local/`、`data/` 和 `dist/` 是运行期目录，不是公开源码的一部分。它们即使出现在本机根目录，也不会进入 GitHub；不要把它们移动到 `src/` 或提交到仓库。根目录中唯一维护给人阅读的 Markdown 文件是本 README，`.gitignore`、`.gitattributes` 和 `.github/` 只服务于 Git 和自动化。
+
+## 本地使用
+
+### 首次启动
 
 ```powershell
 cd G:\ps\paper-scout
-python app.py
+python -m pip install -r deploy\requirements.txt
+python src\paperfield\app.py
 ```
 
-打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)。首次运行会加载离线种子数据，之后应用每 24 小时自动检查更新，也可以点击页面中的更新按钮。
+打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)。首次运行会初始化本地数据库和缓存，之后可以在页面中手动刷新，或由后台按设定周期更新。
 
-常用脚本：
+常用命令：
 
 ```powershell
 .\scripts\run.cmd
-.\scripts\check.cmd
 .\scripts\refresh.cmd
+.\scripts\check.cmd
 ```
 
-数据库、PDF、项目缓存、讲解、聊天与密钥统一保存在不会上传 GitHub 的 `local/` 目录。公开源码与本机文件的完整边界见 [公开源码与本机文件](docs/PUBLIC_AND_LOCAL.md)。朋友优先从 GitHub **Releases** 下载干净版本，不需要下载你的本机数据。
+## 私有数据和 AI 配置
 
-## AI 与翻译
+应用的数据库、PDF、全文解析、项目缓存、精读、聊天记录、账号和本地密钥默认位于 `local/data/`。旧版已经存在的 `data/` 会继续兼容读取，避免迁移时损失任何内容。
 
-Paperfield 会读取本机 CC Switch/Codex 的 OpenAI 兼容配置，也可以使用 `PAPERFIELD_OPENAI_API_KEY`、`PAPERFIELD_OPENAI_BASE_URL` 和 `PAPERFIELD_OPENAI_MODEL` 显式覆盖。没有 GPT Key 时仍可阅读 PDF、使用免费翻译并生成标注为摘要导读的基础说明。
-
-未设置 `PAPERFIELD_OPENAI_API_KEY` 时，切换 CC Switch 会影响之后新发起的精读和问答；已经生成并保存的精读、聊天和阅读笔记不会改变。若在 `local/.env` 中显式配置 Paperfield API，它的优先级更高，CC Switch 切换不会影响网页。
-
-在页面的“存储与模型”中可查看当前实例 API 可调用的模型并选择 Paperfield 专用模型；模型列表和选择都只作用于当前实例，不会显示或传递其他用户的模型与密钥。兼容服务如果只支持 `Chat Completions` 或只支持 `Responses`，系统会在空响应或端点不兼容时自动尝试另一种协议。
-
-论文和项目 Markdown 翻译依次尝试浏览器翻译能力、配置的 LibreTranslate 端点和无需 Key 的 Google Translate 端点。免费端点可能限流，因此结果会在本地和可选 R2 中缓存。
-
-## 分享给朋友
-
-按照 [内测分享说明](docs/BETA_SHARING.md) 配置 ngrok 和账号。Windows 用户可以安装桌面快捷方式：
+将环境变量样例复制到私有位置后再填写实际值：
 
 ```powershell
+Copy-Item deploy\.env.example local\.env
+```
+
+可在 `local/.env` 中配置 `PAPERFIELD_OPENAI_API_KEY`、`PAPERFIELD_OPENAI_BASE_URL`、`PAPERFIELD_OPENAI_MODEL` 和推理强度。未显式配置时，Paperfield 会尝试读取本机 CC Switch 提供的 OpenAI 兼容设置；因此 CC Switch 切换 API 后，新的精读和问答会使用新的可用模型，已保存的精读和历史不会变化。
+
+普通用户在自己的网页设置中连接 API 时，只会看到自己密钥可访问的模型。内测账号使用服务器侧配置时，才会使用服务器的模型与额度。不要把 `local/.env`、`deploy/.env`、数据库或 PDF 提交到 GitHub。
+
+## 云端与共享
+
+Cloudflare R2 和其他 S3 兼容存储可用于同步 PDF、全文精读和问答历史。相关配置都在 `deploy/.env.example` 中，以 `PAPERFIELD_S3_*`、`PAPERFIELD_CLOUD_PREFIX` 和 `PAPERFIELD_SHARED_STORAGE_MAX_MB` 开头。共享库大小通过 `PAPERFIELD_SHARED_STORAGE_MAX_MB` 控制，应用会展示已用空间和操作统计。
+
+若需要让朋友通过浏览器访问，先建立内测账号，再安装桌面快捷方式：
+
+```powershell
+python scripts\manage-beta-users.py add <username> --role beta
 powershell -ExecutionPolicy Bypass -File .\scripts\install-beta-shortcuts.ps1
 ```
 
-之后双击桌面的 **Paperfield Share** 后台启动，双击 **Stop Paperfield Share** 停止。朋友只需要浏览器，不需要安装 Tailscale 或 ngrok。
+桌面上的 `Paperfield Share` 会启动本机服务和 ngrok 隧道，并复制访问地址；`Stop Paperfield Share` 会关闭它。共享服务运行期间，源电脑必须保持联网和开机。固定 ngrok 域名可通过 `local/.env` 的 `PAPERFIELD_NGROK_URL` 设置。
 
-若希望登录 Windows 后自动保持共享，执行一次 `powershell -ExecutionPolicy Bypass -File .\scripts\install-beta-autostart.ps1`。固定链接可在 `local/.env` 中设置 `PAPERFIELD_NGROK_URL`。
+## Docker 部署
 
-## 数据来源与合规
-
-Paperfield 从 PMLR、CVF Open Access、arXiv、OpenAlex、Crossref、DBLP 等公开来源收集元数据，并专门覆盖 ACM MM、IEEE T-RO 等平台。它不会绕过付费墙或机构登录；找不到合法公开 PDF 时只保留来源页。
-
-详细覆盖范围见 [来源覆盖审计](docs/COVERAGE_AUDIT.md)，云端存储见 [Cloudflare R2 配置](docs/CLOUD_STORAGE.md)。
-
-## 开发
-
-- [文档地图](docs/README.md)
-- [架构](docs/ARCHITECTURE.md)
-- [部署](docs/DEPLOYMENT.md)
-- [公开源码与本机文件](docs/PUBLIC_AND_LOCAL.md)
-- [路线图](docs/ROADMAP.md)
-- [变更记录](docs/CHANGELOG.md)
-- [贡献指南](.github/CONTRIBUTING.md)
-- [安全策略](.github/SECURITY.md)
-
-运行检查：
+Docker 使用独立的部署目录，构建上下文仍是仓库根目录：
 
 ```powershell
-python -m unittest discover -s tests -v
-node --check static\app.js
-docker compose config --quiet
+Copy-Item deploy\.env.example deploy\.env
+docker compose --env-file deploy\.env -f deploy\compose.yaml up --build -d
 ```
+
+停止服务：
+
+```powershell
+docker compose --env-file deploy\.env -f deploy\compose.yaml down
+```
+
+容器使用命名卷保存数据；生产环境应将 `.env` 和卷备份到受控位置。
+
+## 开发与验证
+
+```powershell
+python -m py_compile src\paperfield\app.py
+node --check src\paperfield\static\app.js
+node --check src\paperfield\static\login.js
+python -m unittest discover -s tests -p test_core.py
+python scripts\build-release.py
+docker build -f deploy\docker\Dockerfile -t paperfield:test .
+docker compose -f deploy\compose.yaml config --quiet
+```
+
+`scripts/build-release.py` 只打包 Git 已跟踪的公开文件，并额外放入一份空的 `local/.env.example`。它会拒绝把数据库、日志、密钥、`local/` 或 `data/` 放进发布包。
+
+## 正式发布规则
+
+`v0.12.7` 是唯一保留的正式发布标签，对应 GitHub Release 标题 `Paperfield 首个发布版本`。后续改动先合并到 `main`，通过完整检查后再更新这个唯一的正式发布版本；旧标签、历史 Release、备份文档和临时设计产物不再保留。

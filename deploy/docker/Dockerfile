@@ -12,11 +12,11 @@ RUN useradd --create-home --uid 10001 paperfield \
     && mkdir -p /data \
     && chown -R paperfield:paperfield /data /app
 
-COPY --chown=paperfield:paperfield app.py config.json venues.json institutions.json ./
-COPY --chown=paperfield:paperfield requirements.txt ./
-COPY --chown=paperfield:paperfield static ./static
+COPY --chown=paperfield:paperfield deploy/requirements.txt ./requirements.txt
 
 RUN pip install --no-cache-dir -r requirements.txt
+
+COPY --chown=paperfield:paperfield src ./src
 
 USER paperfield
 
@@ -26,4 +26,4 @@ VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD python -c "import json,urllib.request; json.load(urllib.request.urlopen('http://127.0.0.1:8765/api/health', timeout=3))"
 
-CMD ["python", "app.py"]
+CMD ["python", "src/paperfield/app.py"]

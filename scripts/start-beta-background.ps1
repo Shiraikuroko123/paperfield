@@ -19,7 +19,7 @@ function Test-ListeningPort([int]$Port) {
 }
 
 function Get-ExpectedAppVersion {
-    $appPath = Join-Path $root "app.py"
+    $appPath = Join-Path $root "src\paperfield\app.py"
     $match = Select-String -LiteralPath $appPath -Pattern '^APP_VERSION\s*=\s*"([^"]+)"' | Select-Object -First 1
     if ($match -and $match.Matches.Count -gt 0) {
         return $match.Matches[0].Groups[1].Value

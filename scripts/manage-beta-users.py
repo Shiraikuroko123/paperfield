@@ -7,9 +7,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "src"))
 
-from app import AuthService, DATA_DIR  # noqa: E402
+from paperfield.app import AuthService, DATA_DIR  # noqa: E402
 
 
 DEFAULT_USERS_PATH = DATA_DIR / "profiles" / "beta" / "auth-users.json"

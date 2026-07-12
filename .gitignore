@@ -1,6 +1,7 @@
 /local/
 data/
 dist/
+.impeccable/
 __pycache__/
 *.pyc
 .env

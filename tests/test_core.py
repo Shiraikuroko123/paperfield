@@ -14,7 +14,10 @@ from pathlib import Path
 from unittest import mock
 
 
-SPEC = importlib.util.spec_from_file_location("paperfield_app", Path(__file__).resolve().parents[1] / "app.py")
+SPEC = importlib.util.spec_from_file_location(
+    "paperfield_app",
+    Path(__file__).resolve().parents[1] / "src" / "paperfield" / "app.py",
+)
 APP = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader
 SPEC.loader.exec_module(APP)

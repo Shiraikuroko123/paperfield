@@ -69,7 +69,7 @@ $stderr = Join-Path $profile "paperfield-share-error.log"
 $ngrokLog = Join-Path $profile "ngrok.log"
 $python = (Get-Command python).Source
 $paperfield = Start-Process -FilePath $python `
-    -ArgumentList "app.py", "--host", "127.0.0.1", "--port", "$port" `
+    -ArgumentList "src\paperfield\app.py", "--host", "127.0.0.1", "--port", "$port" `
     -WorkingDirectory $root -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput $stdout -RedirectStandardError $stderr
 Set-Content -LiteralPath (Join-Path $profile "paperfield.pid") -Value $paperfield.Id

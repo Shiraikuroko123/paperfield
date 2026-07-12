@@ -33,7 +33,8 @@ from pathlib import Path
 from typing import Any
 
 
-ROOT = Path(__file__).resolve().parent
+PACKAGE_DIR = Path(__file__).resolve().parent
+ROOT = PACKAGE_DIR.parents[1]
 LOCAL_DIR = Path(os.environ.get("PAPERFIELD_LOCAL_DIR", ROOT / "local")).expanduser().resolve()
 try:
     from dotenv import load_dotenv
@@ -42,7 +43,8 @@ try:
     load_dotenv(ROOT / ".env", override=False)
 except ImportError:
     pass
-STATIC_DIR = ROOT / "static"
+STATIC_DIR = PACKAGE_DIR / "static"
+CATALOG_DIR = PACKAGE_DIR / "catalog"
 LEGACY_DATA_DIR = ROOT / "data"
 DEFAULT_DATA_DIR = LEGACY_DATA_DIR if LEGACY_DATA_DIR.exists() and not (LOCAL_DIR / "data").exists() else LOCAL_DIR / "data"
 DATA_DIR = Path(os.environ.get("PAPERFIELD_DATA_DIR", DEFAULT_DATA_DIR)).expanduser().resolve()
@@ -57,9 +59,9 @@ AUTH_USERS_PATH = Path(
     os.environ.get("PAPERFIELD_AUTH_USERS_PATH", DATA_DIR / "auth-users.json")
 ).expanduser().resolve()
 SETTINGS_PATH = Path(os.environ.get("PAPERFIELD_SETTINGS_PATH", DATA_DIR / "settings.json")).expanduser().resolve()
-CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
-VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
-INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", ROOT / "institutions.json")).expanduser().resolve()
+CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", CATALOG_DIR / "config.json")).expanduser().resolve()
+VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", CATALOG_DIR / "venues.json")).expanduser().resolve()
+INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", CATALOG_DIR / "institutions.json")).expanduser().resolve()
 APP_VERSION = "0.12.7"
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
