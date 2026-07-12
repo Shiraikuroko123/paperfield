@@ -12,6 +12,7 @@ const state = {
   readerAsset: null,
   readerPdfObjectUrl: "",
   readerPdfImageUrls: [],
+  readerPdfImageQueue: Promise.resolve(),
   readerPdfDocument: null,
   readerPdfLoadingTask: null,
   readerPdfObserver: null,
@@ -65,7 +66,8 @@ const el = (id) => document.getElementById(id);
 const NGROK_BYPASS_HEADERS = { "ngrok-skip-browser-warning": "paperfield" };
 const SHARED_REQUEST_NONCE = Math.random().toString(36).slice(2);
 const PDF_LOAD_TIMEOUT_MS = 90000;
-const PDF_PAGE_IMAGE_TIMEOUT_MS = 45000;
+const PDF_PAGE_IMAGE_TIMEOUT_MS = 75000;
+const CUSTOM_AI_MODEL_VALUE = "__paperfield_custom_model__";
 const prefersCompatiblePdfPages = () => {
   const userAgent = navigator.userAgent || "";
   const appleTouch = /iPad|iPhone|iPod/.test(userAgent)
@@ -1396,6 +1398,7 @@ function releaseReaderPdf() {
   state.readerPdfObjectUrl = "";
   state.readerPdfImageUrls.forEach((url) => URL.revokeObjectURL(url));
   state.readerPdfImageUrls = [];
+  state.readerPdfImageQueue = Promise.resolve();
 }
 
 async function renderPdfPage(pdfDocument, pageNumber, shell, token) {
@@ -1446,9 +1449,23 @@ function renderPdfImageError(asset, pageNumber, shell, token, error) {
     delete shell.dataset.failed;
     message.remove();
     retry.remove();
-    renderPdfImagePage(asset, pageNumber, shell, token).catch(() => {});
+    queuePdfImagePage(asset, pageNumber, shell, token).catch(() => {});
   });
   shell.append(message, retry);
+}
+
+function queuePdfImagePage(asset, pageNumber, shell, token) {
+  if (shell.dataset.rendered) return Promise.resolve(true);
+  if (shell.dataset.queued || shell.dataset.rendering || shell.dataset.failed || state.readerPdfToken !== token) {
+    return Promise.resolve(false);
+  }
+  shell.dataset.queued = "1";
+  const task = state.readerPdfImageQueue.catch(() => {}).then(async () => {
+    delete shell.dataset.queued;
+    return renderPdfImagePage(asset, pageNumber, shell, token);
+  });
+  state.readerPdfImageQueue = task.catch(() => {});
+  return task;
 }
 
 async function renderPdfImagePage(asset, pageNumber, shell, token) {
@@ -1515,15 +1532,15 @@ async function renderPdfImageDocument(asset, token) {
   viewer.replaceChildren(fragment);
   viewer.hidden = false;
   const firstPage = viewer.querySelector('[data-page="1"]');
-  await renderPdfImagePage(asset, 1, firstPage, token);
+  await queuePdfImagePage(asset, 1, firstPage, token);
   state.readerPdfObserver = new IntersectionObserver((entries) => {
     entries.filter((entry) => entry.isIntersecting).forEach((entry) => {
       const shell = entry.target;
-      renderPdfImagePage(asset, Number(shell.dataset.page), shell, token).then((rendered) => {
+      queuePdfImagePage(asset, Number(shell.dataset.page), shell, token).then((rendered) => {
         if (rendered) state.readerPdfObserver?.unobserve(shell);
       }).catch(() => {});
     });
-  }, { root: viewer, rootMargin: "1200px 0px" });
+  }, { root: viewer, rootMargin: "240px 0px" });
   viewer.querySelectorAll('.pdf-page:not([data-page="1"])').forEach((shell) => state.readerPdfObserver.observe(shell));
   return true;
 }
@@ -1852,14 +1869,37 @@ function renderAiModels(payload) {
     ? `${provider}${baseHost} · ${wire}`
     : "当前没有可用的大模型配置";
   const overrideActive = payload.model_source === "Paperfield 网页选择";
-  el("aiModelInput").value = overrideActive ? payload.model || "" : "";
-  el("aiModelInput").placeholder = `跟随 CC Switch 默认模型${payload.configured_model || payload.model ? `：${payload.configured_model || payload.model}` : ""}`;
-  el("aiModelOptions").innerHTML = (payload.models || []).map((model) => `<option value="${escapeHtml(model)}"></option>`).join("");
+  const activeModel = overrideActive ? payload.model || "" : "";
+  const models = [...new Set((payload.models || []).filter((model) => model && model !== CUSTOM_AI_MODEL_VALUE))];
+  const selector = el("aiModelSelect");
+  const listedActiveModel = activeModel && models.includes(activeModel);
+  selector.innerHTML = [
+    `<option value="">跟随 CC Switch 默认模型${payload.configured_model || payload.model ? `：${escapeHtml(payload.configured_model || payload.model)}` : ""}</option>`,
+    ...models.map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`),
+    `<option value="${CUSTOM_AI_MODEL_VALUE}">自定义模型名称...</option>`,
+  ].join("");
+  selector.value = activeModel ? (listedActiveModel ? activeModel : CUSTOM_AI_MODEL_VALUE) : "";
+  el("aiCustomModelInput").value = activeModel && !listedActiveModel ? activeModel : "";
+  updateAiModelCustomField();
   const availableEfforts = new Set(["", "low", "medium", "high", "xhigh", "max", "ultra"]);
   el("aiReasoningEffort").value = availableEfforts.has(payload.reasoning_effort || "") ? payload.reasoning_effort || "" : "";
+  const modelCount = models.length;
   el("aiModelNotice").textContent = payload.error
-    ? `${payload.error}。也可手动填写模型名称；清空输入即可跟随 CC Switch 默认模型。`
-    : "推理强度会按当前模型和 API 传递；不支持的档位会自动降级，不会影响普通模型调用。清空模型名称即可跟随 CC Switch 默认模型。";
+    ? `${payload.error}。当前仍可选择默认模型或手动填写模型名称。`
+    : `已读取 ${modelCount} 个可调用模型。推理强度会按当前模型和 API 传递；不支持的档位会自动降级。`;
+}
+
+function selectedAiModel() {
+  return el("aiModelSelect").value === CUSTOM_AI_MODEL_VALUE
+    ? el("aiCustomModelInput").value.trim()
+    : el("aiModelSelect").value;
+}
+
+function updateAiModelCustomField({ focus = false } = {}) {
+  const custom = el("aiModelSelect").value === CUSTOM_AI_MODEL_VALUE;
+  const row = el("aiCustomModelRow");
+  row.hidden = !custom;
+  if (custom && focus) el("aiCustomModelInput").focus();
 }
 
 async function loadAiModels() {
@@ -1886,7 +1926,7 @@ async function saveAiModel() {
     const payload = await api("/api/ai/model", {
       method: "POST",
       body: JSON.stringify({
-        model: el("aiModelInput").value.trim(),
+        model: selectedAiModel(),
         reasoning_effort: el("aiReasoningEffort").value,
       }),
     });
@@ -2236,6 +2276,7 @@ function bindEvents() {
       button.textContent = "刷新模型";
     }
   });
+  el("aiModelSelect").addEventListener("change", () => updateAiModelCustomField({ focus: true }));
   el("saveAiModel").addEventListener("click", saveAiModel);
   el("storageSettingsForm").addEventListener("submit", async (event) => {
     event.preventDefault();

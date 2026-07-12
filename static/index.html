@@ -367,8 +367,8 @@
       <section class="storage-settings" id="aiSettingsSection" hidden aria-labelledby="aiSettingsTitle">
         <h3 id="aiSettingsTitle">AI 模型</h3>
         <p class="storage-notice" id="aiModelMeta">正在读取当前 API 配置</p>
-        <label>模型名称<input id="aiModelInput" list="aiModelOptions" type="text" spellcheck="false" placeholder="跟随 CC Switch 默认模型"></label>
-        <datalist id="aiModelOptions"></datalist>
+        <label>可调用模型<select id="aiModelSelect" aria-describedby="aiModelNotice"><option value="">跟随 CC Switch 默认模型</option></select></label>
+        <label id="aiCustomModelRow" hidden>自定义模型名称<input id="aiCustomModelInput" type="text" spellcheck="false" placeholder="输入 API 实际支持的模型名称"></label>
         <label>推理强度<select id="aiReasoningEffort"><option value="">自动</option><option value="low">轻度</option><option value="medium">中</option><option value="high">高</option><option value="xhigh">极高</option><option value="max">最高</option><option value="ultra">极限</option></select></label>
         <details class="reasoning-reference"><summary>推理档位对照</summary><div class="reasoning-reference-scroll"><table><thead><tr><th>档位</th><th>API 值</th><th>适合任务</th><th>速度与额度</th></tr></thead><tbody><tr><td>自动</td><td>-</td><td>兼容模型与普通生成</td><td>不额外指定预算</td></tr><tr><td>轻度</td><td>low</td><td>摘要、翻译、简答</td><td>通常最快</td></tr><tr><td>中</td><td>medium</td><td>常规论文精读</td><td>平衡</td></tr><tr><td>高</td><td>high</td><td>方法与实验拆解</td><td>更慢、更多额度</td></tr><tr><td>极高</td><td>xhigh</td><td>复杂推导、多步骤分析</td><td>高消耗</td></tr><tr><td>最高</td><td>max</td><td>长篇技术审阅</td><td>极高消耗</td></tr><tr><td>极限</td><td>ultra</td><td>允许的最大推理</td><td>最高消耗</td></tr></tbody></table></div><p>不同 API 的可用档位不同。上游拒绝时，Paperfield 会从所选强度逐级降到可接受档位，再回退为自动。</p></details>
         <div class="storage-form-actions"><span id="aiModelNotice">仅管理当前设备或当前部署的 API，不会显示其他用户的模型或密钥。</span><div><button class="text-button" id="refreshAiModels" type="button">刷新模型</button><button class="button button-primary" id="saveAiModel" type="button">应用模型</button></div></div>
@@ -378,6 +378,6 @@
 
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
   <script src="/vendor/pdfjs/pdf.min.js?v=3.11.174"></script>
-  <script src="/app.js?v=0.12.7-compat3" defer></script>
+  <script src="/app.js?v=0.12.7-model-picker1" defer></script>
 </body>
 </html>

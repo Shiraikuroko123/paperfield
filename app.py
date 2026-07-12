@@ -4499,8 +4499,9 @@ class PaperAssetService:
             if page_number > document.page_count:
                 return None
             page = document.load_page(page_number - 1)
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(1.7, 1.7), alpha=False)
-            return pixmap.tobytes("jpeg", jpg_quality=85)
+            # Keep touch-device pages readable while limiting cross-border tunnel transfer time.
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(1.45, 1.45), alpha=False)
+            return pixmap.tobytes("jpeg", jpg_quality=78)
 
     def _text_path(self, paper_id: str, asset: dict[str, Any]) -> Path | None:
         path = Path(asset.get("local_text_path", "")) if asset.get("local_text_path") else None
