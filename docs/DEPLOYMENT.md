@@ -38,6 +38,8 @@ docker compose down
 | `PAPERFIELD_OPENAI_BASE_URL` | OpenAI-compatible base URL |
 | `PAPERFIELD_OPENAI_MODEL` | Explanation model |
 | `PAPERFIELD_DISABLE_CLOUD` | Set to `1` to ignore all S3/R2 credentials for an isolated instance |
+| `PAPERFIELD_CLOUD_PREFIX` | Optional object-key namespace for an isolated/shared library |
+| `PAPERFIELD_SHARED_STORAGE_MAX_MB` | Capacity limit applied when a cloud prefix is configured |
 | `PAPERFIELD_S3_PROVIDER` | Display name for an optional S3-compatible archive |
 | `PAPERFIELD_S3_ENDPOINT` | S3-compatible endpoint; blank for AWS S3 |
 | `PAPERFIELD_S3_REGION` | Object-storage region |
@@ -53,7 +55,7 @@ docker compose down
 
 The current release should run as one application instance with one persistent volume. Multiple instances must not share SQLite over a network filesystem.
 
-The beta Quick Tunnel workflow provides an authenticated single-instance preview. Before a permanent multi-user internet deployment:
+The beta ngrok workflow provides an authenticated single-instance preview without requiring testers to install tunnel software. Before a permanent multi-user internet deployment:
 
 1. Replace the beta account registry with an established OIDC provider.
 2. Put TLS and a reverse proxy in front of the application.

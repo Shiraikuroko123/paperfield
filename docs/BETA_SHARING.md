@@ -1,6 +1,6 @@
 # Private Beta Sharing
 
-Paperfield can expose a temporary HTTPS address through Cloudflare Quick Tunnel without purchasing a domain. The shared instance is separate from the personal instance at `http://127.0.0.1:8765`.
+Paperfield can expose a temporary HTTPS address through ngrok without purchasing a domain. Only the host computer needs ngrok; testers open the HTTPS address in an ordinary browser and install nothing. The shared instance is separate from the personal instance at `http://127.0.0.1:8765`.
 
 ## Isolation
 
@@ -14,11 +14,15 @@ On first preparation, Paperfield copies the public paper and GitHub project cata
 
 - Reading status, favorites, notes, and explanations.
 - Paper and project chats.
-- Local/cloud PDF records.
+- Personal local/cloud PDF records.
 - Downloaded project source and project explanations.
-- R2 inventory and usage records.
+- Personal R2 inventory and usage records.
 
-R2 is explicitly disabled for the beta process. Beta accounts share this one beta workspace with each other, but they do not modify the personal workspace.
+The beta process uses the same private R2 bucket through the isolated `community-beta/` object prefix. It cannot overwrite personal PDFs, explanations, chats, or translations. Papers added through the connector and PDFs stored in this namespace are visible to every account in the beta workspace.
+
+The shared namespace defaults to a 2 GB capacity ceiling. A beta account can change the local limit under **存储与用量 → 共享库容量上限**. Paperfield rejects new uploads before the configured ceiling is exceeded. This local ceiling is separate from Cloudflare's billing limit.
+
+Manual PDF uploads require the uploader to confirm they have the right to share the file. Do not redistribute subscription-only or institution-licensed publisher copies. Connector-resolved legal open-access PDFs can enter the shared namespace automatically.
 
 The beta process can use the host computer's current CC Switch/OpenAI-compatible configuration for AI explanations. Requests therefore consume the host account's model quota.
 
@@ -59,21 +63,31 @@ Account roles:
 
 A standard account cannot directly reach an API bound to `127.0.0.1` on the tester's computer through this tunnel: localhost belongs to the tester's machine, while Paperfield runs on the host machine. To use a personal local API, the standard user must run their own Paperfield copy locally and connect that copy to CC Switch or another OpenAI-compatible endpoint.
 
+## Configure ngrok once
+
+Create a free ngrok account, copy the Authtoken from its dashboard, and configure it locally. Do not paste the token into chat or commit it to Git:
+
+```powershell
+ngrok config add-authtoken <TOKEN>
+```
+
+This is a one-time setup on the host computer. Testers do not need an ngrok account or application.
+
 ## Start Sharing
 
 Run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start-beta-share.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\start-beta-ngrok.ps1
 ```
 
 The script starts the protected beta instance on local port `8876`, then prints an address similar to:
 
 ```text
-https://random-words.trycloudflare.com
+https://example-name.ngrok-free.app
 ```
 
-Send the HTTPS address and account credentials to the tester through separate private messages. Keep the PowerShell window open while the tester is using Paperfield. The temporary address changes after the tunnel restarts.
+Send the HTTPS address and account credentials to the tester through separate private messages. Keep the PowerShell window open while the tester is using Paperfield. The temporary address may change after the tunnel restarts.
 
 Press `Ctrl+C` in the sharing window to stop the tunnel and beta server. If the server remains after an interrupted terminal session, run:
 
@@ -84,7 +98,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\stop-beta-share.ps1
 ## Limits
 
 - The host computer must remain online.
-- Quick Tunnel is intended for temporary testing and has no stable hostname guarantee.
+- The free ngrok address may change after the tunnel restarts.
+- The login page protects application access, but the link should still be shared privately.
 - All beta accounts share the beta reading history.
 - Model requests use the host's configured provider and quota.
-- The personal R2 archive is unavailable inside the beta profile.
+- Shared R2 objects use the `community-beta/` prefix and count toward the owner's R2 quota.

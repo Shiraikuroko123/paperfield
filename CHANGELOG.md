@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.1
+
+- Added an isolated `community-beta` R2 namespace for connector imports and shared PDFs.
+- Added a locally configurable shared-library capacity limit and scoped usage meter.
+- Required a sharing-rights confirmation before manually uploaded PDFs enter the shared cloud library.
+- Made the Chinese/English/Japanese Markdown language control easier to locate.
+- Replaced Cloudflare Quick Tunnel beta sharing with ngrok so testers only need a browser.
+
 ## 0.10.0
 
 - Added password-protected beta accounts with PBKDF2 password hashing, seven-day sessions, login throttling, and a four-account limit.

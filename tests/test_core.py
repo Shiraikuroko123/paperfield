@@ -189,6 +189,7 @@ class FeedTests(unittest.TestCase):
                     "pdf_storage_mode": "hybrid",
                     "local_pdf_dir": str(root / "library"),
                     "local_cache_max_mb": 4096,
+                    "shared_storage_max_mb": 3072,
                     "r2_billing_cycle_day": 11,
                 },
                 cloud_configured=True,
@@ -196,6 +197,7 @@ class FeedTests(unittest.TestCase):
             loaded = APP.RuntimeSettings(root / "settings.json").get()
             self.assertEqual(saved, loaded)
             self.assertTrue((root / "library").is_dir())
+            self.assertEqual(loaded["shared_storage_max_mb"], 3072)
             self.assertEqual(loaded["r2_billing_cycle_day"], 11)
 
     def test_cloud_operations_are_counted_and_inventory_is_recorded(self):
@@ -237,6 +239,61 @@ class FeedTests(unittest.TestCase):
             self.assertEqual(usage["class_b"], 1)
             self.assertEqual(inventory["object_count"], 1)
             self.assertEqual(inventory["total_bytes"], len(b"%PDF-test"))
+
+    def test_cloud_namespace_isolates_shared_objects_and_enforces_limit(self):
+        class FakeBody(io.BytesIO):
+            pass
+
+        class FakeClient:
+            def __init__(self):
+                self.objects = {}
+
+            def put_object(self, Bucket, Key, Body, ContentType):
+                self.objects[Key] = Body.read() if hasattr(Body, "read") else Body
+
+            def get_object(self, Bucket, Key):
+                return {"Body": FakeBody(self.objects[Key])}
+
+            def list_objects_v2(self, **options):
+                prefix = options.get("Prefix", "")
+                return {
+                    "IsTruncated": False,
+                    "Contents": [
+                        {"Key": key, "Size": len(value)}
+                        for key, value in self.objects.items()
+                        if key.startswith(prefix)
+                    ],
+                }
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
+            os.environ,
+            {
+                "PAPERFIELD_DISABLE_CLOUD": "0",
+                "PAPERFIELD_S3_BUCKET": "test",
+                "PAPERFIELD_S3_ENDPOINT": "https://example.r2.cloudflarestorage.com",
+                "PAPERFIELD_S3_ACCESS_KEY_ID": "key",
+                "PAPERFIELD_S3_SECRET_ACCESS_KEY": "secret",
+                "PAPERFIELD_CLOUD_PREFIX": "community-beta",
+                "PAPERFIELD_SHARED_STORAGE_MAX_MB": "128",
+            },
+        ):
+            store = APP.PaperStore(Path(directory) / "papers.db")
+            cloud = APP.S3ObjectStorage(store)
+            cloud._client_value = FakeClient()
+            cloud.upload_bytes(b"test", "papers/example/paper.pdf", "application/pdf")
+
+            self.assertIn("community-beta/papers/example/paper.pdf", cloud._client_value.objects)
+            self.assertTrue(store.has_cloud_object("papers/example/paper.pdf"))
+            self.assertEqual(cloud.download_bytes("papers/example/paper.pdf"), b"test")
+            inventory = cloud.refresh_inventory()
+            self.assertEqual(inventory["object_count"], 1)
+            self.assertEqual(inventory["total_bytes"], 4)
+
+            cloud.shared_storage_limit_bytes = 4
+            with self.assertRaisesRegex(RuntimeError, "共享云端资料库"):
+                cloud.upload_bytes(b"larger", "papers/example/paper.pdf", "application/pdf")
+            with self.assertRaisesRegex(ValueError, "对象路径"):
+                cloud.remote_key("../private")
 
     def test_cloud_status_reports_missing_configuration_without_credentials(self):
         with tempfile.TemporaryDirectory() as directory:

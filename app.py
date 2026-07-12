@@ -55,7 +55,7 @@ SETTINGS_PATH = Path(os.environ.get("PAPERFIELD_SETTINGS_PATH", DATA_DIR / "sett
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", ROOT / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", ROOT / "venues.json")).expanduser().resolve()
 INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", ROOT / "institutions.json")).expanduser().resolve()
-APP_VERSION = "0.10.0"
+APP_VERSION = "0.10.1"
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
 
@@ -1102,6 +1102,21 @@ class PaperStore:
     def has_cloud_object(self, key: str) -> bool:
         with self.connect() as db:
             return bool(db.execute("SELECT 1 FROM cloud_objects WHERE object_key = ? LIMIT 1", (key,)).fetchone())
+
+    def cloud_object_size(self, key: str) -> int:
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT size_bytes FROM cloud_objects WHERE object_key = ? LIMIT 1",
+                (key,),
+            ).fetchone()
+        return int(row["size_bytes"] if row else 0)
+
+    def cloud_object_summary(self) -> dict[str, int]:
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT COUNT(*) AS object_count, COALESCE(SUM(size_bytes), 0) AS total_bytes FROM cloud_objects"
+            ).fetchone()
+        return {"object_count": int(row["object_count"]), "total_bytes": int(row["total_bytes"])}
 
     def save_cloud_inventory(self, objects: list[tuple[str, int]], error_text: str = "") -> dict[str, Any]:
         now = utc_now().isoformat()
@@ -3200,6 +3215,7 @@ class RuntimeSettings:
             "pdf_storage_mode": os.environ.get("PAPERFIELD_PDF_STORAGE_MODE", "local"),
             "local_pdf_dir": str(PDF_DIR),
             "local_cache_max_mb": int(os.environ.get("PAPERFIELD_LOCAL_CACHE_MAX_MB", "2048")),
+            "shared_storage_max_mb": int(os.environ.get("PAPERFIELD_SHARED_STORAGE_MAX_MB", "2048")),
             "r2_billing_cycle_day": int(os.environ.get("PAPERFIELD_R2_BILLING_CYCLE_DAY", "1")),
         }
 
@@ -3218,12 +3234,16 @@ class RuntimeSettings:
         cache_mb = int(payload.get("local_cache_max_mb", 2048))
         if cache_mb < 128 or cache_mb > 1024 * 1024:
             raise ValueError("本地缓存限制需在 128 MB 到 1 TB 之间")
+        shared_storage_mb = int(payload.get("shared_storage_max_mb", 2048))
+        if shared_storage_mb < 128 or shared_storage_mb > 1024 * 1024:
+            raise ValueError("共享云端容量上限需在 128 MB 到 1 TB 之间")
         billing_day = int(payload.get("r2_billing_cycle_day", 1))
         if billing_day < 1 or billing_day > 28:
             raise ValueError("R2 账期起始日需在 1 到 28 之间")
         return {
             "pdf_storage_mode": mode, "local_pdf_dir": str(local_path),
-            "local_cache_max_mb": cache_mb, "r2_billing_cycle_day": billing_day,
+            "local_cache_max_mb": cache_mb, "shared_storage_max_mb": shared_storage_mb,
+            "r2_billing_cycle_day": billing_day,
         }
 
     def get(self) -> dict[str, Any]:
@@ -3258,11 +3278,41 @@ class S3ObjectStorage:
         self.access_key = "" if disabled else os.environ.get("PAPERFIELD_S3_ACCESS_KEY_ID", "").strip()
         self.secret_key = "" if disabled else os.environ.get("PAPERFIELD_S3_SECRET_ACCESS_KEY", "").strip()
         self.provider = "" if disabled else os.environ.get("PAPERFIELD_S3_PROVIDER", "S3 兼容对象存储").strip()
+        raw_prefix = "" if disabled else os.environ.get("PAPERFIELD_CLOUD_PREFIX", "").strip().strip("/")
+        if raw_prefix and not re.fullmatch(r"[A-Za-z0-9._/-]{1,120}", raw_prefix):
+            raise ValueError("云端命名空间只能包含字母、数字、点、下划线、连字符和斜杠")
+        self.prefix = f"{raw_prefix}/" if raw_prefix else ""
+        self.shared_storage_limit_bytes = (
+            max(128, int(os.environ.get("PAPERFIELD_SHARED_STORAGE_MAX_MB", "2048"))) * 1024 * 1024
+            if self.prefix else 0
+        )
         self._client_value: Any = None
 
     @property
     def configured(self) -> bool:
         return bool(self.bucket and (self.access_key and self.secret_key or not self.endpoint))
+
+    @property
+    def shared_library(self) -> bool:
+        return bool(self.prefix)
+
+    def set_shared_storage_limit(self, value_mb: int) -> None:
+        self.shared_storage_limit_bytes = max(128, int(value_mb)) * 1024 * 1024 if self.prefix else 0
+
+    def remote_key(self, key: str) -> str:
+        relative = str(key).replace("\\", "/").lstrip("/")
+        if not relative or ".." in Path(relative).parts:
+            raise ValueError("云端对象路径无效")
+        return f"{self.prefix}{relative}"
+
+    def ensure_upload_capacity(self, key: str, size: int) -> None:
+        if not self.shared_storage_limit_bytes:
+            return
+        summary = self.store.cloud_object_summary()
+        projected = summary["total_bytes"] - self.store.cloud_object_size(key) + max(0, size)
+        if projected > self.shared_storage_limit_bytes:
+            limit_mb = self.shared_storage_limit_bytes // (1024 * 1024)
+            raise RuntimeError(f"共享云端资料库已达到 {limit_mb} MB 上限")
 
     def client(self) -> Any:
         if not self.configured:
@@ -3287,18 +3337,20 @@ class S3ObjectStorage:
 
     def upload(self, path: Path, key: str, content_type: str) -> None:
         size = path.stat().st_size
+        self.ensure_upload_capacity(key, size)
         with path.open("rb") as handle:
-            self.client().put_object(Bucket=self.bucket, Key=key, Body=handle, ContentType=content_type)
+            self.client().put_object(Bucket=self.bucket, Key=self.remote_key(key), Body=handle, ContentType=content_type)
         self.store.record_cloud_operation("class_a", size)
         self.store.save_cloud_object(key, size)
 
     def upload_bytes(self, content: bytes, key: str, content_type: str = "application/json") -> None:
-        self.client().put_object(Bucket=self.bucket, Key=key, Body=content, ContentType=content_type)
+        self.ensure_upload_capacity(key, len(content))
+        self.client().put_object(Bucket=self.bucket, Key=self.remote_key(key), Body=content, ContentType=content_type)
         self.store.record_cloud_operation("class_a", len(content))
         self.store.save_cloud_object(key, len(content))
 
     def download_bytes(self, key: str) -> bytes:
-        response = self.client().get_object(Bucket=self.bucket, Key=key)
+        response = self.client().get_object(Bucket=self.bucket, Key=self.remote_key(key))
         content = response["Body"].read()
         self.store.record_cloud_operation("class_b", len(content))
         return content
@@ -3307,7 +3359,7 @@ class S3ObjectStorage:
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_suffix(target.suffix + ".cloudpart")
         try:
-            response = self.client().get_object(Bucket=self.bucket, Key=key)
+            response = self.client().get_object(Bucket=self.bucket, Key=self.remote_key(key))
             total = 0
             with temporary.open("wb") as handle:
                 while True:
@@ -3329,11 +3381,19 @@ class S3ObjectStorage:
         token = ""
         while True:
             options: dict[str, Any] = {"Bucket": self.bucket, "MaxKeys": 1000}
+            if self.prefix:
+                options["Prefix"] = self.prefix
             if token:
                 options["ContinuationToken"] = token
             response = self.client().list_objects_v2(**options)
             self.store.record_cloud_operation("class_a")
-            objects.extend((str(item.get("Key", "")), int(item.get("Size", 0) or 0)) for item in response.get("Contents", []))
+            objects.extend(
+                (
+                    str(item.get("Key", ""))[len(self.prefix):] if self.prefix else str(item.get("Key", "")),
+                    int(item.get("Size", 0) or 0),
+                )
+                for item in response.get("Contents", [])
+            )
             if not response.get("IsTruncated"):
                 break
             token = str(response.get("NextContinuationToken", ""))
@@ -3362,6 +3422,7 @@ class S3ObjectStorage:
                 except Exception as error:
                     inventory_error = str(error)
         values = settings.get()
+        scoped_summary = self.store.cloud_object_summary()
         billing_day = int(values.get("r2_billing_cycle_day", 1))
         now = utc_now()
         if now.day >= billing_day:
@@ -3394,6 +3455,8 @@ class S3ObjectStorage:
             ],
             "provider": self.provider if self.configured else "",
             "bucket": self.bucket if self.configured else "",
+            "namespace": self.prefix.rstrip("/"),
+            "shared_library": self.shared_library,
             "settings": values,
             "usage": {
                 **usage,
@@ -3408,7 +3471,16 @@ class S3ObjectStorage:
                 "class_b_percent": self._usage_ratio(class_b, 10_000_000),
                 "storage_percent": self._usage_ratio(storage_gb, 10),
                 "estimated_overage_usd": round(storage_cost + class_a_cost + class_b_cost, 6),
-                "estimate_notice": "操作数仅统计 Paperfield 发起的请求；容量来自每日桶清点，费用按当前容量估算。",
+                "shared_storage_bytes": scoped_summary["total_bytes"],
+                "shared_storage_limit_bytes": self.shared_storage_limit_bytes,
+                "shared_storage_percent": self._usage_ratio(
+                    scoped_summary["total_bytes"], self.shared_storage_limit_bytes,
+                ),
+                "estimate_notice": (
+                    "共享容量仅统计当前命名空间；操作数仅统计本实例发起的请求。"
+                    if self.shared_library else
+                    "操作数仅统计 Paperfield 发起的请求；容量来自每日桶清点，费用按当前容量估算。"
+                ),
             },
         }
 
@@ -4501,6 +4573,7 @@ PROJECT_ASSETS = ProjectAssetService(STORE)
 PROJECT_EXPLAINER = ProjectExplainer(STORE, PROJECT_ASSETS, EXPLAINER)
 SETTINGS = RuntimeSettings(SETTINGS_PATH)
 CLOUD = S3ObjectStorage(STORE)
+CLOUD.set_shared_storage_limit(SETTINGS.get()["shared_storage_max_mb"])
 READING_ARCHIVE = ReadingArchiveService(STORE, CLOUD)
 ASSETS = PaperAssetService(STORE, CLOUD, SETTINGS)
 TRANSLATOR = TranslationService()
@@ -5519,8 +5592,13 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.send_json({"started": started, "message": "更新已开始" if started else "更新任务正在运行"}, 202)
             return
         if parsed.path == "/api/settings":
+            if AUTH.enabled and not self.host_ai_allowed():
+                self.send_json({"error": "只有内测账户可以修改主机存储设置"}, 403)
+                return
             try:
-                self.send_json(SETTINGS.update(self.read_json(), CLOUD.configured))
+                updated = SETTINGS.update(self.read_json(), CLOUD.configured)
+                CLOUD.set_shared_storage_limit(updated["shared_storage_max_mb"])
+                self.send_json(updated)
             except (OSError, TypeError, ValueError) as error:
                 self.send_json({"error": str(error)}, 400)
             return
@@ -5607,6 +5685,13 @@ class AppHandler(SimpleHTTPRequestHandler):
                 try:
                     filename = urllib.parse.unquote(self.headers.get("X-Paperfield-Filename", ""))[:240]
                     storage_mode = self.headers.get("X-Paperfield-Storage", "")
+                    effective_mode = compact_text(storage_mode).lower() or SETTINGS.get()["pdf_storage_mode"]
+                    if (
+                        CLOUD.shared_library
+                        and effective_mode in {"cloud", "hybrid"}
+                        and self.headers.get("X-Paperfield-Share-Confirmed", "") != "1"
+                    ):
+                        raise ValueError("上传到共享云端前，请确认你有权共享这份 PDF")
                     self.send_json(ASSETS.import_pdf(paper, self.read_binary(), filename, storage_mode), 201)
                 except (OSError, TypeError, ValueError) as error:
                     self.send_json({"error": str(error)}, 400)
@@ -5614,6 +5699,13 @@ class AppHandler(SimpleHTTPRequestHandler):
             if action == "archive":
                 payload = self.read_json()
                 try:
+                    asset = STORE.get_asset(paper_id) or {}
+                    if (
+                        CLOUD.shared_library
+                        and str(asset.get("provider", "")).startswith("手动导入")
+                        and not bool(payload.get("share_confirmed"))
+                    ):
+                        raise ValueError("上传到共享云端前，请确认你有权共享这份 PDF")
                     self.send_json(ASSETS.archive_to_cloud(paper_id, bool(payload.get("remove_local", True))))
                 except Exception as error:
                     self.send_json({"error": str(error)}, 503)

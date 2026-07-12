@@ -981,6 +981,8 @@ function setPdfStatus(title, detail = "") {
 function updateReaderStorageAction() {
   const button = el("readerCloudButton");
   const asset = state.readerAsset;
+  const selectedMode = el("readerStorageMode").value;
+  el("readerShareConfirmWrap").hidden = !state.storage?.shared_library || selectedMode === "local";
   button.hidden = false;
   if (!state.storage?.configured) {
     button.disabled = false;
@@ -992,7 +994,6 @@ function updateReaderStorageAction() {
     button.textContent = "转存云端";
     return;
   }
-  const selectedMode = el("readerStorageMode").value;
   if (asset.cloud_available && selectedMode === asset.storage_mode) {
     button.disabled = true;
     button.textContent = "保存位置已应用";
@@ -1000,6 +1001,13 @@ function updateReaderStorageAction() {
   }
   button.disabled = !asset.local_cached && !asset.cloud_available;
   button.textContent = asset.cloud_available ? "应用保存位置" : "立即转存云端";
+}
+
+function confirmSharedPdfUpload() {
+  if (!state.storage?.shared_library || el("readerStorageMode").value === "local" || el("readerShareConfirmed").checked) return true;
+  toast("请先确认你有权把这份 PDF 上传到共享库", true);
+  el("readerShareConfirmed").focus();
+  return false;
 }
 
 function renderReaderAsset(paper, asset, reloadPdf = true) {
@@ -1057,6 +1065,7 @@ async function importReaderPdf(file) {
         "Content-Type": "application/pdf",
         "X-Paperfield-Filename": encodeURIComponent(file.name),
         "X-Paperfield-Storage": el("readerStorageMode").value,
+        "X-Paperfield-Share-Confirmed": el("readerShareConfirmed").checked ? "1" : "0",
       },
       body: file,
     });
@@ -1068,7 +1077,7 @@ async function importReaderPdf(file) {
     if (!response.ok) throw new Error(asset.error || `导入失败：${response.status}`);
     renderReaderAsset(paper, asset);
     toast(`已导入 ${asset.page_count} 页 PDF`);
-    await generateReaderExplanation();
+    if (state.auth?.host_ai_allowed !== false) await generateReaderExplanation();
   } catch (error) {
     setPdfStatus("PDF 导入失败", error.message);
     toast(error.message, true);
@@ -1086,6 +1095,7 @@ async function archiveReaderPdf() {
     toast("请先完成 Cloudflare R2 配置");
     return;
   }
+  if (!confirmSharedPdfUpload()) return;
   const button = el("readerCloudButton");
   button.disabled = true;
   button.textContent = "正在上传";
@@ -1099,7 +1109,7 @@ async function archiveReaderPdf() {
       ? await api(`/api/papers/${encodeURIComponent(paper.id)}/resolve`, { method: "POST", body: JSON.stringify({ storage: mode }) })
       : await api(`/api/papers/${encodeURIComponent(paper.id)}/archive`, {
         method: "POST",
-        body: JSON.stringify({ remove_local: mode === "cloud" }),
+        body: JSON.stringify({ remove_local: mode === "cloud", share_confirmed: el("readerShareConfirmed").checked }),
       });
     renderReaderAsset(paper, asset, false);
     toast(`PDF 已保存到 ${asset.cloud_provider}`);
@@ -1125,7 +1135,6 @@ const formatStorageBytes = (bytes = 0) => {
 function renderStorageStatus(payload) {
   state.storage = payload;
   const settings = payload.settings || {};
-  updateReaderStorageAction();
   el("readerStorageMode").querySelectorAll("option").forEach((option) => {
     option.disabled = !payload.configured && option.value !== "local";
   });
@@ -1136,18 +1145,27 @@ function renderStorageStatus(payload) {
   el("readerStorageMode").value = settings.pdf_storage_mode || "local";
   el("localPdfDir").value = settings.local_pdf_dir || "";
   el("localCacheMaxMb").value = settings.local_cache_max_mb || 2048;
+  el("sharedStorageLimitRow").hidden = !payload.shared_library;
+  el("sharedStorageMaxMb").value = settings.shared_storage_max_mb || 2048;
   el("r2BillingCycleDay").value = settings.r2_billing_cycle_day || 1;
-  el("storageEntryStatus").textContent = payload.configured ? payload.provider : "本地";
+  updateReaderStorageAction();
+  el("storageEntryStatus").textContent = payload.shared_library ? "共享 R2" : payload.configured ? payload.provider : "本地";
   const usage = payload.usage || {};
   el("cloudUsageMeta").textContent = payload.configured
-    ? `${payload.provider} · ${payload.bucket} · ${usage.period_start || ""} 至 ${usage.period_end || ""} · ${usage.object_count || 0} 个对象`
+    ? `${payload.provider} · ${payload.bucket}${payload.namespace ? ` / ${payload.namespace}` : ""} · ${usage.period_start || ""} 至 ${usage.period_end || ""} · ${usage.object_count || 0} 个对象`
     : `尚未配置对象存储${payload.missing_configuration?.length ? ` · 缺少 ${payload.missing_configuration.join("、")}` : ""}`;
   const meters = [
-    ["存储容量", usage.storage_percent || 0, `${formatStorageBytes(usage.storage_bytes || 0)} / 10 GB`],
+    [
+      payload.shared_library ? "共享库容量" : "存储容量",
+      payload.shared_library ? usage.shared_storage_percent || 0 : usage.storage_percent || 0,
+      payload.shared_library
+        ? `${formatStorageBytes(usage.shared_storage_bytes || 0)} / ${formatStorageBytes(usage.shared_storage_limit_bytes || 0)}`
+        : `${formatStorageBytes(usage.storage_bytes || 0)} / 10 GB`,
+    ],
     ["A 类操作", usage.class_a_percent || 0, `${Number(usage.class_a || 0).toLocaleString()} / 1,000,000`],
     ["B 类操作", usage.class_b_percent || 0, `${Number(usage.class_b || 0).toLocaleString()} / 10,000,000`],
   ];
-  el("storageUsageMeters").innerHTML = meters.map(([label, percent, detail]) => `<div class="usage-meter"><div><strong>${label}</strong><span>${detail}</span></div><progress max="100" value="${Math.min(100, percent)}"></progress><small>${percent.toFixed(3)}% 免费额度</small></div>`).join("");
+  el("storageUsageMeters").innerHTML = meters.map(([label, percent, detail]) => `<div class="usage-meter"><div><strong>${label}</strong><span>${detail}</span></div><progress max="100" value="${Math.min(100, percent)}"></progress><small>${percent.toFixed(3)}% ${payload.shared_library && label === "共享库容量" ? "共享上限" : "免费额度"}</small></div>`).join("");
   const estimate = Number(usage.estimated_overage_usd || 0);
   el("storageUsageNotice").textContent = payload.configured
     ? `${usage.estimate_notice || ""} 当前估算超额费用：$${estimate.toFixed(4)}。${usage.inventory_error ? ` 清点失败：${usage.inventory_error}` : ""}`
@@ -1210,6 +1228,7 @@ async function openReader(paperId) {
   try {
     const paper = await api(`/api/papers/${encodeURIComponent(paperId)}`);
     state.readerPaper = paper;
+    el("readerShareConfirmed").checked = false;
     el("readerTitle").textContent = paper.title;
     const institutionNames = paper.notable_institutions?.slice(0, 2).map((item) => item.name).join(" · ");
     el("readerMeta").textContent = `${paper.authors.join(" · ") || "作者信息缺失"} · ${paper.venue || paper.source} · ${formatDate(paper.published)}${institutionNames ? ` · ${institutionNames}` : ""}`;
@@ -1472,6 +1491,7 @@ function bindEvents() {
           pdf_storage_mode: el("defaultStorageMode").value,
           local_pdf_dir: el("localPdfDir").value.trim(),
           local_cache_max_mb: Number(el("localCacheMaxMb").value),
+          shared_storage_max_mb: Number(el("sharedStorageMaxMb").value),
           r2_billing_cycle_day: Number(el("r2BillingCycleDay").value),
         }),
       });
@@ -1526,8 +1546,8 @@ function bindEvents() {
   });
   document.querySelectorAll("[data-reader-tab]").forEach((button) => button.addEventListener("click", () => setReaderTab(button.dataset.readerTab)));
   el("readerCacheButton").addEventListener("click", () => state.readerPaper && resolveReaderAsset(state.readerPaper, true));
-  el("readerImportButton").addEventListener("click", () => el("readerPdfInput").click());
-  el("pdfUnavailableImportButton").addEventListener("click", () => el("readerPdfInput").click());
+  el("readerImportButton").addEventListener("click", () => confirmSharedPdfUpload() && el("readerPdfInput").click());
+  el("pdfUnavailableImportButton").addEventListener("click", () => confirmSharedPdfUpload() && el("readerPdfInput").click());
   el("readerPdfInput").addEventListener("change", () => importReaderPdf(el("readerPdfInput").files?.[0]));
   el("readerCloudButton").addEventListener("click", archiveReaderPdf);
   el("readerStorageMode").addEventListener("change", updateReaderStorageAction);
