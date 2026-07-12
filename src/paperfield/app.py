@@ -7059,9 +7059,15 @@ class AppHandler(SimpleHTTPRequestHandler):
                     self.send_json({"error": "请输入关于论文的问题"}, 400)
                     return
                 try:
-                    ASSETS.prepare(paper)
-                    fulltext = ASSETS.fulltext(paper_id)
-                    notes = ASSETS.reading_notes(paper_id, fulltext) if fulltext else None
+                    # A chat request must not wait for a fresh PDF discovery/download.
+                    # Use cached full text when it exists and fall back to the abstract otherwise.
+                    fulltext = ""
+                    notes = None
+                    try:
+                        fulltext = ASSETS.fulltext(paper_id)
+                        notes = ASSETS.reading_notes(paper_id, fulltext) if fulltext else None
+                    except Exception as error:
+                        print(f"Paper chat full-text access failed for {paper_id}; using abstract: {error}")
                     history = STORE.chat_history(paper_id)
                     answer = EXPLAINER.ask(
                         paper,

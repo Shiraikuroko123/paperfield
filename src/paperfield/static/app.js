@@ -2083,9 +2083,34 @@ async function loadChatHistory(paperId) {
   try {
     const payload = await api(`/api/papers/${encodeURIComponent(paperId)}/chat`);
     renderChatHistory(payload.items);
+    return true;
   } catch (error) {
     renderChatHistory([]);
+    return false;
   }
+}
+
+function appendPaperChatMessage(role, content, options = {}) {
+  const history = el("chatHistory");
+  if (history.querySelector(".chat-empty")) history.innerHTML = "";
+  const message = document.createElement("div");
+  message.className = `chat-message is-${role}${options.pending ? " is-pending" : ""}${options.error ? " is-error" : ""}`;
+  const label = document.createElement("strong");
+  label.textContent = role === "user" ? "你" : "论文导师";
+  message.append(label);
+  if (options.meta) {
+    const meta = document.createElement("span");
+    meta.className = "chat-message-meta";
+    meta.textContent = options.meta;
+    message.append(meta);
+  }
+  const body = document.createElement("p");
+  body.className = "math-rich-text";
+  body.innerHTML = mathTextMarkup(content);
+  message.append(body);
+  history.append(message);
+  history.scrollTop = history.scrollHeight;
+  return message;
 }
 
 async function openReader(paperId) {
@@ -2519,23 +2544,45 @@ function bindEvents() {
     const question = el("chatQuestion").value.trim();
     if (!paper || !question) return;
     const button = event.submitter || el("chatForm").querySelector("button[type=submit]");
+    const idleLabel = button.textContent;
     button.disabled = true;
+    button.textContent = "正在回答";
     el("chatQuestion").value = "";
-    const history = el("chatHistory");
-    if (history.querySelector(".chat-empty")) history.innerHTML = "";
-    const pending = document.createElement("div");
-    pending.className = "chat-message is-user";
-    pending.innerHTML = `<strong>你</strong><p class="math-rich-text">${mathTextMarkup(question)}</p>`;
-    history.append(pending);
+    appendPaperChatMessage("user", question);
+    const pending = appendPaperChatMessage("assistant", "正在基于已缓存的论文材料组织回答", { pending: true });
     try {
-      await api(`/api/papers/${encodeURIComponent(paper.id)}/chat`, { method: "POST", body: JSON.stringify({ question }) });
-      await loadChatHistory(paper.id);
+      const answer = await api(`/api/papers/${encodeURIComponent(paper.id)}/chat`, { method: "POST", body: JSON.stringify({ question }) });
+      pending.remove();
+      const basisLabels = {
+        fulltext: "基于全文精读",
+        fulltext_excerpt: "基于全文摘录",
+        abstract: "基于论文摘要",
+      };
+      appendPaperChatMessage("assistant", answer.answer || "模型没有返回可显示的回答。", {
+        meta: basisLabels[answer.reading_basis] || "基于论文材料",
+      });
       monitorPaperReadingBackup(paper.id);
     } catch (error) {
+      pending.classList.remove("is-pending");
+      pending.classList.add("is-error");
+      const label = pending.querySelector("strong");
+      const body = pending.querySelector("p");
+      if (label) label.textContent = "论文导师";
+      if (body) body.textContent = `本次回答失败：${error.message}`;
+      const retry = document.createElement("button");
+      retry.className = "text-button chat-retry";
+      retry.type = "button";
+      retry.textContent = "重新填写问题";
+      retry.addEventListener("click", () => {
+        el("chatQuestion").value = question;
+        el("chatQuestion").focus();
+      });
+      pending.append(retry);
+      el("chatQuestion").value = question;
       toast(error.message, true);
-      await loadChatHistory(paper.id);
     } finally {
       button.disabled = false;
+      button.textContent = idleLabel;
       el("chatQuestion").focus();
     }
   });
