@@ -5,6 +5,7 @@ $profile = Join-Path $root "data\profiles\beta"
 $pidPath = Join-Path $profile "paperfield.pid"
 $tunnelPidPath = Join-Path $profile "cloudflared.pid"
 $ngrokPidPath = Join-Path $profile "ngrok.pid"
+$launcherPidPath = Join-Path $profile "share-launcher.pid"
 
 if (Test-Path -LiteralPath $ngrokPidPath) {
     $ngrokId = [int](Get-Content -LiteralPath $ngrokPidPath -Raw).Trim()
@@ -35,6 +36,16 @@ if (Test-Path -LiteralPath $pidPath) {
     }
     Remove-Item -LiteralPath $pidPath -ErrorAction SilentlyContinue
 }
+
+$listener = Get-NetTCPConnection -LocalPort 8876 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($listener) {
+    $legacyProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $($listener.OwningProcess)" -ErrorAction SilentlyContinue
+    if ($legacyProcess -and $legacyProcess.CommandLine -like "*app.py*--port*8876*") {
+        Stop-Process -Id $listener.OwningProcess -Force
+        Write-Host "Stopped legacy Paperfield beta service."
+    }
+}
+Remove-Item -LiteralPath $launcherPidPath -ErrorAction SilentlyContinue
 
 if (-not (Test-Path -LiteralPath $pidPath) -and -not (Test-Path -LiteralPath $tunnelPidPath)) {
     Write-Host "Paperfield beta sharing is stopped."
