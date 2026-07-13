@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="具身智能与大模型论文、开源项目每周研究工作台">
   <title>Paperfield</title>
-  <link rel="stylesheet" href="/styles.css?v=1.0.0-purple-math1">
+  <link rel="stylesheet" href="/styles.css?v=1.0.1-select-translate">
   <link rel="stylesheet" href="/vendor/katex/katex.min.css?v=0.16.11">
 </head>
 <body>
@@ -210,6 +210,7 @@
       <div class="reader-grid">
         <section class="pdf-workspace" aria-label="论文 PDF">
           <div class="pdf-actions" id="pdfActions" hidden>
+            <button id="pdfTextButton" type="button" title="打开可选择的论文正文">可选文本</button>
             <a id="pdfOpenButton" href="#" target="_blank" rel="noreferrer">新窗口打开</a>
           </div>
           <div class="pdf-status" id="pdfStatus">
@@ -253,11 +254,16 @@
               <label for="translationPage">页码</label>
               <input id="translationPage" type="number" min="1" value="1">
               <span id="translationPageCount">/ 0</span>
+              <button class="button button-secondary" id="translateSelectionButton" type="button" disabled>翻译所选</button>
               <button class="button button-secondary" id="translatePageButton" type="button">翻译本页</button>
+            </div>
+            <div class="translation-selection-status" id="translationSelectionStatus" hidden>
+              <span id="translationSelectionMeta"></span>
+              <button id="clearTranslationSelection" type="button" aria-label="清除所选文字" title="清除所选文字">×</button>
             </div>
             <p class="translation-provider" id="translationProvider">优先使用浏览器本机翻译，不消耗 GPT。</p>
             <div class="translation-columns">
-              <section><h3>原文</h3><div class="translation-text" id="translationSource"></div></section>
+              <section><h3>原文</h3><div class="translation-text" id="translationSource" tabindex="0"></div></section>
               <section><h3>中文</h3><div class="translation-text" id="translationResult"></div></section>
             </div>
           </section>
@@ -331,6 +337,7 @@
                   <button class="is-active" type="button" data-project-doc-lang="en">英</button>
                   <button type="button" data-project-doc-lang="ja">日</button>
                 </div>
+                <span class="project-document-translation-status" id="projectDocumentTranslationStatus" hidden></span>
                 <button class="text-button" id="projectRootReadme" type="button" hidden>项目 README</button>
               </div>
             </div>
@@ -385,6 +392,6 @@
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
   <script src="/vendor/pdfjs/pdf.min.js?v=3.11.174"></script>
   <script src="/vendor/katex/katex.min.js?v=0.16.11" defer></script>
-  <script src="/app.js?v=1.0.0-math2" defer></script>
+  <script src="/app.js?v=1.0.1-select-translate" defer></script>
 </body>
 </html>

@@ -902,6 +902,51 @@ class FeedTests(unittest.TestCase):
         self.assertIn("<p>运行模型</p>", rendered)
         self.assertEqual(provider, "test")
 
+    def test_html_translation_detects_non_english_source_text(self):
+        calls = []
+
+        class FakeTranslator:
+            @staticmethod
+            def translate(text, source="en", target="zh"):
+                calls.append((source, target, text))
+                return {"text": text.replace("你好世界", "こんにちは世界"), "provider": "test"}
+
+        document = APP.TranslatableHtml()
+        document.feed("<h1>你好世界</h1><pre><code>pip install package</code></pre>")
+        rendered, provider = document.translated_html(FakeTranslator(), "ja")
+
+        self.assertIn("<h1>こんにちは世界</h1>", rendered)
+        self.assertIn("<code>pip install package</code>", rendered)
+        self.assertEqual(calls[0][0], "auto")
+        self.assertEqual(calls[0][1], "ja")
+        self.assertEqual(provider, "test")
+
+    def test_translation_service_uses_requests_for_google_translation(self):
+        class FakeResponse:
+            @staticmethod
+            def raise_for_status():
+                return None
+
+            @staticmethod
+            def json():
+                return [[["你好世界", "Hello world", None, None, 10]]]
+
+        class FakeRequests:
+            calls = []
+
+            @classmethod
+            def get(cls, url, params=None, headers=None, timeout=None):
+                cls.calls.append({"url": url, "params": params, "headers": headers, "timeout": timeout})
+                return FakeResponse()
+
+        with mock.patch.object(APP, "requests", FakeRequests):
+            result = APP.TranslationService().translate("Hello world", "auto", "zh")
+
+        self.assertEqual(result["text"], "你好世界")
+        self.assertEqual(result["provider"], "Google 免费翻译端点")
+        self.assertEqual(FakeRequests.calls[0]["params"]["sl"], "auto")
+        self.assertEqual(FakeRequests.calls[0]["params"]["tl"], "zh-CN")
+
     def test_project_document_translation_restores_from_cloud_cache(self):
         class FakeAssets:
             @staticmethod

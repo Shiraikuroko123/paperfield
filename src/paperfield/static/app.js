@@ -17,6 +17,9 @@ const state = {
   readerPdfLoadingTask: null,
   readerPdfObserver: null,
   readerPdfToken: 0,
+  translationPageText: "",
+  translationSelection: null,
+  translationLoadRequestId: 0,
   status: "",
   topic: "",
   view: "recommended",
@@ -891,15 +894,47 @@ function renderProjectDocument(path, htmlContent, important = false) {
     path,
     important,
     html: { en: htmlContent },
+    metadata: { en: { label: "原文" } },
     language: "en",
   };
   el("projectDocumentPath").textContent = path || "README";
   el("projectDocumentLanguages").hidden = !important;
+  el("projectDocumentTranslationStatus").hidden = !important;
   document.querySelectorAll("[data-project-doc-lang]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.projectDocLang === "en");
     button.disabled = false;
   });
   el("projectReadmeContent").innerHTML = htmlContent || "<p>文档内容为空。</p>";
+  updateProjectDocumentTranslationStatus("en");
+}
+
+function projectDocumentLanguageLabel(target) {
+  return { en: "英文", zh: "中文", ja: "日文" }[target] || target;
+}
+
+function updateProjectDocumentTranslationStatus(target, phase = "") {
+  const status = el("projectDocumentTranslationStatus");
+  const documentState = state.projectDocument;
+  if (!documentState?.important) {
+    status.hidden = true;
+    return;
+  }
+  status.hidden = false;
+  status.dataset.state = phase;
+  if (phase === "loading") {
+    status.textContent = `正在生成${projectDocumentLanguageLabel(target)}`;
+    return;
+  }
+  if (phase === "error") {
+    status.textContent = `${projectDocumentLanguageLabel(target)}翻译失败`;
+    return;
+  }
+  const metadata = documentState.metadata?.[target] || {};
+  if (target === "en") {
+    status.textContent = "原文";
+    return;
+  }
+  status.textContent = `${projectDocumentLanguageLabel(target)} · ${metadata.provider || "翻译已就绪"}${metadata.cached ? " · 已缓存" : ""}`;
 }
 
 async function setProjectDocumentLanguage(target) {
@@ -910,18 +945,23 @@ async function setProjectDocumentLanguage(target) {
   try {
     if (!documentState.html[target]) {
       el("projectReadmeContent").innerHTML = `<div class="reader-explain-empty"><strong>正在生成${target === "zh" ? "中文" : "日文"}文档</strong><p>保留标题、列表、链接与代码块</p></div>`;
+      updateProjectDocumentTranslationStatus(target, "loading");
       const payload = await api(`/api/projects/${encodeURIComponent(workspace.project.full_name)}/document`, {
         method: "POST",
         body: JSON.stringify({ path: documentState.path, target }),
       });
       documentState.html[target] = payload.html;
+      documentState.metadata[target] = { provider: payload.provider, cached: payload.cached };
     }
     documentState.language = target;
     el("projectReadmeContent").innerHTML = documentState.html[target];
     document.querySelectorAll("[data-project-doc-lang]").forEach((button) => button.classList.toggle("is-active", button.dataset.projectDocLang === target));
+    updateProjectDocumentTranslationStatus(target);
   } catch (error) {
     el("projectReadmeContent").innerHTML = documentState.html.en;
     documentState.language = "en";
+    document.querySelectorAll("[data-project-doc-lang]").forEach((button) => button.classList.toggle("is-active", button.dataset.projectDocLang === "en"));
+    updateProjectDocumentTranslationStatus(target, "error");
     toast(error.message, true);
   } finally {
     document.querySelectorAll("[data-project-doc-lang]").forEach((button) => { button.disabled = false; });
@@ -1596,6 +1636,84 @@ function setReaderTab(tab) {
     panel.hidden = !active;
     panel.classList.toggle("is-active", active);
   });
+  if (tab === "translate" && state.readerAsset?.fulltext_available && !state.translationPageText) {
+    loadTranslationPage(Number(el("translationPage").value) || 1);
+  }
+}
+
+function readerSelectionContainer(node) {
+  if (!node) return null;
+  if (node.nodeType === Node.ELEMENT_NODE) return node;
+  return node.parentElement || null;
+}
+
+function updateTranslationSelectionUi() {
+  const selection = state.translationSelection;
+  const status = el("translationSelectionStatus");
+  const button = el("translateSelectionButton");
+  button.disabled = !selection?.text;
+  status.hidden = !selection?.text;
+  if (!selection?.text) {
+    el("translationSelectionMeta").textContent = "";
+    return;
+  }
+  const page = selection.page ? ` · 第 ${selection.page} 页` : "";
+  const truncation = selection.truncated ? " · 已截取前 16,000 字" : "";
+  el("translationSelectionMeta").textContent = `已选 ${selection.text.length.toLocaleString()} 字${page}${truncation}`;
+}
+
+function clearTranslationSelection({ clearNativeSelection = true } = {}) {
+  state.translationSelection = null;
+  updateTranslationSelectionUi();
+  if (clearNativeSelection) globalThis.getSelection?.()?.removeAllRanges();
+}
+
+function setTranslationSelection(value, page = 0) {
+  const normalized = String(value || "").replace(/\u00a0/g, " ").trim();
+  if (!normalized) return;
+  const text = normalized.slice(0, 16000);
+  state.translationSelection = {
+    text,
+    page: Number(page) || 0,
+    truncated: normalized.length > text.length,
+  };
+  updateTranslationSelectionUi();
+}
+
+function currentPdfPageNumber() {
+  const viewer = el("pdfCanvasViewer");
+  const pages = [...viewer.querySelectorAll(".pdf-page")];
+  if (!pages.length) return Number(el("translationPage").value) || 1;
+  const viewerTop = viewer.getBoundingClientRect().top;
+  return Number(pages.reduce((closest, page) => {
+    const distance = Math.abs(page.getBoundingClientRect().top - viewerTop);
+    return distance < closest.distance ? { page, distance } : closest;
+  }, { page: pages[0], distance: Number.POSITIVE_INFINITY }).page.dataset.page) || 1;
+}
+
+function captureReaderTextSelection() {
+  if (!el("readerDialog").open) return;
+  const selection = globalThis.getSelection?.();
+  if (!selection || selection.isCollapsed || !selection.rangeCount) return;
+  const container = readerSelectionContainer(selection.getRangeAt(0).commonAncestorContainer);
+  if (!container) return;
+  const source = el("translationSource");
+  const pdfViewer = el("pdfCanvasViewer");
+  if (!source.contains(container) && !pdfViewer.contains(container)) return;
+  const page = source.contains(container)
+    ? Number(el("translationPage").value) || 1
+    : Number(container.closest(".pdf-page")?.dataset.page) || 1;
+  setTranslationSelection(selection.toString(), page);
+  setReaderTab("translate");
+  if (state.readerAsset?.fulltext_available && Number(el("translationPage").value) !== page) {
+    loadTranslationPage(page);
+  }
+}
+
+function openReaderText() {
+  const page = currentPdfPageNumber();
+  setReaderTab("translate");
+  if (state.readerAsset?.fulltext_available) loadTranslationPage(page);
 }
 
 function setPdfStatus(title, detail = "", retry = false) {
@@ -1632,6 +1750,41 @@ function releaseReaderPdf() {
   state.readerPdfImageQueue = Promise.resolve();
 }
 
+async function renderPdfTextLayer(page, viewport, surface, canvas, token) {
+  if (!globalThis.pdfjsLib?.Util) return;
+  try {
+    const textContent = await page.getTextContent();
+    if (state.readerPdfToken !== token) return;
+    const layer = document.createElement("div");
+    layer.className = "pdf-text-layer";
+    layer.setAttribute("aria-label", "可选择的论文正文");
+    const fragment = document.createDocumentFragment();
+    const context = canvas.getContext("2d");
+    for (const item of textContent.items) {
+      if (!item.str) continue;
+      const transform = globalThis.pdfjsLib.Util.transform(viewport.transform, item.transform);
+      const angle = Math.atan2(transform[1], transform[0]);
+      const fontHeight = Math.max(1, Math.hypot(transform[2], transform[3]));
+      const style = textContent.styles[item.fontName] || {};
+      const ascent = style.ascent ? style.ascent * fontHeight : fontHeight;
+      const expectedWidth = Math.abs((item.width || 0) * viewport.scale);
+      context.font = `${fontHeight}px sans-serif`;
+      const measuredWidth = context.measureText(item.str).width || expectedWidth || 1;
+      const span = document.createElement("span");
+      span.textContent = item.str;
+      span.style.left = `${transform[4] + ascent * Math.sin(angle)}px`;
+      span.style.top = `${transform[5] - ascent * Math.cos(angle)}px`;
+      span.style.fontSize = `${fontHeight}px`;
+      span.style.transform = `rotate(${angle}rad) scaleX(${expectedWidth / measuredWidth || 1})`;
+      fragment.append(span);
+    }
+    layer.append(fragment);
+    surface.append(layer);
+  } catch {
+    // The visual PDF remains usable when a document does not expose a text layer.
+  }
+}
+
 async function renderPdfPage(pdfDocument, pageNumber, shell, token) {
   if (shell.dataset.rendered || shell.dataset.rendering || state.readerPdfToken !== token) return;
   shell.dataset.rendering = "1";
@@ -1649,12 +1802,20 @@ async function renderPdfPage(pdfDocument, pageNumber, shell, token) {
     canvas.style.width = `${Math.floor(viewport.width)}px`;
     canvas.style.height = `${Math.floor(viewport.height)}px`;
     shell.style.minHeight = `${Math.floor(viewport.height)}px`;
-    shell.prepend(canvas);
-    await page.render({
-      canvasContext: canvas.getContext("2d", { alpha: false }),
-      viewport,
-      transform: outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0],
-    }).promise;
+    const surface = document.createElement("div");
+    surface.className = "pdf-page-surface";
+    surface.style.width = `${Math.floor(viewport.width)}px`;
+    surface.style.height = `${Math.floor(viewport.height)}px`;
+    surface.append(canvas);
+    shell.prepend(surface);
+    await Promise.all([
+      page.render({
+        canvasContext: canvas.getContext("2d", { alpha: false }),
+        viewport,
+        transform: outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0],
+      }).promise,
+      renderPdfTextLayer(page, viewport, surface, canvas, token),
+    ]);
     shell.dataset.rendered = "1";
   } finally {
     delete shell.dataset.rendering;
@@ -2237,6 +2398,9 @@ async function openReader(paperId) {
   state.selectedId = paperId;
   state.readerPaper = null;
   state.readerAsset = null;
+  state.translationPageText = "";
+  state.translationLoadRequestId += 1;
+  clearTranslationSelection({ clearNativeSelection: false });
   setReaderTab("explain");
   setPdfStatus("正在载入论文", "读取元数据与本地缓存状态");
   el("readerTitle").textContent = "论文阅读工作台";
@@ -2301,13 +2465,19 @@ async function generateReaderExplanation() {
 async function loadTranslationPage(pageNumber) {
   const paper = state.readerPaper;
   if (!paper || !state.readerAsset?.fulltext_available) return;
+  const requestId = ++state.translationLoadRequestId;
   try {
     const page = await api(`/api/papers/${encodeURIComponent(paper.id)}/text?page=${pageNumber}`);
+    if (requestId !== state.translationLoadRequestId || state.readerPaper?.id !== paper.id) return;
     el("translationPage").value = page.page;
     el("translationPageCount").textContent = `/ ${page.page_count}`;
-    el("translationSource").textContent = page.text || "该页没有提取到可翻译文本。";
+    state.translationPageText = page.text || "";
+    el("translationSource").textContent = state.translationPageText || "该页没有提取到可翻译文本。";
     el("translationResult").textContent = "";
+    if (state.translationSelection?.page !== page.page) clearTranslationSelection({ clearNativeSelection: false });
   } catch (error) {
+    if (requestId !== state.translationLoadRequestId || state.readerPaper?.id !== paper.id) return;
+    state.translationPageText = "";
     el("translationSource").textContent = error.message;
   }
 }
@@ -2325,29 +2495,55 @@ async function localBrowserTranslate(text) {
   return translated.join("\n\n");
 }
 
+function translationSourceLanguage(text) {
+  const latin = (String(text).match(/[A-Za-z]/g) || []).length;
+  const cjk = (String(text).match(/[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/g) || []).length;
+  return latin >= cjk ? "en" : "auto";
+}
+
+async function translateText(text) {
+  const source = translationSourceLanguage(text);
+  const local = source === "en" ? await localBrowserTranslate(text) : null;
+  if (local) return { text: local, provider: "浏览器本机翻译" };
+  const payload = await api("/api/translate", {
+    method: "POST",
+    body: JSON.stringify({ text, source, target: "zh" }),
+  });
+  return { text: payload.text, provider: payload.provider };
+}
+
 async function translateCurrentPage() {
-  const source = el("translationSource").textContent.trim();
-  if (!source) {
+  if (!state.translationPageText) {
     await loadTranslationPage(Number(el("translationPage").value) || 1);
   }
-  const text = el("translationSource").textContent.trim();
+  const text = state.translationPageText.trim();
   if (!text) return;
   el("translatePageButton").disabled = true;
   el("translationResult").textContent = "正在翻译…";
   try {
-    const local = await localBrowserTranslate(text);
-    if (local) {
-      el("translationResult").textContent = local;
-      el("translationProvider").textContent = "浏览器本机翻译 · 未使用 GPT";
-    } else {
-      const payload = await api("/api/translate", { method: "POST", body: JSON.stringify({ text, source: "en", target: "zh" }) });
-      el("translationResult").textContent = payload.text;
-      el("translationProvider").textContent = `${payload.provider} · 未使用 GPT`;
-    }
+    const result = await translateText(text);
+    el("translationResult").textContent = result.text;
+    el("translationProvider").textContent = `${result.provider} · 未使用 GPT`;
   } catch (error) {
     el("translationResult").textContent = error.message;
   } finally {
     el("translatePageButton").disabled = false;
+  }
+}
+
+async function translateSelectedText() {
+  const selection = state.translationSelection;
+  if (!selection?.text) return;
+  el("translateSelectionButton").disabled = true;
+  el("translationResult").textContent = "正在翻译选中文字…";
+  try {
+    const result = await translateText(selection.text);
+    el("translationResult").textContent = result.text;
+    el("translationProvider").textContent = `选中文字 · ${result.provider} · 未使用 GPT`;
+  } catch (error) {
+    el("translationResult").textContent = error.message;
+  } finally {
+    el("translateSelectionButton").disabled = !state.translationSelection?.text;
   }
 }
 
@@ -2682,6 +2878,17 @@ function bindEvents() {
   });
   el("translationPage").addEventListener("change", () => loadTranslationPage(Number(el("translationPage").value) || 1));
   el("translatePageButton").addEventListener("click", translateCurrentPage);
+  el("translateSelectionButton").addEventListener("click", translateSelectedText);
+  el("clearTranslationSelection").addEventListener("click", () => clearTranslationSelection());
+  el("pdfTextButton").addEventListener("click", openReaderText);
+  let readerSelectionFrame = 0;
+  document.addEventListener("selectionchange", () => {
+    if (readerSelectionFrame) return;
+    readerSelectionFrame = window.requestAnimationFrame(() => {
+      readerSelectionFrame = 0;
+      captureReaderTextSelection();
+    });
+  });
   el("chatForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const paper = state.readerPaper;

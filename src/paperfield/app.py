@@ -22,6 +22,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import warnings
 import xml.etree.ElementTree as ET
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -31,6 +32,13 @@ from html.parser import HTMLParser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+
+try:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        import requests
+except ImportError:
+    requests = None
 
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -62,7 +70,7 @@ SETTINGS_PATH = Path(os.environ.get("PAPERFIELD_SETTINGS_PATH", DATA_DIR / "sett
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", CATALOG_DIR / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", CATALOG_DIR / "venues.json")).expanduser().resolve()
 INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", CATALOG_DIR / "institutions.json")).expanduser().resolve()
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
 RECOMMENDATION_WEIGHT_KEYS = (
@@ -3505,6 +3513,8 @@ class ReadmeLinkRewriter(HTMLParser):
 
 class TranslatableHtml(HTMLParser):
     SKIP_TAGS = {"code", "pre", "kbd", "samp", "script", "style"}
+    MAX_BATCH_CHARS = 2800
+    MAX_BATCH_SEGMENTS = 12
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=False)
@@ -3532,7 +3542,9 @@ class TranslatableHtml(HTMLParser):
         self.tokens.append({"kind": "html", "value": f"</{tag}>"})
 
     def handle_data(self, data: str) -> None:
-        should_translate = not self.skip_depth and bool(re.search(r"[A-Za-z]{2,}", data))
+        should_translate = not self.skip_depth and bool(
+            re.search(r"[A-Za-z\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]", data)
+        )
         self.tokens.append({"kind": "text", "value": data, "translate": should_translate})
 
     def handle_entityref(self, name: str) -> None:
@@ -3549,7 +3561,10 @@ class TranslatableHtml(HTMLParser):
         current_chars = 0
         for index in indexes:
             size = len(self.tokens[index]["value"])
-            if current and (len(current) >= 24 or current_chars + size > 10000):
+            if current and (
+                len(current) >= self.MAX_BATCH_SEGMENTS
+                or current_chars + size > self.MAX_BATCH_CHARS
+            ):
                 batches.append(current)
                 current = []
                 current_chars = 0
@@ -3562,7 +3577,7 @@ class TranslatableHtml(HTMLParser):
             source = "\n".join(
                 f"{marker}\n{self.tokens[index]['value'].strip()}" for marker, index in zip(markers, batch)
             )
-            result = translator.translate(source, "en", target)
+            result = translator.translate(source, "auto", target)
             provider = result.get("provider", provider)
             translated = result.get("text", "")
             matches = list(re.finditer(r"\[\[\[PF_SEGMENT_(\d{6})\]\]\]\s*", translated))
@@ -4614,14 +4629,24 @@ class TranslationService:
             api_key = os.environ.get("PAPERFIELD_TRANSLATE_API_KEY", "").strip()
             if api_key:
                 payload["api_key"] = api_key
-            request = urllib.request.Request(
-                f"{endpoint}/translate",
-                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
-                method="POST",
-            )
-            with urllib.request.urlopen(request, timeout=60) as response:
-                result = json.loads(response.read().decode("utf-8"))
+            if requests is not None:
+                response = requests.post(
+                    f"{endpoint}/translate",
+                    json=payload,
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=60,
+                )
+                response.raise_for_status()
+                result = response.json()
+            else:
+                request = urllib.request.Request(
+                    f"{endpoint}/translate",
+                    data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
+                    method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    result = json.loads(response.read().decode("utf-8"))
             translated = result.get("translatedText") or result.get("translation") or ""
             if not translated:
                 raise RuntimeError("翻译服务没有返回结果")
@@ -4630,15 +4655,24 @@ class TranslationService:
         chunks = [content[index:index + 3500] for index in range(0, len(content), 3500)]
         translated_chunks = []
         for chunk in chunks:
-            params = urllib.parse.urlencode(
-                {"client": "gtx", "sl": source, "tl": "zh-CN" if target == "zh" else target, "dt": "t", "q": chunk}
-            )
-            request = urllib.request.Request(
-                f"https://translate.googleapis.com/translate_a/single?{params}",
-                headers={"User-Agent": USER_AGENT},
-            )
-            with urllib.request.urlopen(request, timeout=45) as response:
-                result = json.loads(response.read().decode("utf-8"))
+            params = {"client": "gtx", "sl": source, "tl": "zh-CN" if target == "zh" else target, "dt": "t", "q": chunk}
+            if requests is not None:
+                response = requests.get(
+                    "https://translate.googleapis.com/translate_a/single",
+                    params=params,
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=45,
+                )
+                response.raise_for_status()
+                result = response.json()
+            else:
+                query = urllib.parse.urlencode(params)
+                request = urllib.request.Request(
+                    f"https://translate.googleapis.com/translate_a/single?{query}",
+                    headers={"User-Agent": USER_AGENT},
+                )
+                with urllib.request.urlopen(request, timeout=45) as response:
+                    result = json.loads(response.read().decode("utf-8"))
             translated_chunks.append("".join(item[0] for item in (result[0] or []) if item and item[0]))
         return {"text": "\n\n".join(translated_chunks), "provider": "Google 免费翻译端点", "uses_gpt": False}
 

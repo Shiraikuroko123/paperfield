@@ -504,16 +504,21 @@ a { color: var(--primary); text-underline-offset: 3px; }
 .pdf-canvas-viewer { position: absolute; inset: 0; overflow: auto; padding: 16px 18px 42px; background: oklch(0.17 0.008 145); overscroll-behavior: contain; }
 .pdf-canvas-viewer[hidden] { display: none; }
 .pdf-page { position: relative; width: 100%; min-height: 240px; display: grid; place-items: center; margin: 0 auto 16px; background: oklch(0.22 0.008 145); }
+.pdf-page-surface { position: relative; flex: 0 0 auto; max-width: 100%; line-height: 1; }
 .pdf-page canvas { display: block; max-width: 100%; height: auto; background: white; }
 .pdf-page img { display: block; max-width: 100%; height: auto; background: white; }
-.pdf-page-label { position: absolute; right: 7px; bottom: 6px; padding: 2px 5px; border-radius: 3px; background: oklch(0.18 0.01 145 / 0.8); color: oklch(0.82 0.01 145); font-family: "Cascadia Mono", Consolas, monospace; font-size: 8px; }
+.pdf-text-layer { position: absolute; inset: 0; z-index: 2; overflow: hidden; color: transparent; line-height: 1; user-select: text; -webkit-user-select: text; }
+.pdf-text-layer span { position: absolute; color: transparent; -webkit-text-fill-color: transparent; cursor: text; transform-origin: 0 0; white-space: pre; }
+.pdf-text-layer ::selection { background: color-mix(in oklch, var(--signal) 68%, white); color: transparent; }
+.pdf-page-label { position: absolute; right: 7px; bottom: 6px; z-index: 3; padding: 2px 5px; border-radius: 3px; background: oklch(0.18 0.01 145 / 0.8); color: oklch(0.82 0.01 145); font-family: "Cascadia Mono", Consolas, monospace; font-size: 8px; pointer-events: none; }
 .pdf-page.is-rendering::before { content: ""; position: absolute; left: calc(50% - 11px); top: calc(50% - 11px); width: 22px; height: 22px; border: 2px solid oklch(0.42 0.02 145); border-top-color: var(--signal); border-radius: 50%; animation: pdf-spin 800ms linear infinite; }
 .pdf-page-error { max-width: 30ch; color: oklch(0.82 0.035 30); font-size: 11px; line-height: 1.6; text-align: center; }
 .pdf-page-retry { min-height: 28px; border: 1px solid oklch(0.5 0.09 145); border-radius: var(--radius-control); background: oklch(0.24 0.018 145); color: oklch(0.94 0.01 145); cursor: pointer; font-size: 10px; }
 .pdf-actions { position: absolute; top: 9px; right: 12px; z-index: 3; }
 .pdf-actions[hidden] { display: none; }
-.pdf-actions a { display: inline-flex; align-items: center; min-height: 30px; padding: 5px 9px; border: 1px solid oklch(0.44 0.02 145); border-radius: var(--radius-control); background: oklch(0.22 0.012 145); color: oklch(0.92 0.01 145); font-size: 10px; text-decoration: none; }
-.pdf-actions a:hover { border-color: color-mix(in oklch, var(--signal) 55%, oklch(0.44 0.02 145)); color: var(--signal); }
+.pdf-actions { display: flex; align-items: center; gap: 6px; }
+.pdf-actions a, .pdf-actions button { display: inline-flex; align-items: center; min-height: 30px; padding: 5px 9px; border: 1px solid oklch(0.44 0.02 145); border-radius: var(--radius-control); background: oklch(0.22 0.012 145); color: oklch(0.92 0.01 145); cursor: pointer; font-size: 10px; text-decoration: none; }
+.pdf-actions a:hover, .pdf-actions button:hover { border-color: color-mix(in oklch, var(--signal) 55%, oklch(0.44 0.02 145)); color: var(--signal); }
 .pdf-status, .pdf-unavailable { position: absolute; inset: 0; display: grid; align-content: center; justify-items: center; gap: 8px; padding: 36px; color: oklch(0.92 0.008 145); text-align: center; }
 .pdf-status strong, .pdf-unavailable strong { font-size: 15px; }
 .pdf-status span, .pdf-unavailable p { max-width: 50ch; margin: 0; color: oklch(0.76 0.012 145); font-size: 11px; line-height: 1.6; }
@@ -573,15 +578,24 @@ a { color: var(--primary); text-underline-offset: 3px; }
 #projectChatPanel .chat-history { min-height: 0; overflow: auto; }
 #projectChatPanel .chat-form { position: static; bottom: auto; z-index: 2; }
 #projectChatSubmit { position: relative; z-index: 2; touch-action: manipulation; }
-.translation-toolbar { display: flex; align-items: center; gap: 7px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.translation-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .translation-toolbar label, .translation-toolbar span { color: var(--muted); font-size: 11px; }
 .translation-toolbar input { width: 70px; border: 1px solid var(--line); border-radius: var(--radius-control); padding: 6px 8px; }
 .translation-toolbar button { margin-left: auto; font-size: 11px; }
+.translation-toolbar #translateSelectionButton { margin-left: auto; }
+.translation-toolbar #translatePageButton { margin-left: 0; }
+.translation-selection-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; margin-top: 10px; padding: 5px 8px; border: 1px solid color-mix(in oklch, var(--primary) 28%, var(--line)); border-radius: var(--radius-control); background: color-mix(in oklch, var(--primary-soft) 45%, var(--surface)); color: var(--primary-hover); font-size: 10px; }
+.translation-selection-status[hidden] { display: none; }
+.translation-selection-status span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.translation-selection-status button { width: 22px; min-width: 22px; min-height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; font-size: 15px; line-height: 1; }
+.translation-selection-status button:hover { background: color-mix(in oklch, var(--primary) 13%, transparent); }
 .translation-provider { margin: 12px 0; color: var(--muted); font-size: 10px; }
 .translation-columns { display: grid; gap: 18px; }
 .translation-columns section { min-width: 0; }
 .translation-columns h3 { margin: 0 0 7px; font-size: 11px; }
 .translation-text { min-height: 150px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface); color: var(--ink-soft); font-size: 12px; line-height: 1.72; white-space: pre-wrap; overflow-wrap: anywhere; }
+#translationSource { cursor: text; user-select: text; -webkit-user-select: text; }
+#translationSource:focus { outline: 2px solid color-mix(in oklch, var(--focus) 45%, transparent); outline-offset: 2px; }
 
 .project-reader-dialog { width: min(97vw, 1760px); height: min(95dvh, 1120px); max-width: none; max-height: none; padding: 0; border: 0; border-radius: var(--radius-panel); background: var(--bg); color: var(--ink); overflow: hidden; box-shadow: 0 8px 24px oklch(0.12 0.02 145 / 0.24); }
 .project-reader-dialog::backdrop { background: oklch(0.12 0.02 145 / 0.62); }
@@ -644,6 +658,10 @@ a { color: var(--primary); text-underline-offset: 3px; }
 .project-document-languages button { min-width: 26px; padding: 3px 6px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; }
 .project-document-languages button:hover { color: var(--ink); }
 .project-document-languages button.is-active { background: var(--primary); color: white; }
+.project-document-translation-status { max-width: 145px; margin: 0; color: var(--muted); font-family: "Cascadia Mono", Consolas, monospace; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
+.project-document-translation-status[hidden] { display: none; }
+.project-document-translation-status[data-state="loading"] { color: var(--primary-hover); }
+.project-document-translation-status[data-state="error"] { color: var(--danger); }
 .project-readme { max-width: 78ch; color: var(--ink-soft); font-size: 12px; line-height: 1.72; overflow-wrap: anywhere; }
 .project-document-panel .project-readme { padding: 18px 20px 34px; }
 .project-readme > :first-child { margin-top: 0; }
