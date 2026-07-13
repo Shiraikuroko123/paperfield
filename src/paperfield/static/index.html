@@ -110,6 +110,11 @@
           <div class="stream-head">
             <div class="stream-identity">
               <div><h2 id="streamTitle">每周精选</h2><span id="resultCount">正在载入</span></div>
+              <div class="stream-load-status" id="streamLoadStatus" role="status" aria-live="polite" hidden>
+                <span class="stream-load-signal" aria-hidden="true"></span>
+                <strong id="streamLoadLabel">正在初始化</strong>
+                <small id="streamLoadTime">0.0s</small>
+              </div>
               <details class="score-guide" id="scoreGuide">
                 <summary>评分标准 <span id="scoreGuideSummary">30 / 25 / 20 / 15 / 10</span></summary>
                 <div class="score-editor" id="scoreGuideContent">

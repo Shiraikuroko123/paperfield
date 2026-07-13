@@ -18,6 +18,7 @@
   --rail-muted: oklch(0.68 0.018 310);
   --danger: oklch(0.52 0.16 28);
   --warning: oklch(0.68 0.14 75);
+  --success: oklch(0.49 0.13 154);
   --focus: oklch(0.55 0.15 309);
   --rail-width: 224px;
   --reading-width: min(480px, 36vw);
@@ -244,7 +245,17 @@ a { color: var(--primary); text-underline-offset: 3px; }
 
 .stream-head h2 { display: inline; margin: 0; font-size: 14px; }
 .stream-head span { margin-left: 8px; color: var(--muted); font-size: 11px; }
-.stream-identity { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.stream-identity { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; min-width: 0; }
+.stream-load-status { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; gap: 6px; min-height: 25px; padding: 4px 7px; border-radius: var(--radius-control); background: color-mix(in oklch, var(--primary-soft) 52%, var(--surface)); color: var(--primary-hover); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.stream-load-status[hidden] { display: none; }
+.stream-load-status span { margin: 0; }
+.stream-load-status strong { overflow: hidden; text-overflow: ellipsis; font-size: 10px; font-weight: 650; }
+.stream-load-status small { color: var(--muted); font-family: "Cascadia Mono", Consolas, monospace; font-size: 9px; }
+.stream-load-signal { width: 6px; height: 6px; border-radius: 50%; background: var(--primary); animation: pulse 1.15s ease-in-out infinite; }
+.stream-load-status[data-state="ready"] { background: color-mix(in oklch, var(--success) 12%, var(--surface)); color: var(--success); }
+.stream-load-status[data-state="ready"] .stream-load-signal { background: var(--success); animation: none; }
+.stream-load-status[data-state="error"] { background: color-mix(in oklch, var(--danger) 8%, var(--surface)); color: var(--danger); }
+.stream-load-status[data-state="error"] .stream-load-signal { background: var(--danger); animation: none; }
 .score-guide { position: relative; color: var(--muted); font-size: 11px; }
 .score-guide summary { cursor: pointer; color: var(--primary); white-space: nowrap; }
 .score-guide summary span { margin-left: 5px; color: var(--muted); font-family: "Cascadia Mono", Consolas, monospace; font-size: 9px; font-variant-numeric: tabular-nums; }
@@ -327,6 +338,9 @@ a { color: var(--primary); text-underline-offset: 3px; }
 .weekly-preparation[data-state="partial"] .weekly-preparation-signal { background: var(--warning); }
 
 .paper-list { min-height: 300px; }
+.stream-loading-copy { display: flex; align-items: baseline; gap: 9px; min-height: 42px; padding: 12px 24px 9px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.stream-loading-copy strong { color: var(--ink); font-size: 12px; }
+.stream-loading-copy span { color: var(--muted); font-family: "Cascadia Mono", Consolas, monospace; font-size: 9px; }
 .recommendation-group { min-height: 42px; display: flex; align-items: baseline; gap: 9px; padding: 11px 24px 8px; border-bottom: 1px solid var(--line); background: var(--surface); }
 .recommendation-group strong { font-size: 12px; }
 .recommendation-group span { color: var(--muted); font-family: "Cascadia Mono", Consolas, monospace; font-size: 9px; }
@@ -748,6 +762,7 @@ a { color: var(--primary); text-underline-offset: 3px; }
   .coverage-summary { margin-left: 8px; }
   .stream-head { padding: 10px 16px; align-items: flex-start; flex-direction: column; }
   .stream-identity { width: 100%; justify-content: space-between; }
+  .stream-load-status { flex: 1 1 100%; overflow: hidden; }
   .score-guide > .score-editor { position: fixed; inset: auto 12px 12px; width: auto; max-height: calc(100dvh - 24px); overflow: auto; grid-template-columns: 1fr; }
   .score-editor-visual { grid-template-columns: 112px minmax(0, 1fr); justify-items: start; }
   .score-weight-ring { width: 106px; }

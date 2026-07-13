@@ -926,6 +926,53 @@ class PaperStore:
             ).fetchall()
         return [self._serialize(row) for row in rows]
 
+    def papers_by_ids(self, paper_ids: list[str]) -> dict[str, dict[str, Any]]:
+        ids = list(dict.fromkeys(compact_text(item) for item in paper_ids if compact_text(item)))
+        if not ids:
+            return {}
+        papers: dict[str, dict[str, Any]] = {}
+        with self.connect() as db:
+            for start in range(0, len(ids), 900):
+                batch = ids[start:start + 900]
+                placeholders = ",".join("?" for _ in batch)
+                rows = db.execute(
+                    f"""
+                    SELECT p.*, COALESCE(s.status, 'unread') AS status,
+                           COALESCE(s.favorite, 0) AS favorite,
+                           COALESCE(s.notes, '') AS notes,
+                           CASE WHEN COALESCE(s.explanation_json, '') != '' THEN 1 ELSE 0 END AS has_explanation
+                    FROM papers p
+                    LEFT JOIN user_state s ON s.paper_id = p.id
+                    WHERE p.id IN ({placeholders})
+                    """,
+                    batch,
+                ).fetchall()
+                for row in rows:
+                    paper = self._serialize(row)
+                    papers[paper["id"]] = paper
+        return papers
+
+    def author_suggestions(self, query: str, limit: int = 100) -> list[str]:
+        needle = compact_text(query).casefold()
+        if len(needle) < 2:
+            return []
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT authors_json FROM papers WHERE authors_json LIKE ? COLLATE NOCASE LIMIT ?",
+                (f"%{needle}%", max(100, min(3000, limit * 20))),
+            ).fetchall()
+        matches: set[str] = set()
+        for row in rows:
+            try:
+                authors = json.loads(row["authors_json"] or "[]")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            for author in authors if isinstance(authors, list) else []:
+                value = compact_text(str(author))
+                if value and needle in value.casefold():
+                    matches.add(value)
+        return sorted(matches, key=lambda value: (not value.casefold().startswith(needle), value.casefold()))[:limit]
+
     def get_paper(self, paper_id: str) -> dict[str, Any] | None:
         with self.connect() as db:
             row = db.execute(
@@ -5741,13 +5788,18 @@ class WeeklySelectionService:
             ):
                 state = self._select(configured_limit)
 
-        papers = {paper["id"]: paper for paper in self.store.list_papers()}
         ids = [
             item["id"]
             for group in state.get("groups", [])
             for key in ("items", "reserves")
             for item in group.get(key, [])
         ]
+        lookup = getattr(self.store, "papers_by_ids", None)
+        papers = lookup(ids) if callable(lookup) else {
+            paper["id"]: paper
+            for paper in self.store.list_papers()
+            if paper["id"] in ids
+        }
         assets = self.store.assets_for_papers(ids)
         groups = []
         items = []
@@ -6249,6 +6301,27 @@ def score_papers_for_ranking(papers: list[dict[str, Any]], topic: str = "") -> l
         return [{**paper, **entry["scores"][paper["id"]]} for paper in papers]
 
 
+PAPER_SORT_FALLBACKS = {
+    "recommendation": "date",
+    "quality": "date",
+    "date": "recommendation",
+    "citations": "recommendation",
+    "title": "date",
+    "venue": "date",
+}
+
+
+def paper_sort_fields(params: dict[str, list[str]]) -> tuple[str, str]:
+    get = lambda name, default="": (params.get(name) or [default])[0].strip()
+    primary = get("sort", "quality")
+    secondary = get("sort_secondary") or PAPER_SORT_FALLBACKS.get(primary, "date")
+    return primary, secondary
+
+
+def paper_sort_requires_recommendation_score(params: dict[str, list[str]]) -> bool:
+    return "recommendation" in paper_sort_fields(params)
+
+
 def filter_papers(papers: list[dict[str, Any]], params: dict[str, list[str]]) -> list[dict[str, Any]]:
     get = lambda name, default="": (params.get(name) or [default])[0].strip()
     query = get("q").lower()
@@ -6264,8 +6337,7 @@ def filter_papers(papers: list[dict[str, Any]], params: dict[str, list[str]]) ->
     status = get("status")
     favorite = get("favorite")
     date_from = get("date_from")
-    sort = get("sort", "quality")
-    sort_secondary = get("sort_secondary")
+    sort, sort_secondary = paper_sort_fields(params)
     latest_visible_date = (utc_now() + timedelta(days=1)).date().isoformat()
     result = []
     for paper in papers:
@@ -6318,11 +6390,7 @@ def filter_papers(papers: list[dict[str, Any]], params: dict[str, list[str]]) ->
         "title": (lambda item: item.get("title", "").casefold(), False),
         "venue": (lambda item: item.get("venue", "").casefold(), False),
     }
-    fallback = {
-        "recommendation": "date", "quality": "date", "date": "recommendation",
-        "citations": "recommendation", "title": "date", "venue": "date",
-    }
-    apply_multi_sort(result, sort, sort_secondary or fallback.get(sort, "date"), paper_sorters)
+    apply_multi_sort(result, sort, sort_secondary, paper_sorters)
     return result
 
 
@@ -6589,7 +6657,12 @@ class AppHandler(SimpleHTTPRequestHandler):
             ranking_topic = (params.get("topic") or [""])[0].strip()
             filter_params = {**params, "sort": ["quality"], "sort_secondary": ["date"]}
             matching = filter_papers(STORE.list_papers(), filter_params)
-            papers = filter_papers(score_papers_for_ranking(matching, ranking_topic), params)
+            ranked = (
+                score_papers_for_ranking(matching, ranking_topic)
+                if paper_sort_requires_recommendation_score(params)
+                else matching
+            )
+            papers = filter_papers(ranked, params)
             limit = max(1, min(500, int((params.get("limit") or ["100"])[0])))
             offset = max(0, int((params.get("offset") or ["0"])[0]))
             self.send_json(
@@ -6752,7 +6825,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/options":
             papers = filter_papers(STORE.list_papers(), {})
             projects = STORE.list_projects()
-            coverage = catalog_coverage()
+            coverage = build_catalog_coverage(VENUE_CATALOG.entries, papers, STORE.venue_sync_states())
             self.send_json(
                 {
                     "topics": sorted({topic for paper in papers for topic in paper["topics"]}),
@@ -6760,7 +6833,6 @@ class AppHandler(SimpleHTTPRequestHandler):
                     "venue_counts": {item["venue"]: item["count"] for item in coverage["items"]},
                     "venue_coverage": coverage,
                     "sources": sorted({paper["source"] for paper in papers if paper["source"]}),
-                    "authors": sorted({author for paper in papers for author in paper["authors"]}),
                     "institutions": INSTITUTION_CATALOG.entries,
                     "tiers": VenueCatalog.TIER_ORDER,
                     "platforms": sorted({paper["platform"] for paper in papers if paper["platform"]} | set(VENUE_CATALOG.platforms())),
@@ -6769,6 +6841,10 @@ class AppHandler(SimpleHTTPRequestHandler):
                     "project_categories": sorted({category for project in projects for category in project["categories"]}),
                 }
             )
+            return
+        if parsed.path == "/api/authors":
+            query = (params.get("q") or [""])[0]
+            self.send_json({"items": STORE.author_suggestions(query)})
             return
         if parsed.path == "/api/venues":
             self.send_json({"items": VENUE_CATALOG.entries, "total": len(VENUE_CATALOG.entries)})

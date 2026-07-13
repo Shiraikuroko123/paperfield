@@ -1123,6 +1123,17 @@ class FeedTests(unittest.TestCase):
 
         self.assertEqual([item["full_name"] for item in result], ["linked", "high", "low"])
 
+    def test_paper_sort_only_scores_when_recommendation_is_used(self):
+        self.assertFalse(APP.paper_sort_requires_recommendation_score({"sort": ["quality"]}))
+        self.assertFalse(APP.paper_sort_requires_recommendation_score({"sort": ["date"], "sort_secondary": ["quality"]}))
+        self.assertTrue(APP.paper_sort_requires_recommendation_score({"sort": ["recommendation"]}))
+        self.assertTrue(APP.paper_sort_requires_recommendation_score({"sort": ["citations"]}))
+        self.assertTrue(
+            APP.paper_sort_requires_recommendation_score(
+                {"sort": ["quality"], "sort_secondary": ["recommendation"]}
+            )
+        )
+
     def test_acm_mm_edition_name_uses_correct_ordinal(self):
         self.assertEqual(APP.PaperSources.ordinal(32), "32nd")
         self.assertEqual(APP.PaperSources.ordinal(33), "33rd")
@@ -1232,6 +1243,39 @@ class FeedTests(unittest.TestCase):
             self.assertEqual(store.count(), 1)
             self.assertEqual(store.list_papers()[0]["venue"], "CoRL")
             self.assertEqual(store.list_papers()[0]["notable_institutions"][0]["id"], "tsinghua-ai")
+
+    def test_author_suggestions_are_loaded_on_demand(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = APP.PaperStore(Path(directory) / "papers.db")
+            base = {
+                "title": "Embodied paper", "abstract": "robot learning", "institutions": [],
+                "venue": "CoRL", "published": "2026-01-01", "updated": "2026-01-01",
+                "source": "test", "source_url": "https://example.com", "pdf_url": "", "doi": "",
+                "journal_ref": "", "topics": ["具身智能"], "quality_score": 50, "citation_count": 0,
+            }
+            store.upsert({**base, "id": "paper-1", "authors": ["Ada Lovelace", "Grace Hopper"]})
+            store.upsert({**base, "id": "paper-2", "title": "Language model", "authors": ["Adam Smith"]})
+
+            self.assertEqual(store.author_suggestions("a"), [])
+            self.assertEqual(store.author_suggestions("lov"), ["Ada Lovelace"])
+            self.assertEqual(store.author_suggestions("ad"), ["Ada Lovelace", "Adam Smith"])
+
+    def test_papers_by_ids_avoids_loading_unrelated_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = APP.PaperStore(Path(directory) / "papers.db")
+            base = {
+                "title": "Embodied paper", "abstract": "robot learning", "authors": ["Researcher"], "institutions": [],
+                "venue": "CoRL", "published": "2026-01-01", "updated": "2026-01-01",
+                "source": "test", "source_url": "https://example.com", "pdf_url": "", "doi": "",
+                "journal_ref": "", "topics": ["具身智能"], "quality_score": 50, "citation_count": 0,
+            }
+            store.upsert({**base, "id": "paper-1"})
+            store.upsert({**base, "id": "paper-2", "title": "Language model"})
+
+            selected = store.papers_by_ids(["paper-2", "missing", "paper-2"])
+
+            self.assertEqual(list(selected), ["paper-2"])
+            self.assertEqual(selected["paper-2"]["title"], "Language model")
 
     def test_project_name_links_to_paper_method_name(self):
         paper = {

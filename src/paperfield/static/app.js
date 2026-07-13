@@ -37,6 +37,9 @@ const state = {
   aiModels: null,
   recommendationWeights: null,
   appliedRecommendationWeights: null,
+  streamRequestId: 0,
+  streamRequest: null,
+  authorRequestId: 0,
 };
 
 const SCORE_DIMENSIONS = [
@@ -495,6 +498,99 @@ function projectParams() {
 
 const isProjectMode = () => state.view === "projects";
 
+function streamLoadLabel(view = state.view, topic = state.topic) {
+  if (view === "projects") return "正在切换到 GitHub 项目";
+  if (view === "recommended") return "正在准备每周精选";
+  if (view === "favorites") return "正在读取收藏";
+  if (view === "top") return "正在筛选顶会顶刊";
+  if (topic) return `正在载入${topic}`;
+  return "正在载入论文流";
+}
+
+function streamElapsed(request) {
+  return `${Math.max(0.1, (performance.now() - request.startedAt) / 1000).toFixed(1)}s`;
+}
+
+function isCurrentStreamRequest(request) {
+  return Boolean(
+    request
+    && state.streamRequest?.id === request.id
+    && !request.controller?.signal.aborted,
+  );
+}
+
+function updateStreamLoadStatus(request, label, phase = "loading") {
+  if (!request.visible || !isCurrentStreamRequest(request)) return;
+  const status = el("streamLoadStatus");
+  status.hidden = false;
+  status.dataset.state = phase;
+  el("streamLoadLabel").textContent = label;
+  el("streamLoadTime").textContent = streamElapsed(request);
+}
+
+function clearStreamRequestTimer(request) {
+  if (request?.timer) {
+    window.clearInterval(request.timer);
+    request.timer = null;
+  }
+}
+
+function beginStreamRequest(label = streamLoadLabel(), { append = false } = {}) {
+  const previous = state.streamRequest;
+  if (previous) {
+    clearStreamRequestTimer(previous);
+    previous.controller?.abort();
+  }
+  const request = {
+    id: ++state.streamRequestId,
+    label,
+    visible: !append,
+    startedAt: performance.now(),
+    timer: null,
+    controller: typeof AbortController === "function" ? new AbortController() : null,
+  };
+  state.streamRequest = request;
+  if (request.visible) {
+    el("resultCount").textContent = label;
+    renderSkeleton(label);
+    updateStreamLoadStatus(request, label);
+    request.timer = window.setInterval(() => updateStreamLoadStatus(request, request.label), 100);
+  }
+  return request;
+}
+
+function finishStreamRequest(request, message = "已就绪") {
+  if (!isCurrentStreamRequest(request)) return;
+  clearStreamRequestTimer(request);
+  if (!request.visible) {
+    state.streamRequest = null;
+    return;
+  }
+  el("paperList").setAttribute("aria-busy", "false");
+  updateStreamLoadStatus(request, `${message} · ${streamElapsed(request)}`, "ready");
+  state.streamRequest = null;
+  window.setTimeout(() => {
+    if (state.streamRequestId === request.id && !state.streamRequest) el("streamLoadStatus").hidden = true;
+  }, 900);
+}
+
+function failStreamRequest(request, message) {
+  if (!isCurrentStreamRequest(request)) return;
+  clearStreamRequestTimer(request);
+  if (!request.visible) {
+    state.streamRequest = null;
+    return;
+  }
+  el("paperList").setAttribute("aria-busy", "false");
+  updateStreamLoadStatus(request, `${message} · ${streamElapsed(request)}`, "error");
+  state.streamRequest = null;
+  window.setTimeout(() => {
+    if (state.streamRequestId === request.id && !state.streamRequest) el("streamLoadStatus").hidden = true;
+  }, 2400);
+}
+
+const isRequestAbort = (error) => error?.name === "AbortError";
+
 function applyViewMode() {
   const projectMode = isProjectMode();
   const recommendedMode = state.view === "recommended";
@@ -531,22 +627,26 @@ function applyViewMode() {
   }
 }
 
-function renderSkeleton() {
+function renderSkeleton(label = streamLoadLabel()) {
   el("emptyState").hidden = true;
   el("loadMoreWrap").hidden = true;
-  el("paperList").innerHTML = Array.from({ length: 5 }, () => `
+  const detail = isProjectMode() ? "正在读取仓库活跃度与论文关联" : "正在整理公开研究条目";
+  el("paperList").setAttribute("aria-busy", "true");
+  el("paperList").innerHTML = `<div class="stream-loading-copy"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(detail)}</span></div>${Array.from({ length: 5 }, () => `
     <div class="skeleton-row" aria-hidden="true">
       <div class="skeleton-line"></div><div class="skeleton-line"></div><div class="skeleton-line"></div>
-    </div>`).join("");
+    </div>`).join("")}`;
 }
 
-async function loadProjects({ append = false } = {}) {
-  if (!append) renderSkeleton();
+async function loadProjects({ append = false, request = null } = {}) {
+  const expectedView = state.view;
+  const activeRequest = request || beginStreamRequest(streamLoadLabel(expectedView, state.topic), { append });
   try {
     const params = projectParams();
     params.set("limit", state.pageSize);
     params.set("offset", append ? state.projects.length : 0);
-    const payload = await api(`/api/projects?${params.toString()}`);
+    const payload = await api(`/api/projects?${params.toString()}`, { signal: activeRequest.controller?.signal });
+    if (!isCurrentStreamRequest(activeRequest) || state.view !== expectedView) return;
     state.projects = append ? [...state.projects, ...payload.items] : payload.items;
     state.total = payload.total;
     renderProjects();
@@ -556,9 +656,12 @@ async function loadProjects({ append = false } = {}) {
       state.selectedProject = null;
       showReadingEmpty();
     }
+    finishStreamRequest(activeRequest, "GitHub 项目已就绪");
   } catch (error) {
+    if (isRequestAbort(error) || !isCurrentStreamRequest(activeRequest)) return;
     if (append) {
       toast(error.message, true);
+      failStreamRequest(activeRequest, "项目加载失败");
       return;
     }
     el("paperList").innerHTML = "";
@@ -566,6 +669,7 @@ async function loadProjects({ append = false } = {}) {
     el("emptyState").querySelector("strong").textContent = "GitHub 项目加载失败";
     el("emptyState").querySelector("p").textContent = error.message;
     toast(error.message, true);
+    failStreamRequest(activeRequest, "项目加载失败");
   }
 }
 
@@ -604,6 +708,7 @@ function createProjectRow(project, weekly = false) {
 function renderProjects() {
   const list = el("paperList");
   list.innerHTML = "";
+  list.setAttribute("aria-busy", "false");
   el("emptyState").hidden = state.projects.length > 0;
   if (!state.projects.length) {
     el("emptyState").querySelector("strong").textContent = "当前筛选没有 GitHub 项目";
@@ -1069,18 +1174,21 @@ async function generateProjectExplanation() {
   }
 }
 
-async function loadPapers({ preserveSelection = true, append = false } = {}) {
-  if (isProjectMode()) return loadProjects({ append });
-  if (!append) renderSkeleton();
+async function loadPapers({ preserveSelection = true, append = false, request = null } = {}) {
+  const expectedView = state.view;
+  const expectedTopic = state.topic;
+  const activeRequest = request || beginStreamRequest(streamLoadLabel(expectedView, expectedTopic), { append });
+  if (expectedView === "projects") return loadProjects({ append, request: activeRequest });
   try {
-    if (state.view === "recommended") {
+    if (expectedView === "recommended") {
       const params = new URLSearchParams();
-      const topic = state.topic || el("topicFilter").value;
+      const topic = expectedTopic || el("topicFilter").value;
       if (topic) params.set("topic", topic);
       const [payload, projectPayload] = await Promise.all([
-        api(`/api/recommendations?${params.toString()}`),
-        api("/api/project-recommendations"),
+        api(`/api/recommendations?${params.toString()}`, { signal: activeRequest.controller?.signal }),
+        api("/api/project-recommendations", { signal: activeRequest.controller?.signal }),
       ]);
+      if (!isCurrentStreamRequest(activeRequest) || state.view !== expectedView || state.topic !== expectedTopic) return;
       state.papers = payload.items;
       state.weeklyProjects = projectPayload.items;
       state.weeklyProjectCandidateTotal = projectPayload.candidate_total;
@@ -1094,28 +1202,36 @@ async function loadPapers({ preserveSelection = true, append = false } = {}) {
       el("navRecommendedCount").textContent = payload.total + projectPayload.total;
       if (state.stats) el("statTotal").textContent = payload.total;
       applyViewMode();
+      finishStreamRequest(activeRequest, "每周精选已就绪");
       return;
     }
     const params = currentParams();
     params.set("limit", state.pageSize);
     params.set("offset", append ? state.papers.length : 0);
-    const payload = await api(`/api/papers?${params.toString()}`);
+    const payload = await api(`/api/papers?${params.toString()}`, { signal: activeRequest.controller?.signal });
+    if (!isCurrentStreamRequest(activeRequest) || state.view !== expectedView || state.topic !== expectedTopic) return;
     state.papers = append ? [...state.papers, ...payload.items] : payload.items;
     state.total = payload.total;
     renderPapers();
     el("resultCount").textContent = `${payload.total} 篇`;
     if (state.stats && state.topic) el("statTotal").textContent = payload.total;
     el("loadMoreWrap").hidden = !payload.has_more;
-    if (append) return;
+    if (append) {
+      finishStreamRequest(activeRequest);
+      return;
+    }
     if (!preserveSelection || !state.papers.some((paper) => paper.id === state.selectedId)) {
       state.selectedId = null;
       showReadingEmpty();
     } else if (state.selectedId) {
       await openPaper(state.selectedId, false);
     }
+    finishStreamRequest(activeRequest, "论文流已就绪");
   } catch (error) {
+    if (isRequestAbort(error) || !isCurrentStreamRequest(activeRequest)) return;
     if (append) {
       toast(error.message, true);
+      failStreamRequest(activeRequest, "论文加载失败");
       return;
     }
     el("paperList").innerHTML = "";
@@ -1123,6 +1239,7 @@ async function loadPapers({ preserveSelection = true, append = false } = {}) {
     el("emptyState").querySelector("strong").textContent = "论文列表加载失败";
     el("emptyState").querySelector("p").textContent = error.message;
     toast(error.message, true);
+    failStreamRequest(activeRequest, "论文加载失败");
   }
 }
 
@@ -1171,6 +1288,7 @@ function updateWeeklyPreparation(preparation, rerender = false) {
 function renderPapers() {
   const list = el("paperList");
   list.innerHTML = "";
+  list.setAttribute("aria-busy", "false");
   const showingWeeklyProjects = state.view === "recommended" && state.weeklyKind === "projects";
   const visibleItems = showingWeeklyProjects ? state.weeklyProjects : state.papers;
   el("emptyState").hidden = visibleItems.length > 0;
@@ -2276,7 +2394,25 @@ async function loadOptions() {
   el("institutionFilter").innerHTML = `<option value="">全部机构</option>${options.institutions.map((institution) => `<option value="${escapeHtml(institution.id)}">${escapeHtml(institution.name)}</option>`).join("")}`;
   fill(el("sourceFilter"), options.sources, "全部数据源");
   fill(el("projectLanguageFilter"), options.project_languages, "全部语言");
-  el("authorOptions").innerHTML = options.authors.map((author) => `<option value="${escapeHtml(author)}"></option>`).join("");
+  el("authorOptions").innerHTML = "";
+}
+
+async function loadAuthorOptions(value) {
+  const query = value.trim();
+  if (query.length < 2) {
+    el("authorOptions").innerHTML = "";
+    return;
+  }
+  const requestId = ++state.authorRequestId;
+  try {
+    const payload = await api(`/api/authors?q=${encodeURIComponent(query)}`);
+    if (requestId !== state.authorRequestId) return;
+    el("authorOptions").innerHTML = (payload.items || [])
+      .map((author) => `<option value="${escapeHtml(author)}"></option>`)
+      .join("");
+  } catch {
+    if (requestId === state.authorRequestId) el("authorOptions").innerHTML = "";
+  }
 }
 
 async function loadStats() {
@@ -2342,6 +2478,7 @@ function clearFilters() {
 
 function bindEvents() {
   const reload = debounce(() => loadPapers({ preserveSelection: false }));
+  const authorSuggestions = debounce(() => loadAuthorOptions(el("authorFilter").value), 180);
   el("scoreWeightControls").addEventListener("input", (event) => {
     const input = event.target.closest("[data-score-weight], [data-score-weight-number]");
     if (!input || input.value === "") return;
@@ -2361,7 +2498,10 @@ function bindEvents() {
   });
   el("applyScoreWeights").addEventListener("click", applyScoreWeights);
   el("searchInput").addEventListener("input", reload);
-  el("authorFilter").addEventListener("input", reload);
+  el("authorFilter").addEventListener("input", () => {
+    reload();
+    authorSuggestions();
+  });
   ["topicFilter", "tierFilter", "platformFilter", "venueFilter", "institutionFilter", "sourceFilter", "dateFilter", "sortFilter", "secondarySortFilter"].forEach((id) => el(id).addEventListener("change", () => {
     if (id === "topicFilter") state.topic = "";
     loadPapers({ preserveSelection: false });
@@ -2462,10 +2602,14 @@ function bindEvents() {
     const topic = button.dataset.topic || "";
     state.topic = topic;
     state.view = topic ? "all" : button.dataset.view || "recommended";
+    state.selectedId = null;
+    state.selectedProject = null;
     el("topicFilter").value = topic;
     applyViewMode();
     document.querySelectorAll(".rail-link").forEach((item) => item.classList.toggle("is-active", item === button));
-    loadPapers({ preserveSelection: false });
+    showReadingEmpty();
+    const request = beginStreamRequest(streamLoadLabel());
+    loadPapers({ preserveSelection: false, request });
   }));
 
   document.querySelectorAll(".stream-head [data-status]").forEach((button) => button.addEventListener("click", () => {
@@ -2604,8 +2748,16 @@ async function init() {
   bindEvents();
   applyViewMode();
   document.querySelectorAll(".rail-link").forEach((item) => item.classList.toggle("is-active", item.dataset.view === state.view));
+  const initialRequest = beginStreamRequest("正在初始化研究工作台");
   try {
-    await Promise.all([loadAuthUser(), loadOptions(), loadStats(), loadStorageStatus(), loadScoreWeights(), loadPapers({ preserveSelection: false })]);
+    await Promise.all([
+      loadAuthUser(),
+      loadOptions(),
+      loadStats(),
+      loadStorageStatus(),
+      loadScoreWeights(),
+      loadPapers({ preserveSelection: false, request: initialRequest }),
+    ]);
     if (initialPaperId) await openPaper(initialPaperId, false);
     if (initialProject) await openProjectReader(initialProject);
   } catch (error) {
