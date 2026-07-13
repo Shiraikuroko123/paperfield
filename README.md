@@ -155,4 +155,4 @@ docker compose -f deploy\compose.yaml config --quiet
 
 ## 正式发布规则
 
-`v0.12.7` 是唯一保留的正式发布标签，对应 GitHub Release 标题 `Paperfield 首个发布版本`。后续改动先合并到 `main`，通过完整检查后再更新这个唯一的正式发布版本；旧标签、历史 Release、备份文档和临时设计产物不再保留。
+`v1.0.0` 是首发正式发布标签。后续稳定改动先合并到 `main` 并通过完整检查，再递增语义化版本号并创建新的 GitHub Release；历史标签和 Release 会保留，便于下载与回退。

@@ -152,4 +152,4 @@ docker compose -f deploy\compose.yaml config --quiet
 
 ## Official Release Policy
 
-`v0.12.7` is the only retained official release tag and its GitHub Release title is `Paperfield 首个发布版本`. Future changes are merged to `main`, fully verified, and then used to update this one official release. Old tags, historical Releases, backup documents, and temporary design artifacts are not retained.
+`v1.0.0` is the first official release tag. Future stable changes are merged to `main`, fully verified, then released under an incremented semantic version and a new GitHub Release. Historical tags and Releases are retained for download and rollback.
