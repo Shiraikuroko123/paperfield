@@ -4,8 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="description" content="具身智能与大模型论文、开源项目每周研究工作台">
+  <meta name="theme-color" content="#f3f6f7">
   <title>Paperfield</title>
-  <link rel="stylesheet" href="/styles.css?v=1.0.1-responsive-workbench">
+  <link rel="stylesheet" href="/styles.css?v=1.1.0-digital-manuscript">
   <link rel="stylesheet" href="/vendor/katex/katex.min.css?v=0.16.11">
 </head>
 <body>
@@ -16,7 +17,7 @@
         <div class="brand-mark" aria-hidden="true">P</div>
         <div>
           <strong>Paperfield</strong>
-          <span>RESEARCH OS</span>
+          <span>数字研究手稿</span>
         </div>
         <button class="mobile-nav-close" id="mobileNavClose" type="button" aria-label="关闭主要导航" title="关闭导航">×</button>
       </div>
@@ -56,11 +57,11 @@
           <span class="sync-dot" id="syncDot"></span>
           <div><strong id="syncTitle">等待更新</strong><small id="syncTime">尚未同步</small></div>
         </div>
-        <p>OPEN ACCESS · LOCAL FIRST</p>
+        <p>公开来源 / 本地优先</p>
       </div>
     </aside>
 
-    <main class="workspace">
+    <main class="workspace" aria-label="Paperfield 研究手稿">
       <header class="workspace-header">
         <button class="mobile-nav-toggle" id="mobileNavButton" type="button" aria-label="打开主要导航" aria-controls="appRail" aria-expanded="false" title="打开导航"><span aria-hidden="true">☰</span></button>
         <div class="mobile-brand">Paperfield</div>
@@ -174,9 +175,8 @@
 
         <aside class="reading-pane" id="readingPane" aria-label="论文详情">
           <div class="reading-empty" id="readingEmpty">
-            <span class="reading-monogram">Pf</span>
             <h2>选择一篇论文开始阅读</h2>
-            <p>摘要、证据、全文精读与讨论记录会汇集在这里。</p>
+            <p>摘要、引证页码、阅读笔记与讨论记录会汇集在这里。</p>
           </div>
           <article id="paperDetail" hidden></article>
         </aside>
@@ -280,7 +280,7 @@
 
   <dialog class="connector-dialog" id="connectorDialog" aria-labelledby="connectorTitle">
     <header class="connector-header">
-      <div><h2 id="connectorTitle">添加论文</h2><p>Crossref · arXiv · 本地论文库</p></div>
+      <div><h2 id="connectorTitle">添加论文</h2><p>Crossref / arXiv / 本地论文库</p></div>
       <button class="reader-close" id="connectorClose" type="button" aria-label="关闭添加论文" title="关闭">×</button>
     </header>
     <form class="connector-search" id="connectorForm">
@@ -398,6 +398,6 @@
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
   <script src="/vendor/pdfjs/pdf.min.js?v=3.11.174"></script>
   <script src="/vendor/katex/katex.min.js?v=0.16.11" defer></script>
-  <script src="/app.js?v=1.0.1-responsive-workbench" defer></script>
+  <script src="/app.js?v=1.1.0-digital-manuscript" defer></script>
 </body>
 </html>

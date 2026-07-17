@@ -46,11 +46,11 @@ const state = {
 };
 
 const SCORE_DIMENSIONS = [
-  { key: "academic", label: "学术质量", color: "oklch(0.66 0.17 145)" },
-  { key: "relevance", label: "方向匹配", color: "oklch(0.68 0.14 225)" },
-  { key: "freshness", label: "时效性", color: "oklch(0.78 0.15 85)" },
-  { key: "evidence", label: "证据完整度", color: "oklch(0.68 0.12 190)" },
-  { key: "impact_reproducibility", label: "影响与复现", color: "oklch(0.68 0.16 25)" },
+  { key: "academic", label: "学术质量", color: "oklch(0.43 0.17 259)" },
+  { key: "relevance", label: "方向匹配", color: "oklch(0.51 0.15 259)" },
+  { key: "freshness", label: "时效性", color: "oklch(0.59 0.13 259)" },
+  { key: "evidence", label: "证据完整度", color: "oklch(0.67 0.11 259)" },
+  { key: "impact_reproducibility", label: "影响与复现", color: "oklch(0.75 0.09 259)" },
 ];
 
 const DEFAULT_SCORE_WEIGHTS = {
@@ -275,7 +275,7 @@ async function loadAuthUser() {
   el("authControls").hidden = !payload.enabled;
   if (payload.user) {
     const roleLabel = payload.user.role === "beta" ? "内测" : "普通";
-    el("authUsername").textContent = `${payload.user.display_name || payload.user.username} · ${roleLabel}`;
+    el("authUsername").textContent = `${payload.user.display_name || payload.user.username} / ${roleLabel}`;
     el("authUsername").title = payload.host_ai_allowed
       ? "内测账户可使用主机 API"
       : "普通账户需在自己的电脑上运行 Paperfield 并连接本地 API";
@@ -372,6 +372,7 @@ function openModalDialog(dialog, initialFocus) {
     if (origin) dialogFocusOrigins.set(dialog, origin);
     dialog.showModal();
   }
+  dialog.scrollTop = 0;
   window.requestAnimationFrame(() => initialFocus?.focus({ preventScroll: true }));
 }
 
@@ -560,7 +561,7 @@ function renderConnectorResults(items = []) {
   }
   container.innerHTML = items.map((paper, index) => `
     <article class="connector-result">
-      <div><h3>${escapeHtml(paper.title)}</h3><p>${escapeHtml(paper.authors.join(" · ") || "作者信息缺失")}</p><span>${escapeHtml(paper.venue || paper.source)} · ${escapeHtml(formatDate(paper.published))}${paper.doi ? ` · DOI ${escapeHtml(paper.doi)}` : ""}</span></div>
+      <div><h3>${escapeHtml(paper.title)}</h3><p>${escapeHtml(paper.authors.join(", ") || "作者信息缺失")}</p><span>${escapeHtml(paper.venue || paper.source)} / ${escapeHtml(formatDate(paper.published))}${paper.doi ? ` / DOI ${escapeHtml(paper.doi)}` : ""}</span></div>
       <button class="button ${paper.already_saved ? "button-secondary" : "button-primary"}" type="button" data-connector-import="${index}">${paper.already_saved ? "打开" : "加入并打开"}</button>
     </article>`).join("");
   container.querySelectorAll("[data-connector-import]").forEach((button) => button.addEventListener("click", async () => {
@@ -597,6 +598,34 @@ function formatDate(value) {
   const date = new Date(`${value}T00:00:00`);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
+}
+
+function readingStatusLabel(status) {
+  return status === "read" ? "已读" : status === "reading" ? "在读" : "未读";
+}
+
+function folioNumber(index) {
+  return String(index + 1).padStart(2, "0");
+}
+
+function paperSourceLine(paper) {
+  const parts = [
+    `来源 ${paper.source || paper.venue || "未标注"}`,
+    `引用 ${Number(paper.citation_count || 0).toLocaleString("zh-CN")}`,
+  ];
+  if (paper.doi) parts.splice(1, 0, `DOI ${paper.doi}`);
+  return parts.map((part) => `<span>${escapeHtml(part)}</span>`).join("");
+}
+
+function paperCitationMarkup(paper) {
+  const sourceUrl = paper.source_url || paper.pdf_url || "#";
+  const sourceLabel = paper.venue || paper.source || "来源页";
+  return `<dl class="detail-citation" aria-label="论文引文信息">
+    <div><dt>来源</dt><dd><a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noreferrer">${escapeHtml(sourceLabel)}</a></dd></div>
+    ${paper.doi ? `<div><dt>DOI</dt><dd><a href="https://doi.org/${escapeHtml(paper.doi)}" target="_blank" rel="noreferrer">${escapeHtml(paper.doi)}</a></dd></div>` : ""}
+    <div><dt>引用</dt><dd>${Number(paper.citation_count || 0).toLocaleString("zh-CN")}</dd></div>
+    <div><dt>状态</dt><dd>${escapeHtml(paper.publication_status || "未标注")}</dd></div>
+  </dl>`;
 }
 
 function lastSyncLabel(latest) {
@@ -712,7 +741,7 @@ function finishStreamRequest(request, message = "已就绪") {
     return;
   }
   el("paperList").setAttribute("aria-busy", "false");
-  updateStreamLoadStatus(request, `${message} · ${streamElapsed(request)}`, "ready");
+  updateStreamLoadStatus(request, `${message} / ${streamElapsed(request)}`, "ready");
   state.streamRequest = null;
   window.setTimeout(() => {
     if (state.streamRequestId === request.id && !state.streamRequest) el("streamLoadStatus").hidden = true;
@@ -727,7 +756,7 @@ function failStreamRequest(request, message) {
     return;
   }
   el("paperList").setAttribute("aria-busy", "false");
-  updateStreamLoadStatus(request, `${message} · ${streamElapsed(request)}`, "error");
+  updateStreamLoadStatus(request, `${message} / ${streamElapsed(request)}`, "error");
   state.streamRequest = null;
   window.setTimeout(() => {
     if (state.streamRequestId === request.id && !state.streamRequest) el("streamLoadStatus").hidden = true;
@@ -768,7 +797,7 @@ function applyViewMode() {
     button.tabIndex = active ? 0 : -1;
   });
   el("overviewTitle").textContent = projectMode ? "今天有哪些项目在更新" : recommendedMode ? "本周先读与复现" : topicMode ? `${state.topic}论文流` : "今天值得读什么";
-  el("overviewMessage").textContent = projectMode ? "开源仓库变更与论文关联信号" : recommendedMode ? "自然周研究队列 · 资料后台预处理" : topicMode ? `浏览全部${state.topic}论文，不受每周精选数量限制` : "公开论文元数据与阅读状态";
+  el("overviewMessage").textContent = projectMode ? "开源仓库变更与论文关联信号" : recommendedMode ? "自然周研究队列 / 资料后台预处理" : topicMode ? `浏览全部${state.topic}论文，不受每周精选数量限制` : "公开论文元数据与阅读状态";
   el("statTotalLabel").textContent = projectMode ? "GitHub 项目" : recommendedMode ? "论文精选" : "收录论文";
   el("statUnreadLabel").textContent = projectMode ? "今日更新" : recommendedMode ? "候选论文" : "未读";
   el("statFavoriteLabel").textContent = projectMode ? "论文关联" : recommendedMode ? "项目精选" : "已收藏";
@@ -831,26 +860,28 @@ async function loadProjects({ append = false, request = null } = {}) {
   }
 }
 
-function createProjectRow(project, weekly = false) {
+function createProjectRow(project, weekly = false, index = 0) {
     const row = document.createElement("article");
     row.className = `paper-row project-row${weekly ? " is-recommended" : ""}${project.full_name === state.selectedProject ? " is-selected" : ""}`;
     row.dataset.project = project.full_name;
     row.innerHTML = `
-      <div>
+      <span class="paper-folio" aria-hidden="true">${folioNumber(index)}</span>
+      <div class="paper-body">
         <div class="paper-kicker">
-          <span class="venue">${escapeHtml(project.categories.join(" · ") || "相关项目")}</span>
+          <span class="venue">${escapeHtml(project.categories.join(" / ") || "相关项目")}</span>
           <span>${escapeHtml(project.language || "语言未标注")}</span>
           ${project.size_kb ? `<span>${Math.max(1, Math.round(project.size_kb / 1024))} MB</span>` : ""}
           <span>更新于 ${escapeHtml(formatDate(project.pushed_at?.slice(0, 10)))}</span>
         </div>
         <h3 class="paper-title"><button class="paper-title-action" type="button" data-open-project aria-label="打开项目：${escapeHtml(project.full_name)}">${escapeHtml(project.full_name)}</button></h3>
         <div class="project-description">${escapeHtml(project.description || "仓库暂未提供简介")}</div>
-        <div class="paper-topics">${project.topics.slice(0, 5).map((topic) => `<span class="topic-tag">${escapeHtml(topic)}</span>`).join("")}</div>
+        <div class="paper-source-line"><span>GitHub</span><span>${project.forks} Forks</span><span>${project.open_issues} Issues</span></div>
+        <div class="paper-marginalia"><div class="paper-topics">${project.topics.slice(0, 5).map((topic) => `<span class="topic-tag">${escapeHtml(topic)}</span>`).join("")}</div></div>
       </div>
       <div class="paper-score project-score">
         <strong>${project.recommendation_score ? Math.round(project.recommendation_score) : project.stars}</strong>
         <span>${project.recommendation_score ? "项目分" : "Stars"}</span>
-        <b>${project.recommendation_score ? `${project.stars} Stars · ${project.linked_paper_count} 篇论文` : `${project.linked_paper_count} 篇论文`}</b>
+        <b>${project.recommendation_score ? `${project.stars} Stars / ${project.linked_paper_count} 篇论文` : `${project.linked_paper_count} 篇论文`}</b>
       </div>`;
     row.addEventListener("click", () => openProjectReader(project.full_name));
     return row;
@@ -865,8 +896,8 @@ function renderProjects() {
     el("emptyState").querySelector("strong").textContent = "当前筛选没有 GitHub 项目";
     el("emptyState").querySelector("p").textContent = "调整主题、语言或起始日期后重试。";
   }
-  for (const project of state.projects) {
-    const row = createProjectRow(project);
+  for (const [index, project] of state.projects.entries()) {
+    const row = createProjectRow(project, false, index);
     list.append(row);
   }
 }
@@ -896,7 +927,7 @@ function renderProjectDetail(project) {
         <h3>关联论文</h3>
         ${project.papers?.length ? `<div class="linked-list">${project.papers.map((paper) => `
           <button type="button" data-linked-paper="${escapeHtml(paper.id)}">
-            <strong>${escapeHtml(paper.title)}</strong><span>${escapeHtml(paper.venue)} · 匹配 ${Math.round(paper.project_score)}</span>
+            <strong>${escapeHtml(paper.title)}</strong><span>${escapeHtml(paper.venue)} / 匹配 ${Math.round(paper.project_score)}</span>
           </button>`).join("")}</div>` : `<p>暂未找到高置信度论文关联。项目仍会保留在 GitHub 项目流中。</p>`}
       </section>
     </div>`;
@@ -973,7 +1004,7 @@ function projectExplanationMarkup(explanation) {
       : `<p class="math-rich-text">${mathTextMarkup(value || "暂无")}</p>`;
     return `<section class="project-explain-block"><h4>${title}</h4>${content}</section>`;
   };
-  return `<div class="explain-head"><h3>代码讲解</h3><div class="explain-actions"><span class="explain-mode">${explanation.mode === "ai" ? `AI 讲解 · ${escapeHtml(explanation.model || "")}` : "元数据导读"}</span><button class="text-button" type="button" data-project-explain>重新生成</button></div></div>
+  return `<div class="explain-head"><h3>代码讲解</h3><div class="explain-actions"><span class="explain-mode">${explanation.mode === "ai" ? `AI 讲解 / ${escapeHtml(explanation.model || "")}` : "元数据导读"}</span><button class="text-button" type="button" data-project-explain>重新生成</button></div></div>
     ${explanation.notice ? `<p class="math-rich-text" style="color:var(--warning)">${mathTextMarkup(explanation.notice)}</p>` : ""}
     <div class="project-explain-grid">
       ${block("项目目标", explanation.overview)}${block("代码架构", explanation.architecture)}${block("关键入口", explanation.entry_points)}
@@ -1092,7 +1123,7 @@ function updateProjectDocumentTranslationStatus(target, phase = "") {
     status.textContent = "原文";
     return;
   }
-  status.textContent = `${projectDocumentLanguageLabel(target)} · ${metadata.provider || "翻译已就绪"}${metadata.cached ? " · 已缓存" : ""}`;
+  status.textContent = `${projectDocumentLanguageLabel(target)} / ${metadata.provider || "翻译已就绪"}${metadata.cached ? " / 已缓存" : ""}`;
 }
 
 async function setProjectDocumentLanguage(target) {
@@ -1154,7 +1185,7 @@ async function loadProjectFile(path) {
     const payload = await api(`/api/projects/${encodeURIComponent(workspace.project.full_name)}/source?path=${encodeURIComponent(path)}`);
     state.projectCurrentContent = payload.content || "";
     renderProjectCode(payload.content || "");
-    el("projectCodeMeta").textContent = `${payload.language} · ${Number(payload.line_count || 0).toLocaleString()} 行${payload.truncated ? " · 已截断" : ""}`;
+    el("projectCodeMeta").textContent = `${payload.language} / ${Number(payload.line_count || 0).toLocaleString()} 行${payload.truncated ? " / 已截断" : ""}`;
     if (payload.rendered_html) {
       el("projectRootReadme").hidden = payload.path === workspace.readme_path;
       renderProjectDocument(payload.path, payload.rendered_html, payload.important_document);
@@ -1254,7 +1285,7 @@ function renderProjectWorkspace(workspace) {
   const project = workspace.project;
   el("projectReaderTitle").textContent = project.full_name;
   const preparation = workspace.preparation || {};
-  el("projectReaderMeta").textContent = `${project.language || "语言未标注"} · ${project.stars} Stars · ${workspace.file_count} 个源码文件 · ${project.linked_paper_count} 篇关联论文${project.size_kb ? ` · 仓库约 ${Math.max(1, Math.round(project.size_kb / 1024))} MB` : ""}${workspace.preparing ? " · 后台准备中" : ""}`;
+  el("projectReaderMeta").textContent = `${project.language || "语言未标注"} / ${project.stars} Stars / ${workspace.file_count} 个源码文件 / ${project.linked_paper_count} 篇关联论文${project.size_kb ? ` / 仓库约 ${Math.max(1, Math.round(project.size_kb / 1024))} MB` : ""}${workspace.preparing ? " / 后台准备中" : ""}`;
   el("projectGithubLink").href = project.url;
   el("projectRefreshSource").disabled = Boolean(workspace.preparing);
   renderReadingBackupStatus("projectBackupStatus", workspace.reading_backup_available, workspace.reading_backup_pending);
@@ -1404,7 +1435,7 @@ async function loadPapers({ preserveSelection = true, append = false, request = 
       el("weeklyProjectCount").textContent = projectPayload.total;
       state.total = payload.total;
       renderPapers();
-      el("resultCount").textContent = `${payload.total} 篇论文 · ${projectPayload.total} 个项目 · ${payload.rotation_week_start} 至 ${payload.rotation_week_end}`;
+      el("resultCount").textContent = `${payload.total} 篇论文 / ${projectPayload.total} 个项目 / ${payload.rotation_week_start} 至 ${payload.rotation_week_end}`;
       el("loadMoreWrap").hidden = true;
       el("navRecommendedCount").textContent = payload.total + projectPayload.total;
       if (state.stats) el("statTotal").textContent = payload.total;
@@ -1454,10 +1485,10 @@ function weeklyPreparationText(preparation) {
   if (!preparation?.enabled) return { label: "自动备课已关闭", detail: "" };
   const pdf = `${preparation.pdf_ready}/${preparation.pdf_target} PDF`;
   const explanations = `${preparation.explanation_ready}/${preparation.explanation_target} 精读`;
-  if (preparation.running) return { label: "本周资料准备中", detail: `${pdf} · ${explanations}` };
-  if (preparation.status === "completed") return { label: "本周资料已就绪", detail: `${pdf} · ${explanations}` };
-  if (preparation.status === "partial") return { label: "本周资料部分就绪", detail: `${pdf} · ${explanations}` };
-  return { label: "本周资料已排队", detail: `${pdf} · ${explanations}` };
+  if (preparation.running) return { label: "本周资料准备中", detail: `${pdf} / ${explanations}` };
+  if (preparation.status === "completed") return { label: "本周资料已就绪", detail: `${pdf} / ${explanations}` };
+  if (preparation.status === "partial") return { label: "本周资料部分就绪", detail: `${pdf} / ${explanations}` };
+  return { label: "本周资料已排队", detail: `${pdf} / ${explanations}` };
 }
 
 function updateWeeklyPreparation(preparation, rerender = false) {
@@ -1504,6 +1535,7 @@ function renderPapers() {
     el("emptyState").querySelector("p").textContent = showingWeeklyProjects ? "更新 GitHub 项目后，下周候选会自动补充。" : "清除部分条件，或点击更新论文拉取最新公开元数据。";
   }
   let currentGroup = "";
+  let visibleIndex = 0;
   for (const paper of showingWeeklyProjects ? [] : state.papers) {
     if (state.view === "recommended" && paper.recommendation_topic !== currentGroup) {
       currentGroup = paper.recommendation_topic;
@@ -1516,17 +1548,21 @@ function renderPapers() {
     row.className = `paper-row${paper.id === state.selectedId ? " is-selected" : ""}${paper.is_recommended ? " is-recommended" : ""}`;
     row.dataset.id = paper.id;
     row.innerHTML = `
-      <div>
+      <span class="paper-folio" aria-hidden="true">${folioNumber(visibleIndex)}</span>
+      <div class="paper-body">
         <div class="paper-kicker">
           <span class="venue">${escapeHtml(paper.venue || paper.source)}</span>
           <span class="venue-tier">${escapeHtml(paper.venue_tier)}</span>
           <span>${escapeHtml(formatDate(paper.published))}</span>
-          <span>${escapeHtml(paper.status === "read" ? "已读" : paper.status === "reading" ? "在读" : "未读")}</span>
+          <span class="reading-mark">${escapeHtml(readingStatusLabel(paper.status))}</span>
         </div>
         <h3 class="paper-title"><button class="paper-title-action" type="button" data-open-paper aria-label="打开论文：${escapeHtml(paper.title)}">${escapeHtml(paper.title)}</button></h3>
-        <div class="paper-authors">${escapeHtml(paper.authors.join(" · ") || "作者信息缺失")}</div>
-        <div class="paper-topics">${paper.topics.map((topic) => `<span class="topic-tag">${escapeHtml(topic)}</span>`).join("")}</div>
-        ${paper.notable_institutions?.length ? `<div class="institution-tags">${paper.notable_institutions.slice(0, 3).map((institution) => `<span title="${escapeHtml(institution.strengths.join(" · "))}">${escapeHtml(institution.name)}</span>`).join("")}</div>` : ""}
+        <div class="paper-authors">${escapeHtml(paper.authors.join(", ") || "作者信息缺失")}</div>
+        <div class="paper-source-line">${paperSourceLine(paper)}</div>
+        <div class="paper-marginalia">
+          <div class="paper-topics">${paper.topics.map((topic) => `<span class="topic-tag">${escapeHtml(topic)}</span>`).join("")}</div>
+          ${paper.notable_institutions?.length ? `<div class="institution-tags">${paper.notable_institutions.slice(0, 3).map((institution) => `<span title="${escapeHtml(institution.strengths.join("、"))}">${escapeHtml(institution.name)}</span>`).join("")}</div>` : ""}
+        </div>
       </div>
       <div class="paper-score">
         <button class="favorite-toggle${paper.favorite ? " is-active" : ""}" type="button" aria-label="${paper.favorite ? "取消收藏" : "收藏论文"}" data-favorite>${paper.favorite ? "★" : "☆"}</button>
@@ -1541,13 +1577,14 @@ function renderPapers() {
     });
     row.querySelector("[data-favorite]").addEventListener("click", (event) => toggleFavorite(event, paper));
     list.append(row);
+    visibleIndex += 1;
   }
   if (showingWeeklyProjects && state.weeklyProjects.length) {
     const group = document.createElement("div");
     group.className = "recommendation-group recommendation-project-group";
-    group.innerHTML = `<strong>本周开源项目</strong><span>${state.weeklyProjects.length} 个 · 从 ${state.weeklyProjectCandidateTotal} 个近期候选中筛选</span>`;
+    group.innerHTML = `<strong>本周开源项目</strong><span>${state.weeklyProjects.length} 个 / 从 ${state.weeklyProjectCandidateTotal} 个近期候选中筛选</span>`;
     list.append(group);
-    state.weeklyProjects.forEach((project) => list.append(createProjectRow(project, true)));
+    state.weeklyProjects.forEach((project, index) => list.append(createProjectRow(project, true, index)));
   }
 }
 
@@ -1630,24 +1667,27 @@ function renderDetail(paper) {
         <a href="${escapeHtml(paper.source_url || paper.pdf_url)}" target="_blank" rel="noreferrer">查看原文</a>
         ${paper.pdf_url ? `<a href="${escapeHtml(paper.pdf_url)}" target="_blank" rel="noreferrer">PDF</a>` : ""}
       </div>
-      <h2 class="detail-title">${escapeHtml(paper.title)}</h2>
-      <p class="detail-byline">${escapeHtml(paper.authors.join(" · ") || "作者信息缺失")}</p>
-      <div class="detail-meta">
-        <span>${escapeHtml(paper.venue || paper.source)}</span>
-        <span>${escapeHtml(formatDate(paper.published))}</span>
-        <span>${escapeHtml(paper.source)}</span>
-        <span>${escapeHtml(paper.venue_tier)}</span>
-        <span>${escapeHtml(paper.platform)}</span>
-        <span>${escapeHtml(paper.publication_status)}</span>
-        <span>推荐分 ${Math.round(paper.quality_score)}</span>
-        ${paper.citation_count ? `<span>引用 ${paper.citation_count}</span>` : ""}
-      </div>
-      <div class="paper-topics">${paper.topics.map((topic) => `<span class="topic-tag">${escapeHtml(topic)}</span>`).join("")}</div>
+      <header class="detail-manuscript-head">
+        <div class="detail-proof-state" aria-label="当前阅读标记">
+          <span>${escapeHtml(readingStatusLabel(paper.status))}</span>
+          <span>${paper.favorite ? "已收藏" : "未收藏"}</span>
+        </div>
+        <h2 class="detail-title">${escapeHtml(paper.title)}</h2>
+        <p class="detail-byline">${escapeHtml(paper.authors.join(", ") || "作者信息缺失")}</p>
+        <div class="detail-meta">
+          <span>${escapeHtml(formatDate(paper.published))}</span>
+          <span>${escapeHtml(paper.venue_tier)}</span>
+          <span>${escapeHtml(paper.platform)}</span>
+          <span>质量分 ${Math.round(paper.quality_score)}</span>
+        </div>
+        ${paperCitationMarkup(paper)}
+        <div class="paper-topics">${paper.topics.map((topic) => `<span class="topic-tag">${escapeHtml(topic)}</span>`).join("")}</div>
+      </header>
 
       ${paper.notable_institutions?.length ? `<section class="detail-section">
         <h3>代表研究机构</h3>
         <div class="institution-list">${paper.notable_institutions.map((institution) => `
-          <a href="${escapeHtml(institution.url)}" target="_blank" rel="noreferrer"><strong>${escapeHtml(institution.name)}</strong><span>${escapeHtml(institution.type)} · ${escapeHtml(institution.region)} · ${escapeHtml(institution.strengths.join("、"))}</span></a>`).join("")}</div>
+          <a href="${escapeHtml(institution.url)}" target="_blank" rel="noreferrer"><strong>${escapeHtml(institution.name)}</strong><span>${escapeHtml(institution.type)} / ${escapeHtml(institution.region)} / ${escapeHtml(institution.strengths.join("、"))}</span></a>`).join("")}</div>
       </section>` : ""}
 
       ${paper.projects?.length ? `<section class="detail-section">
@@ -1655,7 +1695,7 @@ function renderDetail(paper) {
         <div class="linked-list">${paper.projects.map((project) => `
           <button type="button" data-linked-project="${escapeHtml(project.full_name)}">
             <strong>${escapeHtml(project.full_name)}</strong>
-            <span>Stars ${project.stars} · 匹配 ${Math.round(project.score)}</span>
+            <span>Stars ${project.stars} / 匹配 ${Math.round(project.score)}</span>
           </button>`).join("")}</div>
       </section>` : ""}
 
@@ -1670,7 +1710,10 @@ function renderDetail(paper) {
 
       <section class="detail-section">
         <h3>原始摘要</h3>
-        <p>${escapeHtml(paper.abstract || "公开元数据暂未提供摘要，请打开原文查看。")}</p>
+        <blockquote class="source-abstract">
+          <p>${escapeHtml(paper.abstract || "公开元数据暂未提供摘要，请打开原文查看。")}</p>
+          <cite><a href="${escapeHtml(paper.source_url || paper.pdf_url || "#")}" target="_blank" rel="noreferrer">${escapeHtml(paper.venue || paper.source || "原始来源")}</a></cite>
+        </blockquote>
       </section>
 
       <section class="detail-section" id="explanationSection">
@@ -1680,7 +1723,7 @@ function renderDetail(paper) {
           <button class="button button-primary" type="button" data-explain style="margin-top:14px">生成中文讲解</button>`}
       </section>
 
-      <section class="detail-section">
+      <section class="detail-section is-margin-note">
         <h3>我的笔记</h3>
         <textarea class="notes-box" data-notes placeholder="记录为什么值得读、关键疑问或与导师方向的关系">${escapeHtml(paper.notes || "")}</textarea>
         <button class="button button-secondary" type="button" data-save-notes style="margin-top:9px">保存笔记</button>
@@ -1709,6 +1752,7 @@ function renderDetail(paper) {
     await loadStats();
   }));
   el("paperDetail").querySelector("[data-explain]")?.addEventListener("click", () => generateExplanation(paper.id));
+  bindEvidencePageLinks(el("paperDetail"), paper.id);
   el("paperDetail").querySelector("[data-save-notes]").addEventListener("click", async () => {
     const notes = el("paperDetail").querySelector("[data-notes]").value;
     await api(`/api/papers/${encodeURIComponent(paper.id)}/state`, { method: "POST", body: JSON.stringify({ notes }) });
@@ -1719,6 +1763,63 @@ function renderDetail(paper) {
   }
 }
 
+function evidencePageButtons(pages) {
+  const values = (Array.isArray(pages) ? pages : [pages])
+    .map((page) => Number.parseInt(page, 10))
+    .filter((page) => Number.isFinite(page) && page > 0);
+  if (!values.length) return "";
+  return `<span class="evidence-pages" aria-label="原文页码">${values.map((page) => `
+    <button type="button" data-evidence-page="${page}" aria-label="转到 PDF 第 ${page} 页">p.${page}</button>`).join("")}</span>`;
+}
+
+async function focusReaderPage(pageNumber) {
+  const viewer = el("pdfCanvasViewer");
+  const shell = viewer.querySelector(`[data-page="${pageNumber}"]`);
+  if (!shell) {
+    toast(`PDF 第 ${pageNumber} 页尚未就绪`, true);
+    return false;
+  }
+  if (!shell.dataset.rendered && state.readerPdfDocument) {
+    await renderPdfPage(state.readerPdfDocument, pageNumber, shell, state.readerPdfToken);
+  } else if (!shell.dataset.rendered && state.readerAsset?.page_count) {
+    await queuePdfImagePage(state.readerAsset, pageNumber, shell, state.readerPdfToken);
+  }
+  const alignPage = (behavior = "auto") => {
+    el("readerDialog").scrollTop = 0;
+    viewer.scrollTo({ top: Math.max(0, shell.offsetTop - 8), behavior });
+  };
+  const reduceMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  alignPage(reduceMotion ? "auto" : "smooth");
+  shell.classList.remove("is-cited");
+  window.requestAnimationFrame(() => shell.classList.add("is-cited"));
+  shell.focus({ preventScroll: true });
+  const layoutObserver = new MutationObserver(() => alignPage("auto"));
+  layoutObserver.observe(viewer, { subtree: true, attributes: true, attributeFilter: ["data-rendered"] });
+  let settled = false;
+  const settle = (realign = true) => {
+    if (settled) return;
+    settled = true;
+    layoutObserver.disconnect();
+    viewer.removeEventListener("wheel", cancel);
+    viewer.removeEventListener("touchstart", cancel);
+    if (realign) alignPage("auto");
+  };
+  const cancel = () => settle(false);
+  viewer.addEventListener("wheel", cancel, { once: true, passive: true });
+  viewer.addEventListener("touchstart", cancel, { once: true, passive: true });
+  window.setTimeout(() => settle(true), 1600);
+  window.setTimeout(() => shell.classList.remove("is-cited"), 1600);
+  return true;
+}
+
+function bindEvidencePageLinks(container, paperId) {
+  container.querySelectorAll("[data-evidence-page]").forEach((button) => button.addEventListener("click", async () => {
+    const pageNumber = Number(button.dataset.evidencePage);
+    if (!el("readerDialog").open && paperId) await openReader(paperId);
+    await focusReaderPage(pageNumber);
+  }));
+}
+
 function explanationMarkup(explanation) {
   const list = (value, autoDetectLegacyEquations = false) => Array.isArray(value)
     ? `<ul>${value.map((item) => `<li class="math-rich-text">${mathTextMarkup(item, autoDetectLegacyEquations)}</li>`).join("")}</ul>`
@@ -1727,7 +1828,7 @@ function explanationMarkup(explanation) {
     <div class="explain-head">
       <h3>中文讲解</h3>
       <div class="explain-actions">
-        <span class="explain-mode">${explanation.mode === "ai" ? `${explanation.reading_basis === "fulltext" ? "全文精读" : "摘要讲解"}${explanation.model ? ` · ${escapeHtml(explanation.model)}` : ""}` : "摘要导读"}</span>
+        <span class="explain-mode">${explanation.mode === "ai" ? `${explanation.reading_basis === "fulltext" ? "全文精读" : "摘要讲解"}${explanation.model ? ` / ${escapeHtml(explanation.model)}` : ""}` : "摘要导读"}</span>
         <button class="text-button" type="button" data-explain>重新生成</button>
       </div>
     </div>
@@ -1747,7 +1848,7 @@ function explanationMarkup(explanation) {
       <div class="explain-block"><h4>阅读前置</h4>${list(explanation.prerequisites)}</div>
       <div class="explain-block"><h4>是否适合你</h4>${list(explanation.fit)}</div>
       ${Array.isArray(explanation.evidence) && explanation.evidence.length ? `
-        <div class="explain-block"><h4>原文证据</h4><ul>${explanation.evidence.map((item) => `<li class="math-rich-text">${mathTextMarkup(item.claim || "")}${item.pages ? ` <b>${escapeHtml(Array.isArray(item.pages) ? item.pages.join("、") : item.pages)}</b>` : ""}</li>`).join("")}</ul></div>` : ""}
+        <div class="explain-block is-evidence"><h4>原文引证</h4><ul>${explanation.evidence.map((item) => `<li class="math-rich-text"><span>${mathTextMarkup(item.claim || "")}</span>${evidencePageButtons(item.pages)}</li>`).join("")}</ul></div>` : ""}
       ${Array.isArray(explanation.glossary) && explanation.glossary.length ? `
         <div class="explain-block"><h4>术语表</h4><dl class="glossary">${explanation.glossary.map((item) => `<div><dt class="math-rich-text">${mathTextMarkup(item.term)}</dt><dd class="math-rich-text">${mathTextMarkup(item.explanation)}</dd></div>`).join("")}</dl></div>` : ""}
     </div>`;
@@ -1759,6 +1860,7 @@ async function generateExplanation(paperId) {
   try {
     const explanation = await api(`/api/papers/${encodeURIComponent(paperId)}/explain`, { method: "POST", body: "{}" });
     section.innerHTML = explanationMarkup(explanation);
+    bindEvidencePageLinks(section, paperId);
     section.querySelector("[data-explain]")?.addEventListener("click", () => generateExplanation(paperId));
     toast(explanation.mode === "ai" ? "AI 讲解已生成" : "摘要导读已生成");
   } catch (error) {
@@ -1819,8 +1921,8 @@ function updateTranslationSelectionUi() {
     el("translationSelectionMeta").textContent = "";
     return;
   }
-  const page = selection.page ? ` · 第 ${selection.page} 页` : "";
-  const truncation = selection.truncated ? " · 已截取前 16,000 字" : "";
+  const page = selection.page ? ` / 第 ${selection.page} 页` : "";
+  const truncation = selection.truncated ? " / 已截取前 16,000 字" : "";
   el("translationSelectionMeta").textContent = `已选 ${selection.text.length.toLocaleString()} 字${page}${truncation}`;
 }
 
@@ -2082,7 +2184,9 @@ async function renderPdfImageDocument(asset, token) {
     const shell = document.createElement("section");
     shell.className = "pdf-page";
     shell.dataset.page = String(pageNumber);
-    shell.innerHTML = `<span class="pdf-page-label">${pageNumber} / ${pageCount}</span>`;
+    shell.tabIndex = -1;
+    shell.setAttribute("aria-label", `论文第 ${pageNumber} 页，共 ${pageCount} 页`);
+    shell.innerHTML = `<span class="pdf-page-label">p.${pageNumber} / ${pageCount}</span>`;
     fragment.append(shell);
   }
   viewer.replaceChildren(fragment);
@@ -2136,7 +2240,9 @@ async function renderPdfDocument(url, token) {
     const shell = document.createElement("section");
     shell.className = "pdf-page";
     shell.dataset.page = String(pageNumber);
-    shell.innerHTML = `<span class="pdf-page-label">${pageNumber} / ${pdfDocument.numPages}</span>`;
+    shell.tabIndex = -1;
+    shell.setAttribute("aria-label", `论文第 ${pageNumber} 页，共 ${pdfDocument.numPages} 页`);
+    shell.innerHTML = `<span class="pdf-page-label">p.${pageNumber} / ${pdfDocument.numPages}</span>`;
     fragment.append(shell);
   }
   viewer.replaceChildren(fragment);
@@ -2393,8 +2499,8 @@ function renderStorageStatus(payload) {
   el("storageEntryStatus").textContent = payload.shared_library ? "共享 R2" : payload.configured ? payload.provider : "本地";
   const usage = payload.usage || {};
   el("cloudUsageMeta").textContent = payload.configured
-    ? `${payload.provider} · ${payload.bucket}${payload.namespace ? ` / ${payload.namespace}` : ""} · ${usage.period_start || ""} 至 ${usage.period_end || ""} · ${usage.object_count || 0} 个对象`
-    : `尚未配置对象存储${payload.missing_configuration?.length ? ` · 缺少 ${payload.missing_configuration.join("、")}` : ""}`;
+    ? `${payload.provider} / ${payload.bucket}${payload.namespace ? ` / ${payload.namespace}` : ""} / ${usage.period_start || ""} 至 ${usage.period_end || ""} / ${usage.object_count || 0} 个对象`
+    : `尚未配置对象存储${payload.missing_configuration?.length ? ` / 缺少 ${payload.missing_configuration.join("、")}` : ""}`;
   const meters = [
     [
       payload.shared_library ? "共享库容量" : "存储容量",
@@ -2423,10 +2529,10 @@ function renderAiModels(payload) {
   const section = el("aiSettingsSection");
   section.hidden = false;
   const provider = payload.provider || "当前 API";
-  const baseHost = payload.base_host ? ` · ${payload.base_host}` : "";
+  const baseHost = payload.base_host ? ` / ${payload.base_host}` : "";
   const wire = payload.wire_api === "chat_completions" ? "Chat Completions" : "Responses";
   el("aiModelMeta").textContent = payload.available
-    ? `${provider}${baseHost} · ${wire}`
+    ? `${provider}${baseHost} / ${wire}`
     : "当前没有可用的大模型配置";
   const overrideActive = payload.model_source === "Paperfield 网页选择";
   const activeModel = overrideActive ? payload.model || "" : "";
@@ -2494,7 +2600,7 @@ async function saveAiModel() {
     await loadStats();
     const reasoningLabels = { "": "自动", low: "轻度", medium: "中", high: "高", xhigh: "极高", max: "最高", ultra: "极限" };
     const modelLabel = payload.selected_model || "CC Switch 默认模型";
-    toast(`已应用 ${modelLabel} · 推理${reasoningLabels[payload.selected_reasoning_effort || ""] || "自动"}`);
+    toast(`已应用 ${modelLabel} / 推理${reasoningLabels[payload.selected_reasoning_effort || ""] || "自动"}`);
   } catch (error) {
     toast(error.message, true);
   } finally {
@@ -2585,8 +2691,8 @@ async function openReader(paperId) {
     state.readerPaper = paper;
     el("readerShareConfirmed").checked = false;
     el("readerTitle").textContent = paper.title;
-    const institutionNames = paper.notable_institutions?.slice(0, 2).map((item) => item.name).join(" · ");
-    el("readerMeta").textContent = `${paper.authors.join(" · ") || "作者信息缺失"} · ${paper.venue || paper.source} · ${formatDate(paper.published)}${institutionNames ? ` · ${institutionNames}` : ""}`;
+    const institutionNames = paper.notable_institutions?.slice(0, 2).map((item) => item.name).join("、");
+    el("readerMeta").textContent = `${paper.authors.join(", ") || "作者信息缺失"} / ${paper.venue || paper.source} / ${formatDate(paper.published)}${institutionNames ? ` / ${institutionNames}` : ""}`;
     el("readerSourceLink").href = paper.source_url || paper.pdf_url || "#";
     renderReadingBackupStatus("readerBackupStatus", paper.reading_backup_available, paper.reading_backup_pending);
     updateReaderStorageAction();
@@ -2594,6 +2700,7 @@ async function openReader(paperId) {
     el("readerExplanation").innerHTML = paper.explanation
       ? explanationMarkup(paper.explanation)
       : `<div class="reader-explain-empty"><strong>尚未生成全文精读</strong><p>生成时会优先读取缓存全文，并按页标注关键证据。</p><button class="button button-primary" type="button" data-reader-explain>生成全文精读</button></div>`;
+    bindEvidencePageLinks(el("readerExplanation"), paper.id);
     el("readerExplanation").querySelector("[data-reader-explain]")?.addEventListener("click", generateReaderExplanation);
     el("readerExplanation").querySelector("[data-explain]")?.addEventListener("click", generateReaderExplanation);
     await Promise.all([resolveReaderAsset(paper), loadChatHistory(paperId)]);
@@ -2619,6 +2726,7 @@ async function generateReaderExplanation() {
     const explanation = await api(`/api/papers/${encodeURIComponent(paper.id)}/explain`, { method: "POST", body: "{}" });
     paper.explanation = explanation;
     container.innerHTML = explanationMarkup(explanation);
+    bindEvidencePageLinks(container, paper.id);
     container.querySelector("[data-explain]")?.addEventListener("click", generateReaderExplanation);
     toast(explanation.reading_basis === "fulltext" ? "全文精读已生成" : "仅找到摘要，已生成摘要讲解");
     monitorPaperReadingBackup(paper.id);
@@ -2691,7 +2799,7 @@ async function translateCurrentPage() {
   try {
     const result = await translateText(text);
     el("translationResult").textContent = result.text;
-    el("translationProvider").textContent = `${result.provider} · 未使用 GPT`;
+    el("translationProvider").textContent = `${result.provider} / 未使用 GPT`;
   } catch (error) {
     el("translationResult").textContent = error.message;
   } finally {
@@ -2707,7 +2815,7 @@ async function translateSelectedText() {
   try {
     const result = await translateText(selection.text);
     el("translationResult").textContent = result.text;
-    el("translationProvider").textContent = `选中文字 · ${result.provider} · 未使用 GPT`;
+    el("translationProvider").textContent = `选中文字 / ${result.provider} / 未使用 GPT`;
   } catch (error) {
     el("translationResult").textContent = error.message;
   } finally {
@@ -2753,7 +2861,7 @@ async function loadOptions() {
   el("venueFilter").innerHTML = `<option value="">全部刊物</option>${options.venues.map((venue) => `<option value="${escapeHtml(venue)}">${escapeHtml(venueLabel(venue))}</option>`).join("")}`;
   const coverage = options.venue_coverage;
   el("coverageSummary").textContent = coverage
-    ? `当前可读 ${coverage.covered}/${coverage.catalog_total} · 已索引 ${coverage.indexed}/${coverage.catalog_total}${coverage.scheduled ? ` · ${coverage.scheduled} 个待公开` : ""}${coverage.blocked ? ` · ${coverage.blocked} 个受限` : ""}`
+    ? `当前可读 ${coverage.covered}/${coverage.catalog_total} / 已索引 ${coverage.indexed}/${coverage.catalog_total}${coverage.scheduled ? ` / ${coverage.scheduled} 个待公开` : ""}${coverage.blocked ? ` / ${coverage.blocked} 个受限` : ""}`
     : "";
   el("coverageSummary").title = coverageItems
     .filter((item) => item.availability_status !== "available")
