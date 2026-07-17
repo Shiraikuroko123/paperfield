@@ -69,6 +69,9 @@ const SCORE_WEIGHT_PRESETS = {
 };
 
 const el = (id) => document.getElementById(id);
+const mobileNavigationQuery = globalThis.matchMedia("(max-width: 720px)");
+const compactReaderQuery = globalThis.matchMedia("(max-width: 980px)");
+const dialogFocusOrigins = new WeakMap();
 const NGROK_BYPASS_HEADERS = { "ngrok-skip-browser-warning": "paperfield" };
 const SHARED_REQUEST_NONCE = Math.random().toString(36).slice(2);
 const PDF_LOAD_TIMEOUT_MS = 90000;
@@ -288,11 +291,156 @@ const debounce = (fn, delay = 260) => {
   };
 };
 
+function activeRailLink() {
+  return [...document.querySelectorAll(".rail-link")].find((item) => (
+    state.topic ? item.dataset.topic === state.topic : item.dataset.view === state.view
+  )) || null;
+}
+
+function syncActiveRailLink() {
+  const active = activeRailLink();
+  document.querySelectorAll(".rail-link").forEach((item) => {
+    const current = item === active;
+    item.classList.toggle("is-active", current);
+    if (current) item.setAttribute("aria-current", "page");
+    else item.removeAttribute("aria-current");
+  });
+}
+
+function setMobileNavigation(open, { restoreFocus = true } = {}) {
+  const rail = el("appRail");
+  const workspace = document.querySelector(".workspace");
+  const button = el("mobileNavButton");
+  const mobile = mobileNavigationQuery.matches;
+  const nextOpen = Boolean(open && mobile);
+  rail.classList.toggle("is-open", nextOpen);
+  document.body.classList.toggle("is-mobile-nav-open", nextOpen);
+  el("mobileNavBackdrop").hidden = !nextOpen;
+  button.setAttribute("aria-expanded", String(nextOpen));
+  button.setAttribute("aria-label", nextOpen ? "关闭主要导航" : "打开主要导航");
+  button.title = nextOpen ? "关闭导航" : "打开导航";
+  workspace.toggleAttribute("inert", nextOpen);
+  if (mobile) {
+    rail.setAttribute("aria-hidden", String(!nextOpen));
+    if (nextOpen) {
+      rail.setAttribute("role", "dialog");
+      rail.setAttribute("aria-modal", "true");
+      window.requestAnimationFrame(() => (activeRailLink() || rail.querySelector("button"))?.focus({ preventScroll: true }));
+    } else {
+      rail.removeAttribute("role");
+      rail.removeAttribute("aria-modal");
+      if (restoreFocus) button.focus({ preventScroll: true });
+    }
+  } else {
+    rail.removeAttribute("aria-hidden");
+    rail.removeAttribute("role");
+    rail.removeAttribute("aria-modal");
+  }
+}
+
+function syncMobileNavigation() {
+  setMobileNavigation(false, { restoreFocus: false });
+}
+
+function trapMobileNavigationFocus(event) {
+  const rail = el("appRail");
+  if (!mobileNavigationQuery.matches || !rail.classList.contains("is-open")) return false;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    setMobileNavigation(false);
+    return true;
+  }
+  if (event.key !== "Tab") return false;
+  const focusable = [...rail.querySelectorAll("button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])")]
+    .filter((item) => item.getClientRects().length > 0);
+  if (!focusable.length) return false;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && (document.activeElement === first || !rail.contains(document.activeElement))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (document.activeElement === last || !rail.contains(document.activeElement))) {
+    event.preventDefault();
+    first.focus();
+  }
+  return true;
+}
+
+function openModalDialog(dialog, initialFocus) {
+  if (!dialog.open) {
+    const origin = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (origin) dialogFocusOrigins.set(dialog, origin);
+    dialog.showModal();
+  }
+  window.requestAnimationFrame(() => initialFocus?.focus({ preventScroll: true }));
+}
+
+function restoreDialogFocus(dialog) {
+  const origin = dialogFocusOrigins.get(dialog);
+  dialogFocusOrigins.delete(dialog);
+  if (origin?.isConnected && !origin.closest("[inert]") && origin.getClientRects().length) {
+    window.requestAnimationFrame(() => origin.focus({ preventScroll: true }));
+  }
+}
+
+function bindDialogKeyboard(dialog) {
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !dialog.open) return;
+    event.preventDefault();
+    dialog.close();
+  });
+}
+
+function bindTablistKeyboard(tablist) {
+  tablist.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    const tabs = [...tablist.querySelectorAll('[role="tab"]')].filter((tab) => !tab.disabled && !tab.hidden);
+    const current = tabs.indexOf(document.activeElement);
+    if (current < 0 || !tabs.length) return;
+    event.preventDefault();
+    let next = current;
+    if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = tabs.length - 1;
+    else next = (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    tabs[next].focus();
+    tabs[next].click();
+  });
+}
+
+function updateFilterSummary() {
+  const projectMode = isProjectMode();
+  const ids = projectMode
+    ? ["topicFilter", "projectLanguageFilter", "dateFilter"]
+    : ["topicFilter", "tierFilter", "platformFilter", "venueFilter", "authorFilter", "institutionFilter", "sourceFilter", "dateFilter"];
+  let count = ids.filter((id) => el(id).value.trim()).length;
+  if (state.status) count += 1;
+  if (projectMode) {
+    if (el("projectSecondarySortFilter").value) count += 1;
+  } else {
+    if (el("secondarySortFilter").value) count += 1;
+  }
+  el("filterSummary").textContent = count ? `${count} 项` : "全部";
+}
+
+function setFilterDisclosure(open) {
+  const strip = document.querySelector(".filter-strip");
+  strip.classList.toggle("is-open", open);
+  el("filterToggle").setAttribute("aria-expanded", String(open));
+}
+
 function toast(message, error = false) {
   const item = document.createElement("div");
   item.className = `toast${error ? " is-error" : ""}`;
   item.textContent = message;
-  el("toastRegion").append(item);
+  item.setAttribute("role", error ? "alert" : "status");
+  const dialogs = [...document.querySelectorAll("dialog[open]")];
+  const activeDialog = dialogs[dialogs.length - 1];
+  if (activeDialog) {
+    item.classList.add("is-dialog-toast");
+    activeDialog.append(item);
+  } else {
+    el("toastRegion").append(item);
+  }
   setTimeout(() => item.remove(), 3200);
 }
 
@@ -328,19 +476,13 @@ function updateScoreEditorVisuals() {
     if (output) output.textContent = `${value}%`;
   });
 
-  let cursor = 0;
-  const segments = SCORE_DIMENSIONS.map(({ key, color }) => {
-    const start = cursor;
-    cursor += Number(weights[key] || 0);
-    return `${color} ${start}% ${cursor}%`;
-  });
   const total = weightTotal(weights);
-  el("scoreWeightRing").style.background = `conic-gradient(${segments.join(", ")})`;
+  const complete = weightsAreComplete(weights);
+  el("scoreWeightRing").classList.toggle("is-invalid", !complete);
   el("scoreWeightTotal").textContent = formatWeight(total);
   el("scoreGuideSummary").textContent = SCORE_DIMENSIONS.map(({ key }) => formatWeight(weights[key])).join(" / ");
 
   const locked = Boolean(state.auth?.enabled && !state.auth.host_ai_allowed);
-  const complete = weightsAreComplete(weights);
   const dirty = !sameWeights(weights, state.appliedRecommendationWeights || weights);
   controls.querySelectorAll("input").forEach((input) => { input.disabled = locked; });
   el("scoreWeightPresets").querySelectorAll("button").forEach((button) => {
@@ -612,10 +754,18 @@ function applyViewMode() {
   el("weeklyKindTabs").hidden = !recommendedMode;
   el("weeklyPreparation").hidden = !recommendedMode || state.weeklyKind !== "papers" || !state.weeklyPreparation;
   el("readingStatusTabs").hidden = projectMode || recommendedMode;
+  if (recommendedMode) {
+    el("paperList").setAttribute("role", "tabpanel");
+    el("paperList").setAttribute("aria-labelledby", state.weeklyKind === "projects" ? "weeklyProjectsTab" : "weeklyPapersTab");
+  } else {
+    el("paperList").removeAttribute("role");
+    el("paperList").removeAttribute("aria-labelledby");
+  }
   document.querySelectorAll("[data-weekly-kind]").forEach((button) => {
     const active = button.dataset.weeklyKind === state.weeklyKind;
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
   });
   el("overviewTitle").textContent = projectMode ? "今天有哪些项目在更新" : recommendedMode ? "本周先读与复现" : topicMode ? `${state.topic}论文流` : "今天值得读什么";
   el("overviewMessage").textContent = projectMode ? "开源仓库变更与论文关联信号" : recommendedMode ? "自然周研究队列 · 资料后台预处理" : topicMode ? `浏览全部${state.topic}论文，不受每周精选数量限制` : "公开论文元数据与阅读状态";
@@ -628,6 +778,11 @@ function applyViewMode() {
     el("statFavorite").textContent = projectMode ? state.stats.project_link_count : recommendedMode ? state.weeklyProjects.length : state.stats.favorites;
     if (!state.stats.refresh.running) el("refreshButton").textContent = projectMode ? "更新全部" : "更新论文";
   }
+  document.querySelectorAll(".stream-head [data-status]").forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.status === state.status));
+  });
+  syncActiveRailLink();
+  updateFilterSummary();
 }
 
 function renderSkeleton(label = streamLoadLabel()) {
@@ -679,8 +834,7 @@ async function loadProjects({ append = false, request = null } = {}) {
 function createProjectRow(project, weekly = false) {
     const row = document.createElement("article");
     row.className = `paper-row project-row${weekly ? " is-recommended" : ""}${project.full_name === state.selectedProject ? " is-selected" : ""}`;
-    row.tabIndex = 0;
-    row.setAttribute("aria-label", `打开项目：${project.full_name}`);
+    row.dataset.project = project.full_name;
     row.innerHTML = `
       <div>
         <div class="paper-kicker">
@@ -689,7 +843,7 @@ function createProjectRow(project, weekly = false) {
           ${project.size_kb ? `<span>${Math.max(1, Math.round(project.size_kb / 1024))} MB</span>` : ""}
           <span>更新于 ${escapeHtml(formatDate(project.pushed_at?.slice(0, 10)))}</span>
         </div>
-        <h3 class="paper-title">${escapeHtml(project.full_name)}</h3>
+        <h3 class="paper-title"><button class="paper-title-action" type="button" data-open-project aria-label="打开项目：${escapeHtml(project.full_name)}">${escapeHtml(project.full_name)}</button></h3>
         <div class="project-description">${escapeHtml(project.description || "仓库暂未提供简介")}</div>
         <div class="paper-topics">${project.topics.slice(0, 5).map((topic) => `<span class="topic-tag">${escapeHtml(topic)}</span>`).join("")}</div>
       </div>
@@ -699,12 +853,6 @@ function createProjectRow(project, weekly = false) {
         <b>${project.recommendation_score ? `${project.stars} Stars · ${project.linked_paper_count} 篇论文` : `${project.linked_paper_count} 篇论文`}</b>
       </div>`;
     row.addEventListener("click", () => openProjectReader(project.full_name));
-    row.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        openProjectReader(project.full_name);
-      }
-    });
     return row;
 }
 
@@ -752,16 +900,19 @@ function renderProjectDetail(project) {
           </button>`).join("")}</div>` : `<p>暂未找到高置信度论文关联。项目仍会保留在 GitHub 项目流中。</p>`}
       </section>
     </div>`;
-  el("paperDetail").querySelector("[data-close-detail]").addEventListener("click", showReadingEmpty);
+  el("paperDetail").querySelector("[data-close-detail]").addEventListener("click", () => showReadingEmpty(true));
   el("paperDetail").querySelector("[data-open-project-reader]").addEventListener("click", () => openProjectReader(project.full_name));
   el("paperDetail").querySelectorAll("[data-linked-paper]").forEach((button) => button.addEventListener("click", async () => {
     state.view = "all";
     state.topic = "";
     applyViewMode();
-    document.querySelectorAll(".rail-link").forEach((item) => item.classList.toggle("is-active", item.dataset.view === "all"));
+    syncActiveRailLink();
     await loadPapers({ preserveSelection: false });
     await openPaper(button.dataset.linkedPaper);
   }));
+  if (compactReaderQuery.matches && el("readingPane").classList.contains("is-open")) {
+    window.requestAnimationFrame(() => el("paperDetail").querySelector("[data-close-detail]")?.focus({ preventScroll: true }));
+  }
 }
 
 function setProjectTab(tab) {
@@ -769,6 +920,7 @@ function setProjectTab(tab) {
     const active = button.dataset.projectTab === tab;
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
   });
   const panels = { readme: "projectReadmePanel", explain: "projectExplainPanel", chat: "projectChatPanel" };
   Object.entries(panels).forEach(([name, id]) => {
@@ -842,7 +994,11 @@ function renderProjectFiles(mode = state.projectFileMode) {
   const workspace = state.projectWorkspace;
   if (!workspace) return;
   state.projectFileMode = mode;
-  document.querySelectorAll("[data-project-file-mode]").forEach((button) => button.classList.toggle("is-active", button.dataset.projectFileMode === mode));
+  document.querySelectorAll("[data-project-file-mode]").forEach((button) => {
+    const active = button.dataset.projectFileMode === mode;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
   if (mode === "guide") {
     el("projectFileTree").innerHTML = (workspace.reading_sections || []).map((section) => `
       <section class="project-guide-section">
@@ -901,7 +1057,9 @@ function renderProjectDocument(path, htmlContent, important = false) {
   el("projectDocumentLanguages").hidden = !important;
   el("projectDocumentTranslationStatus").hidden = !important;
   document.querySelectorAll("[data-project-doc-lang]").forEach((button) => {
-    button.classList.toggle("is-active", button.dataset.projectDocLang === "en");
+    const active = button.dataset.projectDocLang === "en";
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
     button.disabled = false;
   });
   el("projectReadmeContent").innerHTML = htmlContent || "<p>文档内容为空。</p>";
@@ -955,12 +1113,20 @@ async function setProjectDocumentLanguage(target) {
     }
     documentState.language = target;
     el("projectReadmeContent").innerHTML = documentState.html[target];
-    document.querySelectorAll("[data-project-doc-lang]").forEach((button) => button.classList.toggle("is-active", button.dataset.projectDocLang === target));
+    document.querySelectorAll("[data-project-doc-lang]").forEach((button) => {
+      const active = button.dataset.projectDocLang === target;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
     updateProjectDocumentTranslationStatus(target);
   } catch (error) {
     el("projectReadmeContent").innerHTML = documentState.html.en;
     documentState.language = "en";
-    document.querySelectorAll("[data-project-doc-lang]").forEach((button) => button.classList.toggle("is-active", button.dataset.projectDocLang === "en"));
+    document.querySelectorAll("[data-project-doc-lang]").forEach((button) => {
+      const active = button.dataset.projectDocLang === "en";
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
     updateProjectDocumentTranslationStatus(target, "error");
     toast(error.message, true);
   } finally {
@@ -1172,6 +1338,7 @@ async function openProjectReader(fullName, force = false) {
   el("projectCodeMeta").textContent = "";
   el("projectCodeContent").classList.remove("is-wrapped");
   el("projectCodeWrap").classList.remove("is-active");
+  el("projectCodeWrap").setAttribute("aria-pressed", "false");
   el("projectCodeContent").textContent = "下载并校验公开源码压缩包";
   el("projectReadmeContent").textContent = "正在读取 README";
   el("projectDocumentPath").textContent = "README";
@@ -1179,7 +1346,7 @@ async function openProjectReader(fullName, force = false) {
   el("projectRootReadme").hidden = true;
   el("projectExplanation").innerHTML = "";
   renderProjectChatHistory([]);
-  if (!dialog.open) dialog.showModal();
+  openModalDialog(dialog, el("projectReaderClose"));
   const url = new URL(window.location.href);
   url.searchParams.set("view", state.view);
   url.searchParams.set("project", fullName);
@@ -1347,9 +1514,7 @@ function renderPapers() {
     }
     const row = document.createElement("article");
     row.className = `paper-row${paper.id === state.selectedId ? " is-selected" : ""}${paper.is_recommended ? " is-recommended" : ""}`;
-    row.tabIndex = 0;
     row.dataset.id = paper.id;
-    row.setAttribute("aria-label", `打开论文：${paper.title}`);
     row.innerHTML = `
       <div>
         <div class="paper-kicker">
@@ -1358,7 +1523,7 @@ function renderPapers() {
           <span>${escapeHtml(formatDate(paper.published))}</span>
           <span>${escapeHtml(paper.status === "read" ? "已读" : paper.status === "reading" ? "在读" : "未读")}</span>
         </div>
-        <h3 class="paper-title">${escapeHtml(paper.title)}</h3>
+        <h3 class="paper-title"><button class="paper-title-action" type="button" data-open-paper aria-label="打开论文：${escapeHtml(paper.title)}">${escapeHtml(paper.title)}</button></h3>
         <div class="paper-authors">${escapeHtml(paper.authors.join(" · ") || "作者信息缺失")}</div>
         <div class="paper-topics">${paper.topics.map((topic) => `<span class="topic-tag">${escapeHtml(topic)}</span>`).join("")}</div>
         ${paper.notable_institutions?.length ? `<div class="institution-tags">${paper.notable_institutions.slice(0, 3).map((institution) => `<span title="${escapeHtml(institution.strengths.join(" · "))}">${escapeHtml(institution.name)}</span>`).join("")}</div>` : ""}
@@ -1373,13 +1538,6 @@ function renderPapers() {
       if (event.target.closest("[data-favorite]")) return;
       if (paper.is_recommended) openReader(paper.id);
       else openPaper(paper.id);
-    });
-    row.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        if (paper.is_recommended) openReader(paper.id);
-        else openPaper(paper.id);
-      }
     });
     row.querySelector("[data-favorite]").addEventListener("click", (event) => toggleFavorite(event, paper));
     list.append(row);
@@ -1503,10 +1661,10 @@ function renderDetail(paper) {
 
       <section class="detail-section">
         <h3>阅读状态</h3>
-        <div class="status-tabs" data-detail-status>
-          <button class="${paper.status === "unread" ? "is-active" : ""}" data-value="unread">未读</button>
-          <button class="${paper.status === "reading" ? "is-active" : ""}" data-value="reading">在读</button>
-          <button class="${paper.status === "read" ? "is-active" : ""}" data-value="read">已读</button>
+        <div class="status-tabs" data-detail-status role="group" aria-label="阅读状态">
+          <button class="${paper.status === "unread" ? "is-active" : ""}" type="button" data-value="unread" aria-pressed="${paper.status === "unread"}">未读</button>
+          <button class="${paper.status === "reading" ? "is-active" : ""}" type="button" data-value="reading" aria-pressed="${paper.status === "reading"}">在读</button>
+          <button class="${paper.status === "read" ? "is-active" : ""}" type="button" data-value="read" aria-pressed="${paper.status === "read"}">已读</button>
         </div>
       </section>
 
@@ -1529,12 +1687,12 @@ function renderDetail(paper) {
       </section>
     </div>`;
 
-  el("paperDetail").querySelector("[data-close-detail]").addEventListener("click", showReadingEmpty);
+  el("paperDetail").querySelector("[data-close-detail]").addEventListener("click", () => showReadingEmpty(true));
   el("paperDetail").querySelector("[data-open-reader]").addEventListener("click", () => openReader(paper.id));
   el("paperDetail").querySelectorAll("[data-linked-project]").forEach((button) => button.addEventListener("click", async () => {
     state.view = "projects";
     applyViewMode();
-    document.querySelectorAll(".rail-link").forEach((item) => item.classList.toggle("is-active", item.dataset.view === "projects"));
+    syncActiveRailLink();
     await loadProjects();
     await openProject(button.dataset.linkedProject);
   }));
@@ -1556,6 +1714,9 @@ function renderDetail(paper) {
     await api(`/api/papers/${encodeURIComponent(paper.id)}/state`, { method: "POST", body: JSON.stringify({ notes }) });
     toast("笔记已保存");
   });
+  if (compactReaderQuery.matches && el("readingPane").classList.contains("is-open")) {
+    window.requestAnimationFrame(() => el("paperDetail").querySelector("[data-close-detail]")?.focus({ preventScroll: true }));
+  }
 }
 
 function explanationMarkup(explanation) {
@@ -1629,6 +1790,7 @@ function setReaderTab(tab) {
     const active = button.dataset.readerTab === tab;
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
   });
   ["explain", "chat", "translate"].forEach((name) => {
     const panel = el(`reader${name[0].toUpperCase()}${name.slice(1)}Panel`);
@@ -1717,6 +1879,7 @@ function openReaderText() {
 }
 
 function setPdfStatus(title, detail = "", retry = false) {
+  document.querySelector(".pdf-workspace").setAttribute("aria-busy", String(title.startsWith("正在")));
   el("pdfStatus").hidden = false;
   el("pdfStatus").innerHTML = `<strong>${escapeHtml(title)}</strong>${detail ? `<span>${escapeHtml(detail)}</span>` : ""}`;
   el("pdfRetryButton").hidden = !retry;
@@ -1743,6 +1906,7 @@ function releaseReaderPdf() {
   el("pdfRetryButton").hidden = true;
   el("pdfOpenButton").href = "#";
   el("pdfOpenButton").textContent = "新窗口打开";
+  document.querySelector(".pdf-workspace").setAttribute("aria-busy", "false");
   if (state.readerPdfObjectUrl) URL.revokeObjectURL(state.readerPdfObjectUrl);
   state.readerPdfObjectUrl = "";
   state.readerPdfImageUrls.forEach((url) => URL.revokeObjectURL(url));
@@ -2026,6 +2190,7 @@ async function loadReaderPdf(asset) {
       el("pdfRetryButton").hidden = true;
       el("pdfUnavailable").hidden = true;
       el("pdfActions").hidden = false;
+      document.querySelector(".pdf-workspace").setAttribute("aria-busy", "false");
       return;
     }
     const renderedWithPdfJs = await renderPdfDocument(asset.pdf_url, token);
@@ -2035,6 +2200,7 @@ async function loadReaderPdf(asset) {
     el("pdfRetryButton").hidden = true;
     el("pdfUnavailable").hidden = true;
     el("pdfActions").hidden = false;
+    document.querySelector(".pdf-workspace").setAttribute("aria-busy", "false");
   } catch (error) {
     if (!el("readerDialog").open || state.readerPdfToken !== token) return;
     setPdfStatus("PDF 载入失败", pdfLoadErrorMessage(error), true);
@@ -2092,6 +2258,7 @@ function renderReaderAsset(paper, asset, reloadPdf = true) {
     if (asset.fulltext_available) loadTranslationPage(1);
   } else {
     releaseReaderPdf();
+    document.querySelector(".pdf-workspace").setAttribute("aria-busy", "false");
     el("pdfStatus").hidden = true;
     el("pdfFrame").hidden = true;
     el("pdfUnavailable").hidden = false;
@@ -2164,7 +2331,8 @@ async function archiveReaderPdf() {
   const paper = state.readerPaper;
   if (!paper) return;
   if (!state.storage?.configured) {
-    if (!el("storageDialog").open) el("storageDialog").showModal();
+    openModalDialog(el("storageDialog"), el("defaultStorageMode"));
+    loadAiModels();
     toast("请先完成 Cloudflare R2 配置");
     return;
   }
@@ -2411,7 +2579,7 @@ async function openReader(paperId) {
   el("translationSource").textContent = "";
   el("translationResult").textContent = "";
   renderChatHistory([]);
-  if (!dialog.open) dialog.showModal();
+  openModalDialog(dialog, el("readerClose"));
   try {
     const paper = await api(`/api/papers/${encodeURIComponent(paperId)}`);
     state.readerPaper = paper;
@@ -2547,7 +2715,10 @@ async function translateSelectedText() {
   }
 }
 
-function showReadingEmpty() {
+function showReadingEmpty(restoreFocus = false) {
+  const focusTarget = isProjectMode() && state.selectedProject
+    ? document.querySelector(`[data-project="${CSS.escape(state.selectedProject)}"] [data-open-project]`)
+    : state.selectedId ? document.querySelector(`[data-id="${CSS.escape(state.selectedId)}"] [data-open-paper]`) : null;
   el("paperDetail").hidden = true;
   el("readingEmpty").hidden = false;
   el("readingPane").classList.remove("is-open");
@@ -2556,6 +2727,7 @@ function showReadingEmpty() {
   url.searchParams.delete("paper");
   url.searchParams.delete("project");
   window.history.replaceState({}, "", url);
+  if (restoreFocus && focusTarget) window.requestAnimationFrame(() => focusTarget.focus({ preventScroll: true }));
 }
 
 async function loadOptions() {
@@ -2666,15 +2838,28 @@ function clearFilters() {
   el("sortFilter").value = "quality";
   el("secondarySortFilter").value = "";
   applyViewMode();
-  document.querySelectorAll(".rail-link").forEach((item) => item.classList.toggle("is-active", item.dataset.view === state.view));
-  document.querySelectorAll(".status-tabs[data-status], .status-tabs button");
-  document.querySelectorAll(".stream-head [data-status]").forEach((item) => item.classList.toggle("is-active", item.dataset.status === ""));
+  syncActiveRailLink();
+  document.querySelectorAll(".stream-head [data-status]").forEach((item) => {
+    const active = item.dataset.status === "";
+    item.classList.toggle("is-active", active);
+    item.setAttribute("aria-pressed", String(active));
+  });
+  updateFilterSummary();
   loadPapers({ preserveSelection: false });
 }
 
 function bindEvents() {
   const reload = debounce(() => loadPapers({ preserveSelection: false }));
   const authorSuggestions = debounce(() => loadAuthorOptions(el("authorFilter").value), 180);
+  el("mobileNavButton").addEventListener("click", () => setMobileNavigation(!el("appRail").classList.contains("is-open")));
+  el("mobileNavClose").addEventListener("click", () => setMobileNavigation(false));
+  el("mobileNavBackdrop").addEventListener("click", () => setMobileNavigation(false));
+  if (mobileNavigationQuery.addEventListener) mobileNavigationQuery.addEventListener("change", syncMobileNavigation);
+  else mobileNavigationQuery.addListener(syncMobileNavigation);
+  el("filterToggle").addEventListener("click", () => setFilterDisclosure(!document.querySelector(".filter-strip").classList.contains("is-open")));
+  document.querySelectorAll('[role="tablist"]').forEach(bindTablistKeyboard);
+  document.querySelectorAll("dialog").forEach(bindDialogKeyboard);
+  syncMobileNavigation();
   el("scoreWeightControls").addEventListener("input", (event) => {
     const input = event.target.closest("[data-score-weight], [data-score-weight-number]");
     if (!input || input.value === "") return;
@@ -2697,12 +2882,17 @@ function bindEvents() {
   el("authorFilter").addEventListener("input", () => {
     reload();
     authorSuggestions();
+    updateFilterSummary();
   });
   ["topicFilter", "tierFilter", "platformFilter", "venueFilter", "institutionFilter", "sourceFilter", "dateFilter", "sortFilter", "secondarySortFilter"].forEach((id) => el(id).addEventListener("change", () => {
     if (id === "topicFilter") state.topic = "";
+    updateFilterSummary();
     loadPapers({ preserveSelection: false });
   }));
-  ["projectLanguageFilter", "projectSortFilter", "projectSecondarySortFilter"].forEach((id) => el(id).addEventListener("change", () => loadPapers({ preserveSelection: false })));
+  ["projectLanguageFilter", "projectSortFilter", "projectSecondarySortFilter"].forEach((id) => el(id).addEventListener("change", () => {
+    updateFilterSummary();
+    loadPapers({ preserveSelection: false });
+  }));
   el("clearFilters").addEventListener("click", clearFilters);
   el("emptyClear").addEventListener("click", clearFilters);
   el("refreshButton").addEventListener("click", triggerRefresh);
@@ -2716,16 +2906,17 @@ function bindEvents() {
   el("openConnectorButton").addEventListener("click", () => {
     el("connectorQuery").value = "";
     el("connectorResults").innerHTML = "";
-    el("connectorDialog").showModal();
-    el("connectorQuery").focus();
+    openModalDialog(el("connectorDialog"), el("connectorQuery"));
   });
   el("connectorClose").addEventListener("click", () => el("connectorDialog").close());
+  el("connectorDialog").addEventListener("close", () => restoreDialogFocus(el("connectorDialog")));
   el("openStorageButton").addEventListener("click", () => {
-    el("storageDialog").showModal();
-    el("defaultStorageMode").focus();
+    setMobileNavigation(false);
+    openModalDialog(el("storageDialog"), el("defaultStorageMode"));
     loadAiModels();
   });
   el("storageClose").addEventListener("click", () => el("storageDialog").close());
+  el("storageDialog").addEventListener("close", () => restoreDialogFocus(el("storageDialog")));
   el("refreshStorageUsage").addEventListener("click", async () => {
     const button = el("refreshStorageUsage");
     button.disabled = true;
@@ -2785,6 +2976,7 @@ function bindEvents() {
       const active = item === button;
       item.classList.toggle("is-active", active);
       item.setAttribute("aria-selected", String(active));
+      item.tabIndex = active ? 0 : -1;
     });
     const url = new URL(window.location.href);
     if (state.weeklyKind === "projects") url.searchParams.set("weekly", "projects");
@@ -2802,7 +2994,8 @@ function bindEvents() {
     state.selectedProject = null;
     el("topicFilter").value = topic;
     applyViewMode();
-    document.querySelectorAll(".rail-link").forEach((item) => item.classList.toggle("is-active", item === button));
+    syncActiveRailLink();
+    setMobileNavigation(false);
     showReadingEmpty();
     const request = beginStreamRequest(streamLoadLabel());
     loadPapers({ preserveSelection: false, request });
@@ -2810,12 +3003,24 @@ function bindEvents() {
 
   document.querySelectorAll(".stream-head [data-status]").forEach((button) => button.addEventListener("click", () => {
     state.status = button.dataset.status;
-    document.querySelectorAll(".stream-head [data-status]").forEach((item) => item.classList.toggle("is-active", item === button));
+    document.querySelectorAll(".stream-head [data-status]").forEach((item) => {
+      const active = item === button;
+      item.classList.toggle("is-active", active);
+      item.setAttribute("aria-pressed", String(active));
+    });
+    updateFilterSummary();
     loadPapers({ preserveSelection: false });
   }));
 
   document.addEventListener("keydown", (event) => {
-    if (el("readerDialog").open) return;
+    if (trapMobileNavigationFocus(event)) return;
+    if (document.querySelector("dialog[open]")) return;
+    if (event.key === "Escape" && el("scoreGuide").open) {
+      event.preventDefault();
+      el("scoreGuide").open = false;
+      el("scoreGuide").querySelector("summary")?.focus({ preventScroll: true });
+      return;
+    }
     if (event.key === "/" && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) {
       event.preventDefault();
       el("searchInput").focus();
@@ -2837,6 +3042,7 @@ function bindEvents() {
     releaseReaderPdf();
     state.readerPaper = null;
     state.readerAsset = null;
+    restoreDialogFocus(el("readerDialog"));
   });
   document.querySelectorAll("[data-reader-tab]").forEach((button) => button.addEventListener("click", () => setReaderTab(button.dataset.readerTab)));
   el("readerCacheButton").addEventListener("click", () => state.readerPaper && resolveReaderAsset(state.readerPaper, true));
@@ -2847,7 +3053,10 @@ function bindEvents() {
   el("readerCloudButton").addEventListener("click", archiveReaderPdf);
   el("readerStorageMode").addEventListener("change", updateReaderStorageAction);
   el("projectReaderClose").addEventListener("click", () => el("projectReaderDialog").close());
-  el("projectReaderDialog").addEventListener("close", () => { state.projectWorkspaceToken += 1; });
+  el("projectReaderDialog").addEventListener("close", () => {
+    state.projectWorkspaceToken += 1;
+    restoreDialogFocus(el("projectReaderDialog"));
+  });
   document.querySelectorAll("[data-project-tab]").forEach((button) => button.addEventListener("click", () => setProjectTab(button.dataset.projectTab)));
   document.querySelectorAll("[data-project-file-mode]").forEach((button) => button.addEventListener("click", () => renderProjectFiles(button.dataset.projectFileMode)));
   el("projectRefreshSource").addEventListener("click", () => state.projectWorkspace && openProjectReader(state.projectWorkspace.project.full_name, true));
@@ -2861,6 +3070,7 @@ function bindEvents() {
     state.projectCodeWrapped = !state.projectCodeWrapped;
     el("projectCodeContent").classList.toggle("is-wrapped", state.projectCodeWrapped);
     el("projectCodeWrap").classList.toggle("is-active", state.projectCodeWrapped);
+    el("projectCodeWrap").setAttribute("aria-pressed", String(state.projectCodeWrapped));
   });
   el("projectCodeCopy").addEventListener("click", async () => {
     if (!state.projectCurrentContent) return;
@@ -2872,7 +3082,6 @@ function bindEvents() {
     }
   });
   el("projectChatForm").addEventListener("submit", submitProjectQuestion);
-  el("projectChatSubmit").addEventListener("click", submitProjectQuestion);
   el("projectChatQuestion").addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter") submitProjectQuestion(event);
   });
@@ -2954,7 +3163,7 @@ async function init() {
   renderScoreEditor();
   bindEvents();
   applyViewMode();
-  document.querySelectorAll(".rail-link").forEach((item) => item.classList.toggle("is-active", item.dataset.view === state.view));
+  syncActiveRailLink();
   const initialRequest = beginStreamRequest("正在初始化研究工作台");
   try {
     await Promise.all([

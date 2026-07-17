@@ -2,46 +2,48 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="description" content="具身智能与大模型论文、开源项目每周研究工作台">
   <title>Paperfield</title>
-  <link rel="stylesheet" href="/styles.css?v=1.0.1-select-translate">
+  <link rel="stylesheet" href="/styles.css?v=1.0.1-responsive-workbench">
   <link rel="stylesheet" href="/vendor/katex/katex.min.css?v=0.16.11">
 </head>
 <body>
+  <button class="mobile-nav-backdrop" id="mobileNavBackdrop" type="button" aria-label="关闭主要导航" tabindex="-1" hidden></button>
   <div class="app-shell">
-    <aside class="app-rail" aria-label="主要导航">
+    <aside class="app-rail" id="appRail" aria-label="主要导航">
       <div class="brand-block">
         <div class="brand-mark" aria-hidden="true">P</div>
         <div>
           <strong>Paperfield</strong>
           <span>RESEARCH OS</span>
         </div>
+        <button class="mobile-nav-close" id="mobileNavClose" type="button" aria-label="关闭主要导航" title="关闭导航">×</button>
       </div>
 
-      <nav class="rail-nav" id="railNav">
-        <button class="rail-link is-active" data-view="recommended">
+      <nav class="rail-nav" id="railNav" aria-label="研究视图">
+        <button class="rail-link is-active" type="button" data-view="recommended" aria-current="page">
           <span>每周精选</span><b id="navRecommendedCount">0</b>
         </button>
-        <button class="rail-link" data-view="all">
+        <button class="rail-link" type="button" data-view="all">
           <span>今日视野</span><b id="navAllCount">0</b>
         </button>
-        <button class="rail-link" data-view="top">
+        <button class="rail-link" type="button" data-view="top">
           <span>顶会顶刊</span><b id="navTopCount">0</b>
         </button>
-        <button class="rail-link" data-topic="具身智能">
+        <button class="rail-link" type="button" data-topic="具身智能">
           <span>具身智能</span><b id="navEmbodiedCount">0</b>
         </button>
-        <button class="rail-link" data-topic="大语言模型">
+        <button class="rail-link" type="button" data-topic="大语言模型">
           <span>大语言模型</span><b id="navLlmCount">0</b>
         </button>
-        <button class="rail-link" data-topic="多模态大模型">
+        <button class="rail-link" type="button" data-topic="多模态大模型">
           <span>多模态</span><b id="navMultimodalCount">0</b>
         </button>
-        <button class="rail-link rail-project-link" data-view="projects">
+        <button class="rail-link rail-project-link" type="button" data-view="projects">
           <span>GitHub 项目</span><b id="navProjectCount">0</b>
         </button>
-        <button class="rail-link" data-view="favorites">
+        <button class="rail-link" type="button" data-view="favorites">
           <span>收藏</span><b id="navFavoriteCount">0</b>
         </button>
       </nav>
@@ -60,6 +62,7 @@
 
     <main class="workspace">
       <header class="workspace-header">
+        <button class="mobile-nav-toggle" id="mobileNavButton" type="button" aria-label="打开主要导航" aria-controls="appRail" aria-expanded="false" title="打开导航"><span aria-hidden="true">☰</span></button>
         <div class="mobile-brand">Paperfield</div>
         <label class="search-box">
           <span class="sr-only">搜索论文、作者或刊物</span>
@@ -88,21 +91,24 @@
       </section>
 
       <section class="filter-strip" aria-label="论文筛选">
-        <label>主题<select id="topicFilter"><option value="">全部主题</option></select></label>
-        <label class="paper-only-filter">平台层级<select id="tierFilter"><option value="">全部层级</option></select></label>
-        <label class="paper-only-filter">发布平台<select id="platformFilter"><option value="">全部平台</option></select></label>
-        <label class="paper-only-filter">刊物<select id="venueFilter"><option value="">全部刊物</option></select></label>
-        <label class="paper-only-filter">作者<input id="authorFilter" list="authorOptions" placeholder="输入作者名"><datalist id="authorOptions"></datalist></label>
-        <label class="paper-only-filter">代表机构<select id="institutionFilter"><option value="">全部机构</option></select></label>
-        <label class="paper-only-filter">数据源<select id="sourceFilter"><option value="">全部数据源</option></select></label>
-        <label class="project-only-filter" hidden>语言<select id="projectLanguageFilter"><option value="">全部语言</option></select></label>
-        <label>起始日期<input id="dateFilter" type="date"></label>
-        <label class="paper-only-filter">主排序<select id="sortFilter"><option value="recommendation">综合评分高优先</option><option value="quality">基础质量高优先</option><option value="date">最新发表优先</option><option value="citations">引用数高优先</option><option value="title">标题 A-Z</option><option value="venue">刊物 A-Z</option></select></label>
-        <label class="paper-only-filter">次排序<select id="secondarySortFilter"><option value="">自动</option><option value="recommendation">综合评分高优先</option><option value="quality">基础质量高优先</option><option value="date">最新发表优先</option><option value="citations">引用数高优先</option><option value="title">标题 A-Z</option><option value="venue">刊物 A-Z</option></select></label>
-        <label class="project-only-filter" hidden>主排序<select id="projectSortFilter"><option value="updated">最近更新优先</option><option value="links">关联论文多优先</option><option value="stars">Stars 多优先</option><option value="forks">Forks 多优先</option><option value="issues">Issue 多优先</option><option value="name">名称 A-Z</option></select></label>
-        <label class="project-only-filter" hidden>次排序<select id="projectSecondarySortFilter"><option value="">自动</option><option value="updated">最近更新优先</option><option value="links">关联论文多优先</option><option value="stars">Stars 多优先</option><option value="forks">Forks 多优先</option><option value="issues">Issue 多优先</option><option value="name">名称 A-Z</option></select></label>
-        <button class="text-button" id="clearFilters" type="button">清除筛选</button>
-        <output class="coverage-summary paper-only-filter" id="coverageSummary" aria-live="polite"></output>
+        <button class="filter-toggle" id="filterToggle" type="button" aria-expanded="false" aria-controls="filterControls"><span>筛选与排序</span><b id="filterSummary">全部</b></button>
+        <div class="filter-controls" id="filterControls">
+          <label>主题<select id="topicFilter"><option value="">全部主题</option></select></label>
+          <label class="paper-only-filter">平台层级<select id="tierFilter"><option value="">全部层级</option></select></label>
+          <label class="paper-only-filter">发布平台<select id="platformFilter"><option value="">全部平台</option></select></label>
+          <label class="paper-only-filter">刊物<select id="venueFilter"><option value="">全部刊物</option></select></label>
+          <label class="paper-only-filter">作者<input id="authorFilter" list="authorOptions" placeholder="输入作者名"><datalist id="authorOptions"></datalist></label>
+          <label class="paper-only-filter">代表机构<select id="institutionFilter"><option value="">全部机构</option></select></label>
+          <label class="paper-only-filter">数据源<select id="sourceFilter"><option value="">全部数据源</option></select></label>
+          <label class="project-only-filter" hidden>语言<select id="projectLanguageFilter"><option value="">全部语言</option></select></label>
+          <label>起始日期<input id="dateFilter" type="date"></label>
+          <label class="paper-only-filter">主排序<select id="sortFilter"><option value="recommendation">综合评分高优先</option><option value="quality">基础质量高优先</option><option value="date">最新发表优先</option><option value="citations">引用数高优先</option><option value="title">标题 A-Z</option><option value="venue">刊物 A-Z</option></select></label>
+          <label class="paper-only-filter">次排序<select id="secondarySortFilter"><option value="">自动</option><option value="recommendation">综合评分高优先</option><option value="quality">基础质量高优先</option><option value="date">最新发表优先</option><option value="citations">引用数高优先</option><option value="title">标题 A-Z</option><option value="venue">刊物 A-Z</option></select></label>
+          <label class="project-only-filter" hidden>主排序<select id="projectSortFilter"><option value="updated">最近更新优先</option><option value="links">关联论文多优先</option><option value="stars">Stars 多优先</option><option value="forks">Forks 多优先</option><option value="issues">Issue 多优先</option><option value="name">名称 A-Z</option></select></label>
+          <label class="project-only-filter" hidden>次排序<select id="projectSecondarySortFilter"><option value="">自动</option><option value="updated">最近更新优先</option><option value="links">关联论文多优先</option><option value="stars">Stars 多优先</option><option value="forks">Forks 多优先</option><option value="issues">Issue 多优先</option><option value="name">名称 A-Z</option></select></label>
+          <button class="text-button" id="clearFilters" type="button">清除筛选</button>
+          <output class="coverage-summary paper-only-filter" id="coverageSummary" aria-live="polite"></output>
+        </div>
       </section>
 
       <div class="content-grid">
@@ -140,8 +146,8 @@
               </details>
             </div>
             <div class="status-tabs weekly-kind-tabs" id="weeklyKindTabs" role="tablist" aria-label="每周精选类型" hidden>
-              <button class="is-active" data-weekly-kind="papers" role="tab" aria-selected="true">论文精选 <b id="weeklyPaperCount">0</b></button>
-              <button data-weekly-kind="projects" role="tab" aria-selected="false">项目精选 <b id="weeklyProjectCount">0</b></button>
+              <button class="is-active" id="weeklyPapersTab" type="button" data-weekly-kind="papers" role="tab" aria-selected="true" aria-controls="paperList">论文精选 <b id="weeklyPaperCount">0</b></button>
+              <button id="weeklyProjectsTab" type="button" data-weekly-kind="projects" role="tab" aria-selected="false" aria-controls="paperList" tabindex="-1">项目精选 <b id="weeklyProjectCount">0</b></button>
             </div>
             <div class="weekly-preparation" id="weeklyPreparation" aria-live="polite" hidden>
               <span class="weekly-preparation-signal"></span>
@@ -149,10 +155,10 @@
               <small id="weeklyPreparationDetail"></small>
             </div>
             <div class="status-tabs" id="readingStatusTabs" role="group" aria-label="阅读状态">
-              <button class="is-active" data-status="">全部</button>
-              <button data-status="unread">未读</button>
-              <button data-status="reading">在读</button>
-              <button data-status="read">已读</button>
+              <button class="is-active" type="button" data-status="" aria-pressed="true">全部</button>
+              <button type="button" data-status="unread" aria-pressed="false">未读</button>
+              <button type="button" data-status="reading" aria-pressed="false">在读</button>
+              <button type="button" data-status="read" aria-pressed="false">已读</button>
             </div>
           </div>
           <div class="paper-list" id="paperList" aria-live="polite"></div>
@@ -186,7 +192,7 @@
           <h2 id="readerTitle">论文阅读工作台</h2>
           <p id="readerMeta"></p>
         </div>
-        <div class="reader-header-actions">
+        <div class="reader-header-actions" role="group" aria-label="论文阅读操作">
           <span class="reading-backup-status" id="readerBackupStatus">本地历史</span>
           <a id="readerSourceLink" href="#" target="_blank" rel="noreferrer">来源页</a>
           <label class="reader-storage-target">本次保存至
@@ -213,7 +219,7 @@
             <button id="pdfTextButton" type="button" title="打开可选择的论文正文">可选文本</button>
             <a id="pdfOpenButton" href="#" target="_blank" rel="noreferrer">新窗口打开</a>
           </div>
-          <div class="pdf-status" id="pdfStatus">
+          <div class="pdf-status" id="pdfStatus" role="status" aria-live="polite">
             <strong>正在寻找公开 PDF</strong>
             <span>依次检查公开来源与作者存档</span>
           </div>
@@ -230,26 +236,26 @@
 
         <aside class="reader-assistant" aria-label="论文精读助手">
           <div class="reader-tabs" role="tablist" aria-label="阅读工具">
-            <button class="is-active" id="readerExplainTab" role="tab" aria-selected="true" data-reader-tab="explain">精读</button>
-            <button id="readerChatTab" role="tab" aria-selected="false" data-reader-tab="chat">问答</button>
-            <button id="readerTranslateTab" role="tab" aria-selected="false" data-reader-tab="translate">翻译</button>
+            <button class="is-active" id="readerExplainTab" type="button" role="tab" aria-selected="true" aria-controls="readerExplainPanel" data-reader-tab="explain">精读</button>
+            <button id="readerChatTab" type="button" role="tab" aria-selected="false" aria-controls="readerChatPanel" data-reader-tab="chat" tabindex="-1">问答</button>
+            <button id="readerTranslateTab" type="button" role="tab" aria-selected="false" aria-controls="readerTranslatePanel" data-reader-tab="translate" tabindex="-1">翻译</button>
           </div>
 
-          <section class="reader-panel is-active" id="readerExplainPanel" role="tabpanel">
+          <section class="reader-panel is-active" id="readerExplainPanel" role="tabpanel" aria-labelledby="readerExplainTab">
             <div id="readerScore"></div>
             <div id="readerExplanation"></div>
           </section>
 
-          <section class="reader-panel" id="readerChatPanel" role="tabpanel" hidden>
+          <section class="reader-panel" id="readerChatPanel" role="tabpanel" aria-labelledby="readerChatTab" hidden>
             <div class="chat-history" id="chatHistory"></div>
             <form class="chat-form" id="chatForm">
               <label for="chatQuestion">向论文提问</label>
-              <textarea id="chatQuestion" rows="3" placeholder="例如：方法中的训练目标如何推导？"></textarea>
+              <textarea id="chatQuestion" rows="3" placeholder="例如：方法中的训练目标如何推导？" required></textarea>
               <button class="button button-primary" type="submit">发送问题</button>
             </form>
           </section>
 
-          <section class="reader-panel" id="readerTranslatePanel" role="tabpanel" hidden>
+          <section class="reader-panel" id="readerTranslatePanel" role="tabpanel" aria-labelledby="readerTranslateTab" hidden>
             <div class="translation-toolbar">
               <label for="translationPage">页码</label>
               <input id="translationPage" type="number" min="1" value="1">
@@ -279,7 +285,7 @@
     </header>
     <form class="connector-search" id="connectorForm">
       <label for="connectorQuery">DOI、arXiv 或标题</label>
-      <div><input id="connectorQuery" type="search" autocomplete="off" placeholder="10.1145/... 或论文标题"><button class="button button-primary" type="submit">查找</button></div>
+      <div><input id="connectorQuery" type="search" autocomplete="off" placeholder="10.1145/... 或论文标题" required><button class="button button-primary" type="submit">查找</button></div>
     </form>
     <div class="connector-results" id="connectorResults" aria-live="polite"></div>
   </dialog>
@@ -289,7 +295,7 @@
       <header class="reader-header">
         <button class="reader-close" id="projectReaderClose" type="button" aria-label="关闭项目工作台" title="关闭">×</button>
         <div class="reader-heading"><h2 id="projectReaderTitle">项目代码工作台</h2><p id="projectReaderMeta"></p></div>
-        <div class="reader-header-actions">
+        <div class="reader-header-actions" role="group" aria-label="项目阅读操作">
           <span class="reading-backup-status" id="projectBackupStatus">本地历史</span>
           <a id="projectGithubLink" href="#" target="_blank" rel="noreferrer">GitHub</a>
           <button class="button button-secondary" id="projectRefreshSource" type="button">更新源码</button>
@@ -301,8 +307,8 @@
             <div class="project-file-heading">
               <strong>仓库导航</strong>
               <div class="project-file-modes" role="group" aria-label="文件视图">
-                <button class="is-active" type="button" data-project-file-mode="guide">导读</button>
-                <button type="button" data-project-file-mode="all">全部</button>
+                <button class="is-active" type="button" data-project-file-mode="guide" aria-pressed="true">导读</button>
+                <button type="button" data-project-file-mode="all" aria-pressed="false">全部</button>
               </div>
             </div>
             <label class="sr-only" for="projectFileSearch">筛选仓库文件</label>
@@ -314,7 +320,7 @@
               <span id="projectCurrentPath">选择一个文件</span>
               <div class="project-code-actions">
                 <span id="projectCodeMeta"></span>
-                <button type="button" id="projectCodeWrap">换行</button>
+                <button type="button" id="projectCodeWrap" aria-pressed="false">换行</button>
                 <button type="button" id="projectCodeCopy">复制</button>
               </div>
             </div>
@@ -323,19 +329,19 @@
         </section>
         <aside class="project-insight-pane" aria-label="项目阅读助手">
           <div class="reader-tabs" role="tablist" aria-label="项目阅读工具">
-            <button class="is-active" role="tab" aria-selected="true" data-project-tab="readme">文档</button>
-            <button role="tab" aria-selected="false" data-project-tab="explain">代码讲解</button>
-            <button role="tab" aria-selected="false" data-project-tab="chat">问答</button>
+            <button class="is-active" id="projectReadmeTab" type="button" role="tab" aria-selected="true" aria-controls="projectReadmePanel" data-project-tab="readme">文档</button>
+            <button id="projectExplainTab" type="button" role="tab" aria-selected="false" aria-controls="projectExplainPanel" data-project-tab="explain" tabindex="-1">代码讲解</button>
+            <button id="projectChatTab" type="button" role="tab" aria-selected="false" aria-controls="projectChatPanel" data-project-tab="chat" tabindex="-1">问答</button>
           </div>
-          <section class="project-reader-panel project-document-panel is-active" id="projectReadmePanel" role="tabpanel">
+          <section class="project-reader-panel project-document-panel is-active" id="projectReadmePanel" role="tabpanel" aria-labelledby="projectReadmeTab">
             <div class="project-document-toolbar">
               <span id="projectDocumentPath">README</span>
               <div class="project-document-actions">
                 <div class="project-document-languages" id="projectDocumentLanguages" role="group" aria-label="文档语言" hidden>
                   <span>语言</span>
-                  <button type="button" data-project-doc-lang="zh">中</button>
-                  <button class="is-active" type="button" data-project-doc-lang="en">英</button>
-                  <button type="button" data-project-doc-lang="ja">日</button>
+                  <button type="button" data-project-doc-lang="zh" aria-pressed="false">中</button>
+                  <button class="is-active" type="button" data-project-doc-lang="en" aria-pressed="true">英</button>
+                  <button type="button" data-project-doc-lang="ja" aria-pressed="false">日</button>
                 </div>
                 <span class="project-document-translation-status" id="projectDocumentTranslationStatus" hidden></span>
                 <button class="text-button" id="projectRootReadme" type="button" hidden>项目 README</button>
@@ -343,13 +349,13 @@
             </div>
             <article class="project-readme" id="projectReadmeContent"></article>
           </section>
-          <section class="project-reader-panel" id="projectExplainPanel" role="tabpanel" hidden><div id="projectExplanation"></div></section>
-          <section class="project-reader-panel" id="projectChatPanel" role="tabpanel" hidden>
+          <section class="project-reader-panel" id="projectExplainPanel" role="tabpanel" aria-labelledby="projectExplainTab" hidden><div id="projectExplanation"></div></section>
+          <section class="project-reader-panel" id="projectChatPanel" role="tabpanel" aria-labelledby="projectChatTab" hidden>
             <div class="chat-history" id="projectChatHistory"></div>
             <form class="chat-form" id="projectChatForm">
               <label for="projectChatQuestion">向代码提问</label>
-              <textarea id="projectChatQuestion" rows="3" placeholder="例如：这个项目的推理入口和数据流在哪里？"></textarea>
-              <button class="button button-primary" id="projectChatSubmit" type="button">发送问题</button>
+              <textarea id="projectChatQuestion" rows="3" placeholder="例如：这个项目的推理入口和数据流在哪里？" required></textarea>
+              <button class="button button-primary" id="projectChatSubmit" type="submit">发送问题</button>
             </form>
           </section>
         </aside>
@@ -392,6 +398,6 @@
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
   <script src="/vendor/pdfjs/pdf.min.js?v=3.11.174"></script>
   <script src="/vendor/katex/katex.min.js?v=0.16.11" defer></script>
-  <script src="/app.js?v=1.0.1-select-translate" defer></script>
+  <script src="/app.js?v=1.0.1-responsive-workbench" defer></script>
 </body>
 </html>
