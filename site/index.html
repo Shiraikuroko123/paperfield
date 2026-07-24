@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Paperfield：面向具身智能、大模型与多模态研究的本地优先研究工作台。">
+  <meta name="theme-color" content="#15202b">
+  <title>Paperfield · 本地优先研究工作台</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="Paperfield 首页"><span aria-hidden="true">P</span><strong>Paperfield</strong></a>
+    <nav aria-label="主要导航">
+      <a href="#research-loop">研究闭环</a>
+      <a href="#sources">公开来源</a>
+      <a href="https://github.com/Shiraikuroko123/paperfield">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p>公开来源 · 本地优先 · v1.0.0</p>
+        <h1 id="hero-title">Paperfield</h1>
+        <p class="hero-lede">把论文发现、合法公开 PDF、全文精读、翻译、问答与开源项目导读汇进一份持续生长的数字研究手稿。</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="https://github.com/Shiraikuroko123/paperfield#本地使用">本地部署</a>
+          <a class="button button-secondary" href="https://github.com/Shiraikuroko123/paperfield">查看源码</a>
+        </div>
+      </div>
+
+      <figure class="workspace-preview">
+        <img src="assets/paperfield-workspace.webp" alt="Paperfield 研究工作台，包含主题导航、论文筛选、每周精选和论文详情阅读区" width="1440" height="960">
+        <figcaption>论文流、项目流和阅读历史在同一个浏览器工作台中连接。</figcaption>
+      </figure>
+    </section>
+
+    <section class="focus-strip" aria-label="研究范围">
+      <span>具身智能</span>
+      <span>大语言模型</span>
+      <span>多模态</span>
+      <span>机器人</span>
+      <span>开源项目</span>
+    </section>
+
+    <section class="research-loop" id="research-loop" aria-labelledby="loop-title">
+      <div class="section-heading">
+        <h2 id="loop-title">一周的研究，不该散在十几个标签页里。</h2>
+        <p>Paperfield 把发现、筛选、阅读、追问与回访连成一条可恢复的工作流。</p>
+      </div>
+      <ol>
+        <li><span>发现</span><strong>聚合公开元数据</strong><p>从论文源、开放获取页面与 GitHub 发现候选工作。</p></li>
+        <li><span>筛选</span><strong>按方向调整权重</strong><p>学术质量、相关性、时效、证据和复现性共同决定排序。</p></li>
+        <li><span>精读</span><strong>PDF 与讲解并排</strong><p>公式、翻译、引证页码和阅读笔记不离开当前上下文。</p></li>
+        <li><span>积累</span><strong>历史持续可用</strong><p>收藏、状态、问答和项目源码导读在本地长期保存。</p></li>
+      </ol>
+    </section>
+
+    <section class="reading-band" aria-labelledby="reading-title">
+      <div class="reading-copy">
+        <h2 id="reading-title">从“这篇值得看”继续走到“我真正读懂了什么”。</h2>
+        <p>阅读器把原 PDF、结构化精读、公式、翻译和基于原文的对话放在一起。项目工作台则从 README 继续深入关键入口、依赖和源码阅读路径。</p>
+      </div>
+      <div class="manuscript" aria-label="研究手稿摘要示例">
+        <div class="manuscript-head"><span>READING NOTE</span><b>2026 / WEEK 29</b></div>
+        <h3>Embodied agents need evidence across layers</h3>
+        <p>问题设定、数据来源、训练目标、评测协议与失败案例必须放在同一条证据链中阅读。</p>
+        <dl>
+          <div><dt>原文</dt><dd>公开 PDF</dd></div>
+          <div><dt>公式</dt><dd>KaTeX</dd></div>
+          <div><dt>讨论</dt><dd>基于原文</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="sources" id="sources" aria-labelledby="sources-title">
+      <div class="sources-heading">
+        <h2 id="sources-title">来源写清楚，推荐才有意义。</h2>
+        <p>每周精选优先保留能够找到合法公开 PDF 的论文，并明确元数据、全文和项目代码各自来自哪里。</p>
+      </div>
+      <div class="source-list" aria-label="公开来源列表">
+        <span>arXiv</span><span>OpenAlex</span><span>Crossref</span><span>PMLR</span><span>CVF Open Access</span><span>DBLP</span><span>GitHub</span>
+      </div>
+    </section>
+
+    <section class="deployment" aria-labelledby="deployment-title">
+      <div>
+        <h2 id="deployment-title">自己的研究库，自己决定放在哪里。</h2>
+        <p>默认保存在本机，也可以连接 Cloudflare R2 或其他 S3 兼容对象存储。朋友内测共享由登录保护，普通用户的密钥和模型列表彼此隔离。</p>
+      </div>
+      <div class="deployment-options">
+        <article><span>01</span><h3>本机</h3><p>数据库、PDF、讲解与历史保存在本地目录。</p></article>
+        <article><span>02</span><h3>对象存储</h3><p>同步公开 PDF、精读和问答历史到受控空间。</p></article>
+        <article><span>03</span><h3>受保护共享</h3><p>通过内测账号与 HTTPS 隧道向朋友开放。</p></article>
+      </div>
+    </section>
+
+    <section class="closing" aria-labelledby="closing-title">
+      <h2 id="closing-title">让每次阅读，都能成为下一次研究的上下文。</h2>
+      <a class="button button-light" href="https://github.com/Shiraikuroko123/paperfield#首次启动">查看启动方式</a>
+    </section>
+  </main>
+
+  <footer>
+    <span>Paperfield · 本地优先研究工作台</span>
+    <span>中文 · English · 日本語</span>
+  </footer>
+</body>
+</html>
