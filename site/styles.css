@@ -21,7 +21,7 @@
 html { min-width: 320px; scroll-behavior: smooth; background: var(--bg); }
 body { margin: 0; min-width: 320px; overflow-x: hidden; background: var(--bg); color: var(--ink); font-family: var(--font-ui); line-height: 1.62; }
 a { color: inherit; }
-img { max-width: 100%; }
+img { max-width: 100%; height: auto; }
 button { font: inherit; }
 h1, h2, h3, p { margin-top: 0; }
 h1, h2, h3 { line-height: 1.08; text-wrap: balance; }
