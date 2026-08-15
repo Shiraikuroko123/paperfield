@@ -26,29 +26,29 @@ def password_value(use_stdin: bool) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Manage Paperfield beta accounts")
+    parser = argparse.ArgumentParser(description="Manage Paperfield accounts")
     parser.add_argument("--path", type=Path, default=DEFAULT_USERS_PATH)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    list_parser = subparsers.add_parser("list", help="list beta accounts")
+    list_parser = subparsers.add_parser("list", help="list managed accounts")
     list_parser.set_defaults(action="list")
 
-    add_parser = subparsers.add_parser("add", help="add a beta or standard account")
+    add_parser = subparsers.add_parser("add", help="add a beta, editor, or standard account")
     add_parser.add_argument("username")
     add_parser.add_argument("--display-name", default="")
-    add_parser.add_argument("--role", choices=("beta", "standard"), default="standard")
+    add_parser.add_argument("--role", choices=("beta", "editor", "standard"), default="standard")
     add_parser.add_argument("--password-stdin", action="store_true")
     add_parser.set_defaults(action="add")
 
     reset_parser = subparsers.add_parser("reset", help="reset an account password")
     reset_parser.add_argument("username")
     reset_parser.add_argument("--display-name", default="")
-    reset_parser.add_argument("--role", choices=("beta", "standard"))
+    reset_parser.add_argument("--role", choices=("beta", "editor", "standard"))
     reset_parser.add_argument("--password-stdin", action="store_true")
     reset_parser.set_defaults(action="reset")
 
     for command in ("enable", "disable"):
-        user_parser = subparsers.add_parser(command, help=f"{command} a beta account")
+        user_parser = subparsers.add_parser(command, help=f"{command} a managed account")
         user_parser.add_argument("username")
         user_parser.set_defaults(action=command)
 
@@ -58,7 +58,7 @@ def main() -> None:
     if args.action == "list":
         users = service.users()
         if not users:
-            print("No beta accounts configured.")
+            print("No accounts configured.")
             return
         for user in users:
             status = "enabled" if user["enabled"] else "disabled"
@@ -73,11 +73,11 @@ def main() -> None:
         if args.action == "reset" and args.username.lower() not in existing:
             raise ValueError("Account does not exist; use add first")
         user = service.upsert_user(args.username, password, args.display_name, args.role)
-        print(f"Saved beta account: {user['username']}")
+        print(f"Saved account: {user['username']}")
         return
 
     user = service.set_enabled(args.username, args.action == "enable")
-    print(f"{args.action.title()}d beta account: {user['username']}")
+    print(f"{args.action.title()}d account: {user['username']}")
 
 
 if __name__ == "__main__":

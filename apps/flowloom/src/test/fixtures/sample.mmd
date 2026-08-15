@@ -1,0 +1,6 @@
+flowchart LR
+  request([提交申请]) --> review{金额超过 1000？}
+  review -->|是| manager[经理审批]
+  review -->|否| pay[执行付款]
+  manager --> pay
+  pay --> done([完成])

@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "assembled_at": "2026-08-12",
+  "product": "Paperfield unified research workspace",
+  "sources": [
+    {
+      "name": "paperfield",
+      "repository": "https://github.com/Shiraikuroko123/paperfield",
+      "commit": "154e07ba24c01f1fc333b82ec23d09a0b4bea39f",
+      "destination": ".",
+      "license_file": null,
+      "note": "Canonical destination repository. The recorded commit is the pre-integration Paperfield baseline."
+    },
+    {
+      "name": "flowloom",
+      "repository": "https://github.com/Shiraikuroko123/flowloom",
+      "commit": "a563c5e35f33d91bd0631a1e1739c3bf96bf3891",
+      "destination": "apps/flowloom",
+      "license_file": null
+    },
+    {
+      "name": "ai-systems-courses",
+      "repository": "https://github.com/Shiraikuroko123/ai-systems-courses",
+      "commit": "670ef7215798bb8c634fb26f9b76eda10851333d",
+      "destination": "content/courses",
+      "license_file": null
+    },
+    {
+      "name": "Paper-Notes",
+      "repository": "https://github.com/zhaoyang97/Paper-Notes",
+      "commit": "3d15a51576cb764ffe818686282896477bef9de9",
+      "destination": null,
+      "license_file": "LICENSE",
+      "license": "CC BY-NC-SA 4.0",
+      "note": "Taxonomy reference only; no note prose imported."
+    },
+    {
+      "name": "MathJax",
+      "repository": "https://github.com/mathjax/MathJax",
+      "version": "3.2.2",
+      "destination": "content/courses/课程/assets/vendor/mathjax-3.2.2",
+      "license_file": "content/courses/课程/assets/vendor/mathjax-3.2.2/LICENSE",
+      "license": "Apache-2.0",
+      "npm_tarball_sha256": "1b9c0a1c44df864e915690558e72adb9cc5203360daefd385084ced3b6c64c09",
+      "note": "Pinned local formula renderer and CHTML fonts for offline course use."
+    },
+    {
+      "name": "Mermaid",
+      "repository": "https://github.com/mermaid-js/mermaid",
+      "version": "11.16.1",
+      "destination": "content/courses/课程/assets/vendor/mermaid-11.16.1",
+      "license_file": "content/courses/课程/assets/vendor/mermaid-11.16.1/LICENSE",
+      "license": "MIT",
+      "npm_tarball_sha256": "ebd9885111092c78cefc79a76f6c1dc34ed5b834b02ae8f338227ce79c003de4",
+      "note": "Pinned local diagram renderer for offline course use."
+    }
+  ]
+}

@@ -1,0 +1,292 @@
+:root {
+  --course-bg: oklch(1 0 0);
+  --course-surface: oklch(0.965 0.006 330);
+  --course-ink: oklch(0.2 0.018 330);
+  --course-muted: oklch(0.43 0.018 330);
+  --course-border: oklch(0.88 0.012 330);
+  --course-primary: oklch(0.46 0.15 330);
+  --course-primary-hover: oklch(0.4 0.15 330);
+  --course-accent: oklch(0.48 0.105 185);
+  --md-primary-fg-color: oklch(0.16 0.015 330);
+  --md-primary-fg-color--light: oklch(0.24 0.02 330);
+  --md-primary-fg-color--dark: oklch(0.09 0 0);
+  --md-accent-fg-color: var(--course-primary);
+  --md-typeset-a-color: var(--course-primary);
+  --md-default-bg-color: var(--course-bg);
+  --md-default-fg-color: var(--course-ink);
+  --md-default-fg-color--light: var(--course-muted);
+  --md-code-font-family: "JetBrains Mono", "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+}
+
+[data-md-color-scheme="slate"] {
+  --course-bg: oklch(0.13 0.008 330);
+  --course-surface: oklch(0.18 0.012 330);
+  --course-ink: oklch(0.93 0.008 330);
+  --course-muted: oklch(0.72 0.012 330);
+  --course-border: oklch(0.3 0.02 330);
+  --course-primary: oklch(0.72 0.15 330);
+  --course-primary-hover: oklch(0.78 0.13 330);
+  --course-accent: oklch(0.72 0.12 185);
+  --md-primary-fg-color: oklch(0.08 0 0);
+  --md-primary-fg-color--light: oklch(0.16 0.01 330);
+  --md-primary-fg-color--dark: oklch(0.04 0 0);
+  --md-accent-fg-color: var(--course-primary);
+  --md-typeset-a-color: var(--course-primary);
+  --md-default-bg-color: var(--course-bg);
+  --md-default-fg-color: var(--course-ink);
+  --md-default-fg-color--light: var(--course-muted);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body,
+input {
+  font-family: "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  letter-spacing: 0;
+}
+
+.md-header {
+  border-bottom: 1px solid oklch(1 0 0 / 0.12);
+  box-shadow: none;
+}
+
+.md-header__title {
+  font-weight: 700;
+}
+
+.md-header__source {
+  width: 2rem;
+  max-width: 2rem;
+}
+
+.md-tabs {
+  background-color: var(--md-primary-fg-color);
+}
+
+.md-main__inner {
+  margin-top: 1.25rem;
+}
+
+.md-content__inner {
+  max-width: 78ch;
+}
+
+.md-typeset {
+  color: var(--course-ink);
+  font-size: 0.82rem;
+  line-height: 1.85;
+  text-wrap: pretty;
+}
+
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3 {
+  color: var(--course-ink);
+  font-weight: 720;
+  letter-spacing: 0;
+  text-wrap: balance;
+}
+
+.md-typeset h1 {
+  margin-bottom: 1rem;
+  font-size: clamp(1.8rem, 5vw, 2.65rem);
+  line-height: 1.2;
+}
+
+.md-typeset h2 {
+  margin-top: 2.4em;
+  padding-bottom: 0.35em;
+  border-bottom: 1px solid var(--course-border);
+  font-size: 1.45rem;
+}
+
+.md-typeset h3 {
+  font-size: 1.12rem;
+}
+
+.md-typeset a {
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.16em;
+}
+
+.md-typeset a:hover {
+  color: var(--course-primary-hover);
+}
+
+.md-typeset blockquote {
+  margin-inline: 0;
+  padding: 0.9rem 1rem;
+  color: var(--course-ink);
+  background: var(--course-surface);
+  border: 1px solid var(--course-border);
+  border-radius: 6px;
+}
+
+.md-typeset blockquote p:first-child {
+  margin-top: 0;
+}
+
+.md-typeset blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+.md-typeset table:not([class]) {
+  display: table;
+  width: 100%;
+  border: 1px solid var(--course-border);
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+.md-typeset table:not([class]) th {
+  color: var(--course-ink);
+  background: var(--course-surface);
+  font-weight: 700;
+}
+
+.md-typeset table:not([class]) td,
+.md-typeset table:not([class]) th {
+  padding: 0.75rem 0.85rem;
+  border-color: var(--course-border);
+}
+
+.md-typeset code {
+  border-radius: 4px;
+}
+
+.md-typeset pre > code {
+  line-height: 1.65;
+}
+
+.md-typeset div.arithmatex {
+  max-width: 100%;
+  margin: 1.2em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+}
+
+.md-typeset div.arithmatex > mjx-container[display="true"] {
+  min-width: max-content;
+  margin: 0.5em 0;
+  padding: 0.25em 0;
+}
+
+.highlight,
+.md-typeset pre {
+  border-radius: 6px;
+}
+
+.md-typeset .task-list-indicator::before {
+  border-color: var(--course-border);
+}
+
+.md-typeset .task-list-control [type="checkbox"]:checked + .task-list-indicator::before {
+  background-color: var(--course-accent);
+}
+
+.md-typeset .md-button {
+  min-height: 2.5rem;
+  padding: 0.62rem 1rem;
+  border-radius: 6px;
+  font-weight: 700;
+}
+
+.md-typeset .md-button--primary {
+  color: oklch(1 0 0);
+  background-color: var(--course-primary);
+  border-color: var(--course-primary);
+}
+
+.md-typeset .md-button--primary:hover,
+.md-typeset .md-button--primary:focus-visible {
+  color: oklch(1 0 0);
+  background-color: var(--course-primary-hover);
+  border-color: var(--course-primary-hover);
+}
+
+.course-map-visual {
+  display: block;
+  width: 100%;
+  margin: 1.8rem 0 1.35rem;
+  border-radius: 8px;
+}
+
+.course-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin: 1.1rem 0 2rem;
+}
+
+.md-nav__link--active,
+.md-nav__link:focus,
+.md-nav__link:hover {
+  color: var(--course-primary);
+}
+
+.md-search__form {
+  border-radius: 6px;
+}
+
+.md-copyright,
+.md-copyright a {
+  color: oklch(0.78 0 0);
+}
+
+:focus-visible {
+  outline: 3px solid var(--course-accent);
+  outline-offset: 3px;
+}
+
+@media screen and (max-width: 44.9844em) {
+  .md-main__inner {
+    margin-top: 0.5rem;
+  }
+
+  .md-content__inner {
+    padding-inline: 0.9rem;
+  }
+
+  .md-typeset {
+    font-size: 0.79rem;
+    line-height: 1.78;
+  }
+
+  .md-typeset h1 {
+    font-size: 1.8rem;
+  }
+
+  .md-typeset h2 {
+    font-size: 1.28rem;
+  }
+
+  .md-typeset table:not([class]) {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  .course-actions .md-button {
+    width: 100%;
+    text-align: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

@@ -9,6 +9,16 @@
 
 Paperfield は、具身知能、大規模言語モデル、マルチモーダル研究、オープンソースプロジェクト追跡のためのローカル優先研究ワークスペースです。論文と GitHub プロジェクトを集約し、週次選定に必要な合法的な公開 PDF を事前に探し、精読、翻訳、質問応答、ソースコード解説、閲覧履歴を一つの継続的な画面にまとめます。
 
+現在のリポジトリには `flowloom` と `ai-systems-courses` の有効なソース全体が統合され、一つの製品、一つのリポジトリ、一つのブラウザ入口として動作します。
+
+| ワークスペース | 統合ルート | リポジトリ内の場所 |
+| --- | --- | --- |
+| 論文探索と精読 | `/` | `src/paperfield/` |
+| フロンティアレーダー、知識ツリー、統合コース、深度分析 | `/atlas/` | `src/research_atlas/` + `content/courses/` |
+| 科学図版・SVG 編集 | `/flowloom/` | `apps/flowloom/` |
+
+具身 AI の知識ツリーと教材本文は [http://127.0.0.1:8765/atlas/?view=curriculum&track=embodied](http://127.0.0.1:8765/atlas/?view=curriculum&track=embodied) から直接開けます。従来の `/courses/...` リンクは対応する Atlas 教材へリダイレクトされます。
+
 これは日本語のプロジェクト説明です。中国語の正式説明はルートの `README.md`、英語版は同じ `docs/i18n/` フォルダにあります。過去のロードマップ、重複した説明、バックアップ文書は維持しません。
 
 ## 主な機能
@@ -79,15 +89,19 @@ paper-scout/
 ```powershell
 cd G:\ps\paper-scout
 python -m pip install -r deploy\requirements.txt
-python src\paperfield\app.py
+.\scripts\build-platform.cmd
+.\scripts\run-platform.cmd
 ```
 
-[http://127.0.0.1:8765](http://127.0.0.1:8765) を開いてください。初回起動ではローカルデータベースとキャッシュを初期化します。その後は UI から手動で更新するか、設定した周期でバックグラウンド更新を利用できます。
+[http://127.0.0.1:8765](http://127.0.0.1:8765) だけを開いてください。初回起動ではローカルデータベースとキャッシュを初期化します。統合ランチャーは Atlas を内部起動し、ビルド済みのコースと Flowloom を同じ Paperfield オリジンにマウントします。全サービスの停止には `.\scripts\stop-platform.cmd` を使います。
 
 よく使うコマンド：
 
 ```powershell
-.\scripts\run.cmd
+.\scripts\run-platform.cmd
+.\scripts\stop-platform.cmd
+.\scripts\run-atlas-worker.cmd
+.\scripts\run-atlas-scanner.cmd
 .\scripts\refresh.cmd
 .\scripts\check.cmd
 ```
@@ -140,15 +154,17 @@ docker compose --env-file deploy\.env -f deploy\compose.yaml down
 
 ```powershell
 python -m py_compile src\paperfield\app.py
+python -m py_compile src\research_atlas\app.py src\research_atlas\worker.py src\research_atlas\schema_validation.py
 node --check src\paperfield\static\app.js
+node --check src\research_atlas\static\app.js
 node --check src\paperfield\static\login.js
-python -m unittest discover -s tests -p test_core.py
+python -m unittest discover -s tests -v
 python scripts\build-release.py
 docker build -f deploy\docker\Dockerfile -t paperfield:test .
 docker compose -f deploy\compose.yaml config --quiet
 ```
 
-`scripts/build-release.py` は Git で追跡されている公開ファイルだけをパッケージし、空の `local/.env.example` を追加します。データベース、ログ、秘密情報、`local/`、`data/` をリリースパッケージへ入れることは拒否します。
+`scripts/build-release.py` は Git で追跡されている公開ファイルに加え、明示的に許可された統合ワークスペースのソースと必要な Flowloom・コースの本番ビルドをパッケージします。空の `local/.env.example` も追加し、データベース、ログ、秘密情報、依存関係ツリー、`local/`、`data/` は含めません。上流リポジトリは、クリーン clone のビルド、ライセンス確認、commit、push が完了するまでアーカイブしません。由来と取り込み境界は `provenance.json` と `docs/MONOREPO_INTEGRATION.md` に記録されています。
 
 ## 正式リリース方針
 

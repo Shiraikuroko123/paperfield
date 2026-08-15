@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paperfield.local/contracts/source-locator.schema.json",
+  "title": "Source locator",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind"],
+  "properties": {
+    "kind": {
+      "enum": ["paper", "course", "code", "web", "dataset", "figure"]
+    },
+    "canonical_paper_ref": {"type": "string"},
+    "paperfield_id": {"type": "string"},
+    "course_chapter_id": {"type": "string"},
+    "repository": {"type": "string", "format": "uri"},
+    "commit": {"type": "string"},
+    "path": {"type": "string"},
+    "url": {"type": "string", "format": "uri-reference"},
+    "page": {"type": "integer", "minimum": 1},
+    "section": {"type": "string"},
+    "figure": {"type": "string"},
+    "table": {"type": "string"},
+    "equation": {"type": "string"},
+    "quote": {"type": "string"},
+    "content_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

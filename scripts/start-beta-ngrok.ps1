@@ -54,15 +54,39 @@ if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyCon
     throw "Port $port is already in use. Stop the existing beta service first."
 }
 
+# The beta Paperfield instance shares the unified Atlas catalog.  Always pass
+# through the version-aware platform launcher so an old healthy process cannot
+# silently serve a stale Atlas build.
+& (Join-Path $PSScriptRoot "run-platform.ps1")
+if ($LASTEXITCODE -ne 0) { throw "Unified Paperfield platform could not start Atlas." }
+$atlasHealthy = $false
+for ($attempt = 0; $attempt -lt 30; $attempt++) {
+    Start-Sleep -Milliseconds 500
+    try {
+        if ((Invoke-RestMethod -Uri "http://127.0.0.1:8795/api/health" -TimeoutSec 2).status -eq "ok") {
+            $atlasHealthy = $true
+            break
+        }
+    } catch {}
+}
+if (-not $atlasHealthy) { throw "Atlas did not become ready on port 8795." }
+
 $env:PAPERFIELD_DATA_DIR = $profile
 $env:PAPERFIELD_AUTH_USERS_PATH = $users
 $env:PAPERFIELD_AUTH_REQUIRED = "1"
 $env:PAPERFIELD_HOST = "127.0.0.1"
 $env:PAPERFIELD_PORT = "$port"
+$env:PAPERFIELD_ATLAS_INTERNAL_URL = "http://127.0.0.1:8795"
 $env:PAPERFIELD_DISABLE_CLOUD = "0"
 $env:PAPERFIELD_CLOUD_PREFIX = "community-beta"
 $env:PAPERFIELD_SHARED_STORAGE_MAX_MB = "2048"
 $env:PAPERFIELD_PDF_STORAGE_MODE = "cloud"
+# A shared beta instance must be reachable before optional maintenance starts.
+# Disable the local refresh/weekly preparation workers here; the unified Atlas
+# scanner and Paperfield scheduler can be run separately after the service is
+# online, and a large copied profile must never block the login endpoint.
+$env:PAPERFIELD_AUTO_REFRESH = "0"
+$env:PAPERFIELD_WEEKLY_PREPARATION_ENABLED = "0"
 
 $stdout = Join-Path $profile "paperfield-share.log"
 $stderr = Join-Path $profile "paperfield-share-error.log"
@@ -77,14 +101,21 @@ $tunnel = $null
 
 try {
     $ready = $false
-    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+    # The beta profile can be a large copied Paperfield database.  Allow the
+    # same startup budget as the unified launcher before declaring the service
+    # unavailable; otherwise a healthy process is killed during warm-up.
+    for ($attempt = 0; $attempt -lt 360; $attempt++) {
         Start-Sleep -Milliseconds 500
         try {
             $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/health" -TimeoutSec 2
             if ($health.status -eq "ok") { $ready = $true; break }
         } catch {}
     }
-    if (-not $ready) { throw "Paperfield beta service did not start. Check $stderr" }
+    if (-not $ready) {
+        $details = (Get-Content $stderr -Tail 12 -ErrorAction SilentlyContinue) -join " "
+        if (-not $details) { $details = (Get-Content $stdout -Tail 12 -ErrorAction SilentlyContinue) -join " " }
+        throw "Paperfield beta service did not start within 180 seconds. Check $stderr. $details"
+    }
 
     Remove-Item -LiteralPath $ngrokLog -ErrorAction SilentlyContinue
     # Windows environment names are case-insensitive, so the canonical names cover both forms.

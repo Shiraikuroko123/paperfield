@@ -4,6 +4,10 @@
 .venv
 venv
 data
+local
+dist
+tmp
+output
 __pycache__
 *.pyc
 *.log
@@ -11,3 +15,6 @@ qa-*.png
 .edge-qa-*
 docs
 tests
+apps/flowloom/node_modules
+apps/flowloom/dist
+content/courses/site

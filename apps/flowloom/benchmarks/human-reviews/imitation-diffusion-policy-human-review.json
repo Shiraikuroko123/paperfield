@@ -1,0 +1,34 @@
+{
+  "format": "flowloom-human-figure-review",
+  "version": 1,
+  "caseId": "imitation-diffusion-policy",
+  "rubricVersion": "top-conference-figure-v1",
+  "reviewedAt": "2026-08-10T14:15:30.089Z",
+  "status": "pending",
+  "scores": {
+    "composition": 5,
+    "semantic-fidelity": 5,
+    "visual-hierarchy": 5,
+    "graphic-language": 5,
+    "typography": 5,
+    "routing": 5,
+    "publication-fit": 5
+  },
+  "weightedScore": 5,
+  "gates": {},
+  "findings": [
+    "图元完全不具备科研语义"
+  ],
+  "reference": {
+    "arxivId": "2303.04137",
+    "paperVersion": "v5",
+    "pdfPage": 3,
+    "figureLabel": "Figure 2 (arXiv PDF v5)",
+    "sha256": "37a114a58b5e7e5eb70db5375befcdfc8a7b4637a5565daa5442b6fc8fe4c1d6",
+    "sourceLocator": "arXiv v5 PDF, page 3, Figure 2; the ar5iv DOM labels the same x3 asset as Figure 3"
+  },
+  "compilerAudit": {
+    "purpose": "structural-only",
+    "excludedFromHumanScore": true
+  }
+}

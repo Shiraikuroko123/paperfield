@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paperfield.local/contracts/claim-thread-context.schema.json",
+  "title": "Reviewed research thread context",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "thread_id",
+    "thread_slug",
+    "title",
+    "revision",
+    "content_sha256",
+    "published_at",
+    "claims",
+    "relations",
+    "provenance"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "thread_id": {"type": "string", "minLength": 8},
+    "thread_slug": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "title": {"type": "string", "minLength": 1},
+    "revision": {"type": "integer", "minimum": 1},
+    "content_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "published_at": {"type": "string", "format": "date-time"},
+    "claims": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/claim"}
+    },
+    "relations": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/relation"}
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["producer", "produced_at", "reviewed_revision_only"],
+      "properties": {
+        "producer": {"const": "research-atlas"},
+        "produced_at": {"type": "string", "format": "date-time"},
+        "reviewed_revision_only": {"const": true}
+      }
+    }
+  },
+  "$defs": {
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "position",
+        "role",
+        "claim_id",
+        "title",
+        "statement",
+        "paper",
+        "evidence",
+        "source_sha256"
+      ],
+      "properties": {
+        "position": {"type": "integer", "minimum": 1},
+        "role": {
+          "enum": [
+            "definition",
+            "foundation",
+            "representative",
+            "benchmark",
+            "replication",
+            "counter_evidence",
+            "latest_progress"
+          ]
+        },
+        "claim_id": {"type": "string", "minLength": 8},
+        "title": {"type": "string"},
+        "statement": {"type": "string", "minLength": 1},
+        "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "paper": {
+          "type": "object",
+          "required": ["canonical_ref", "title", "paperfield_path"],
+          "properties": {
+            "id": {"type": "integer"},
+            "canonical_ref": {"type": "string", "minLength": 1},
+            "paperfield_id": {"type": "string"},
+            "title": {"type": "string", "minLength": 1},
+            "published": {"type": "string"},
+            "paperfield_path": {"type": "string", "pattern": "^/"}
+          },
+          "additionalProperties": false
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["source_locator", "paperfield_path"],
+            "properties": {
+              "evidence_id": {"type": "string"},
+              "label": {"type": "string"},
+              "direction": {"enum": ["supports", "contradicts", "qualifies"]},
+              "source_locator": {"$ref": "source-locator.schema.json"},
+              "paperfield_path": {"type": "string", "pattern": "^/"}
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "relation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "position",
+        "relation_id",
+        "left_claim_id",
+        "right_claim_id",
+        "relation_type"
+      ],
+      "properties": {
+        "position": {"type": "integer", "minimum": 1},
+        "relation_id": {"type": "string", "minLength": 8},
+        "left_claim_id": {"type": "string", "minLength": 8},
+        "right_claim_id": {"type": "string", "minLength": 8},
+        "relation_type": {
+          "enum": ["supports", "extends", "narrows", "reproduces", "contradicts", "unclear"]
+        }
+      }
+    }
+  }
+}

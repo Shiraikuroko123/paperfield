@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paperfield.local/contracts/course-chapter.schema.json",
+  "title": "Course chapter",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "course_chapter_id", "track", "title", "order", "provenance"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "course_chapter_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "track": {"enum": ["llm", "embodied", "cross"]},
+    "module_id": {"type": "string"},
+    "title": {"type": "string", "minLength": 1},
+    "order": {"type": "integer", "minimum": 1},
+    "prerequisite_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "paper_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "source_path": {"type": "string"},
+    "content_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "provenance": {"$ref": "#/$defs/provenance"}
+  },
+  "$defs": {
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "commit"],
+      "properties": {
+        "repository": {"type": "string", "format": "uri"},
+        "commit": {"type": "string", "minLength": 7},
+        "license": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

@@ -12,6 +12,12 @@ venv/
 htmlcov/
 *.log
 qa-*.png
+.playwright-cli/
+output/playwright/
+apps/flowloom/node_modules/
+apps/flowloom/dist/
+content/courses/site/
+/tmp/
 .edge-qa-*/
 .idea/
 .vscode/

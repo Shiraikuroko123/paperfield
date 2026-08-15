@@ -17,11 +17,13 @@ const state = {
   readerPdfLoadingTask: null,
   readerPdfObserver: null,
   readerPdfToken: 0,
+  readerPendingLocator: null,
   translationPageText: "",
   translationSelection: null,
   translationLoadRequestId: 0,
   status: "",
   topic: "",
+  topicTaxonomy: [],
   view: "recommended",
   refreshPoll: null,
   total: 0,
@@ -39,10 +41,14 @@ const state = {
   auth: null,
   aiModels: null,
   recommendationWeights: null,
+  recommendationWeightInputs: null,
   appliedRecommendationWeights: null,
+  recommendationWeightsSaving: false,
   streamRequestId: 0,
   streamRequest: null,
   authorRequestId: 0,
+  atlasBridgeCleanup: null,
+  flowloomBridgeCleanup: null,
 };
 
 const SCORE_DIMENSIONS = [
@@ -76,7 +82,12 @@ const NGROK_BYPASS_HEADERS = { "ngrok-skip-browser-warning": "paperfield" };
 const SHARED_REQUEST_NONCE = Math.random().toString(36).slice(2);
 const PDF_LOAD_TIMEOUT_MS = 90000;
 const PDF_PAGE_IMAGE_TIMEOUT_MS = 75000;
+const DEFAULT_FLOWLOOM_URL = "/flowloom/";
+const DEFAULT_ATLAS_URL = "/atlas/";
+const DEFAULT_ATLAS_ANALYSIS_SECTIONS = ["method", "math", "experiments", "code", "lineage"];
+const ATLAS_BRIDGE_TIMEOUT_MS = 15000;
 const CUSTOM_AI_MODEL_VALUE = "__paperfield_custom_model__";
+const PAPER_LOCATOR_QUERY_FIELDS = ["section", "figure", "table", "equation", "quote"];
 const prefersCompatiblePdfPages = () => {
   const userAgent = navigator.userAgent || "";
   const appleTouch = /iPad|iPhone|iPod/.test(userAgent)
@@ -92,6 +103,204 @@ const escapeHtml = (value = "") => String(value)
   .replaceAll(">", "&gt;")
   .replaceAll('"', "&quot;")
   .replaceAll("'", "&#039;");
+
+function paperSourceVersion(paper) {
+  for (const value of [paper?.source_url, paper?.pdf_url]) {
+    const match = String(value || "").match(/v(\d+)(?:\.pdf)?(?:$|[?#])/i);
+    if (match) return `v${match[1]}`;
+  }
+  return "";
+}
+
+function atlasCanonicalPaperRef(paper) {
+  const doi = String(paper?.doi || "")
+    .trim()
+    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "")
+    .replace(/^doi:\s*/i, "")
+    .toLowerCase();
+  if (doi) return `doi:${doi}`;
+
+  for (const value of [paper?.id, paper?.source_url, paper?.pdf_url]) {
+    const arxiv = String(value || "").match(/(?:arxiv\.org\/(?:abs|pdf)\/|^arxiv:)?(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?(?:$|[?#])/i);
+    if (arxiv) return `arxiv:${arxiv[1]}`;
+  }
+  for (const value of [paper?.id, paper?.source_url]) {
+    const raw = String(value || "");
+    const openreview = raw.match(/^openreview:([^?#\s]+)/i)
+      || raw.match(/openreview\.net\/(?:forum|pdf)\?id=([^&#]+)/i);
+    if (openreview) return `openreview:${decodeURIComponent(openreview[1])}`;
+  }
+  return "";
+}
+
+function atlasPaperPayload(paper) {
+  const sourceSha256 = state.readerPaper?.id === paper?.id
+    && /^[a-f0-9]{64}$/i.test(String(state.readerAsset?.sha256 || ""))
+    ? String(state.readerAsset.sha256).toLowerCase()
+    : "";
+  return {
+    canonicalRef: atlasCanonicalPaperRef(paper),
+    paperfieldId: String(paper?.id || ""),
+    title: String(paper?.title || ""),
+    abstract: String(paper?.abstract || ""),
+    authors: Array.isArray(paper?.authors) ? paper.authors : [],
+    venue: String(paper?.venue || paper?.source || ""),
+    published: String(paper?.published || ""),
+    version: paperSourceVersion(paper),
+    sourceUrl: String(paper?.source_url || ""),
+    pdfUrl: String(paper?.pdf_url || ""),
+    doi: String(paper?.doi || ""),
+    topics: [...new Set([...(paper?.topics || []), ...(paper?.subtopics || [])])],
+    sourceSha256,
+    contract: {
+      schema_version: 1,
+      canonical_paper_ref: atlasCanonicalPaperRef(paper) || undefined,
+      paperfield_id: String(paper?.id || ""),
+      title: String(paper?.title || ""),
+      abstract: String(paper?.abstract || ""),
+      authors: Array.isArray(paper?.authors) ? paper.authors.map((author) => String(author)) : [],
+      venue: String(paper?.venue || paper?.source || ""),
+      published: String(paper?.published || ""),
+      version: paperSourceVersion(paper),
+      source_url: String(paper?.source_url || ""),
+      pdf_url: String(paper?.pdf_url || ""),
+      doi: String(paper?.doi || ""),
+      topics: [...new Set([...(paper?.topics || []), ...(paper?.subtopics || [])])].map((topic) => String(topic)),
+      source_sha256: sourceSha256 || undefined,
+      provenance: { producer: "paperfield", produced_at: new Date().toISOString() },
+    },
+  };
+}
+
+function atlasProjectPayload(project) {
+  return {
+    fullName: String(project?.full_name || ""),
+    description: String(project?.description || ""),
+    url: String(project?.url || ""),
+    homepage: String(project?.homepage || ""),
+    language: String(project?.language || ""),
+    license: String(project?.license || ""),
+    topics: [...new Set([...(project?.topics || []), ...(project?.categories || [])])],
+    updatedAt: String(project?.pushed_at || project?.updated_at || ""),
+    contract: {
+      schema_version: 1,
+      full_name: String(project?.full_name || ""),
+      repository_url: String(project?.url || ""),
+      description: String(project?.description || ""),
+      homepage: String(project?.homepage || ""),
+      language: String(project?.language || ""),
+      license: String(project?.license || "") || null,
+      topics: [...new Set([...(project?.topics || []), ...(project?.categories || [])])].map((topic) => String(topic)),
+      provenance: { producer: "paperfield", produced_at: new Date().toISOString() },
+    },
+  };
+}
+
+function bridgeIdentifier(prefix) {
+  const id = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}-${id}`;
+}
+
+function isSameOriginOrLoopbackTarget(url) {
+  if (!url || !/^https?:$/.test(url.protocol)) return false;
+  const hostname = String(url.hostname || "").toLowerCase();
+  return url.origin === window.location.origin
+    || ["127.0.0.1", "localhost", "::1", "[::1]"].includes(hostname);
+}
+
+function openAtlasBridge(messageType, payload, view) {
+  let targetUrl;
+  try {
+    targetUrl = new URL(localStorage.getItem("paperfield.atlasUrl") || DEFAULT_ATLAS_URL, window.location.href);
+    if (!isSameOriginOrLoopbackTarget(targetUrl)) throw new Error("untrusted target");
+  } catch {
+    toast("Research Atlas 地址无效；只能使用同源或本机回环地址", true);
+    return;
+  }
+
+  state.atlasBridgeCleanup?.();
+  const messageId = bridgeIdentifier("atlas");
+  const bridgeToken = `${bridgeIdentifier("token")}-${Math.random().toString(36).slice(2)}`;
+  targetUrl.searchParams.set("paperfieldBridgeSession", messageId);
+  targetUrl.searchParams.set("paperfieldOrigin", window.location.origin);
+  if (view) targetUrl.searchParams.set("view", view);
+  targetUrl.hash = `paperfieldBridge=${encodeURIComponent(bridgeToken)}`;
+
+  const target = window.open(targetUrl.href, "paperfield-research-atlas");
+  if (!target) {
+    toast("浏览器阻止了新窗口，请允许 Paperfield 打开 Research Atlas", true);
+    return;
+  }
+
+  const packet = {
+    type: messageType,
+    version: 1,
+    messageId,
+    bridgeToken,
+    sourceOrigin: window.location.origin,
+    ...payload,
+  };
+  let finished = false;
+  const cleanup = () => {
+    if (finished) return;
+    finished = true;
+    window.removeEventListener("message", receive);
+    window.clearTimeout(timeoutId);
+    if (state.atlasBridgeCleanup === cleanup) state.atlasBridgeCleanup = null;
+  };
+  const receive = (event) => {
+    const message = event.data;
+    if (event.source !== target || event.origin !== targetUrl.origin || !message || typeof message !== "object") return;
+    if (message.messageId !== messageId || message.bridgeToken !== bridgeToken) return;
+    if (message.type === "atlas:ready") {
+      target.postMessage(packet, targetUrl.origin);
+      return;
+    }
+    if (message.type === "atlas:error") {
+      cleanup();
+      toast(`Research Atlas 未接收内容：${message.error || "未知错误"}`, true);
+      return;
+    }
+    if (!String(message.type || "").startsWith("atlas:") || !String(message.type).endsWith("-accepted")) return;
+    cleanup();
+    const labels = {
+      "atlas:context-accepted": "论文已送入 Research Atlas",
+      "atlas:analysis-accepted": message.reused ? "相同深度分析任务已存在" : "论文已加入深度分析",
+      "atlas:project-accepted": "项目已送入 Research Atlas",
+    };
+    toast(labels[message.type] || "Research Atlas 已接收内容");
+  };
+  const timeoutId = window.setTimeout(() => {
+    cleanup();
+    toast("Research Atlas 未响应，请确认本地服务已在 8795 端口启动", true);
+  }, ATLAS_BRIDGE_TIMEOUT_MS);
+  state.atlasBridgeCleanup = cleanup;
+  window.addEventListener("message", receive);
+  toast("正在连接 Research Atlas");
+}
+
+function sendPaperToAtlas(paper, analyze = false) {
+  if (!paper?.id || !paper?.title) {
+    toast("论文上下文尚未载入", true);
+    return;
+  }
+  const paperPayload = atlasPaperPayload(paper);
+  openAtlasBridge(
+    analyze ? "paperfield:analysis-request" : "paperfield:paper-context",
+    analyze
+      ? { paper: paperPayload, request: { sections: DEFAULT_ATLAS_ANALYSIS_SECTIONS } }
+      : { paper: paperPayload },
+    analyze ? "analyses" : "library",
+  );
+}
+
+function sendProjectToAtlas(project) {
+  if (!project?.full_name) {
+    toast("项目上下文尚未载入", true);
+    return;
+  }
+  openAtlasBridge("paperfield:project-context", { project: atlasProjectPayload(project) }, "library");
+}
 
 function escapedTextMarkup(value = "") {
   return escapeHtml(value).replace(/\r?\n/g, "<br>");
@@ -274,11 +483,13 @@ async function loadAuthUser() {
   state.auth = payload;
   el("authControls").hidden = !payload.enabled;
   if (payload.user) {
-    const roleLabel = payload.user.role === "beta" ? "内测" : "普通";
+    const roleLabel = payload.user.role === "beta" ? "内测" : payload.user.role === "editor" ? "编辑" : "普通";
     el("authUsername").textContent = `${payload.user.display_name || payload.user.username} / ${roleLabel}`;
     el("authUsername").title = payload.host_ai_allowed
-      ? "内测账户可使用主机 API"
-      : "普通账户需在自己的电脑上运行 Paperfield 并连接本地 API";
+      ? "内测账户可使用主机 API 和 Atlas 编辑工作台"
+      : payload.atlas_editor_allowed
+        ? "编辑账户可使用 Atlas 编辑工作台，不使用主机模型额度"
+        : "普通账户需在自己的电脑上运行 Paperfield 并连接本地 API";
   }
   if (state.recommendationWeights) renderScoreEditor();
 }
@@ -412,7 +623,7 @@ function updateFilterSummary() {
   const projectMode = isProjectMode();
   const ids = projectMode
     ? ["topicFilter", "projectLanguageFilter", "dateFilter"]
-    : ["topicFilter", "tierFilter", "platformFilter", "venueFilter", "authorFilter", "institutionFilter", "sourceFilter", "dateFilter"];
+    : ["topicFilter", "subtopicFilter", "tierFilter", "platformFilter", "venueFilter", "authorFilter", "institutionFilter", "sourceFilter", "dateFilter"];
   let count = ids.filter((id) => el(id).value.trim()).length;
   if (state.status) count += 1;
   if (projectMode) {
@@ -447,69 +658,97 @@ function toast(message, error = false) {
 
 const weightTotal = (weights) => SCORE_DIMENSIONS.reduce((sum, { key }) => sum + Number(weights?.[key] || 0), 0);
 const roundWeight = (value) => Math.round(Math.max(0, Math.min(100, Number(value) || 0)) * 100) / 100;
+const roundWeightInput = (value) => Math.round(Math.max(0, Math.min(1, Number(value) || 0)) * 10000) / 10000;
 const formatWeight = (value) => {
   const rounded = roundWeight(value);
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 };
-const weightsAreComplete = (weights) => Math.abs(weightTotal(weights) - 100) < 0.005;
+const formatWeightInput = (value) => roundWeightInput(value).toFixed(4).replace(/(\.\d{2})0+$/, "$1");
 const sameWeights = (left, right) => SCORE_DIMENSIONS.every(({ key }) => Math.abs(Number(left?.[key]) - Number(right?.[key])) < 0.005);
+
+function scoreInputsFromWeights(weights) {
+  return Object.fromEntries(SCORE_DIMENSIONS.map(({ key }) => [key, roundWeightInput(Number(weights?.[key] || 0) / 100)]));
+}
+
+function normalizeScoreWeightInputs(inputs) {
+  const total = weightTotal(inputs);
+  if (total <= 0) return null;
+  const weights = Object.fromEntries(SCORE_DIMENSIONS.map(({ key }) => [key, roundWeight(Number(inputs?.[key] || 0) / total * 100)]));
+  const difference = Math.round((100 - weightTotal(weights)) * 100) / 100;
+  if (difference) {
+    const target = SCORE_DIMENSIONS.reduce((largest, dimension) => (
+      Number(inputs?.[dimension.key] || 0) > Number(inputs?.[largest.key] || 0) ? dimension : largest
+    ));
+    weights[target.key] = roundWeight(weights[target.key] + difference);
+  }
+  return weights;
+}
 
 function setScoreWeight(key, value) {
   const nextValue = Number(value);
   if (!Number.isFinite(nextValue)) return;
-  state.recommendationWeights = {
-    ...(state.recommendationWeights || DEFAULT_SCORE_WEIGHTS),
-    [key]: roundWeight(nextValue),
+  state.recommendationWeightInputs = {
+    ...(state.recommendationWeightInputs || scoreInputsFromWeights(state.recommendationWeights || DEFAULT_SCORE_WEIGHTS)),
+    [key]: roundWeightInput(nextValue),
   };
+  state.recommendationWeights = normalizeScoreWeightInputs(state.recommendationWeightInputs);
   updateScoreEditorVisuals();
 }
 
 function updateScoreEditorVisuals() {
-  const weights = state.recommendationWeights || DEFAULT_SCORE_WEIGHTS;
+  const inputs = state.recommendationWeightInputs || scoreInputsFromWeights(state.recommendationWeights || DEFAULT_SCORE_WEIGHTS);
+  const weights = normalizeScoreWeightInputs(inputs);
+  state.recommendationWeights = weights;
   const controls = el("scoreWeightControls");
   SCORE_DIMENSIONS.forEach(({ key }) => {
-    const value = formatWeight(weights[key]);
+    const value = formatWeightInput(inputs[key]);
     const slider = controls.querySelector(`[data-score-weight="${key}"]`);
     const number = controls.querySelector(`[data-score-weight-number="${key}"]`);
     const output = controls.querySelector(`[data-score-output="${key}"]`);
     if (slider && document.activeElement !== slider) slider.value = value;
+    if (slider) slider.style.setProperty("--weight-progress", `${roundWeightInput(inputs[key]) * 100}%`);
     if (number && document.activeElement !== number) number.value = value;
-    if (output) output.textContent = `${value}%`;
+    if (output) output.textContent = weights ? `${formatWeight(weights[key])}%` : "—";
   });
 
-  const total = weightTotal(weights);
-  const complete = weightsAreComplete(weights);
-  el("scoreWeightRing").classList.toggle("is-invalid", !complete);
-  el("scoreWeightTotal").textContent = formatWeight(total);
-  el("scoreGuideSummary").textContent = SCORE_DIMENSIONS.map(({ key }) => formatWeight(weights[key])).join(" / ");
+  const usable = Boolean(weights);
+  el("scoreWeightTotal").textContent = usable ? "占比合计 100%" : "无法归一化";
+  el("scoreWeightTotal").classList.toggle("is-invalid", !usable);
+  el("scoreGuideSummary").textContent = usable
+    ? SCORE_DIMENSIONS.map(({ key }) => formatWeight(weights[key])).join(" / ")
+    : "0 / 0 / 0 / 0 / 0";
 
   const locked = Boolean(state.auth?.enabled && !state.auth.host_ai_allowed);
-  const dirty = !sameWeights(weights, state.appliedRecommendationWeights || weights);
-  controls.querySelectorAll("input").forEach((input) => { input.disabled = locked; });
+  const saving = state.recommendationWeightsSaving;
+  const dirty = !usable || !sameWeights(weights, state.appliedRecommendationWeights || weights);
+  controls.querySelectorAll("input").forEach((input) => { input.disabled = locked || saving; });
   el("scoreWeightPresets").querySelectorAll("button").forEach((button) => {
     const preset = SCORE_WEIGHT_PRESETS[button.dataset.scorePreset];
-    button.disabled = locked;
-    button.classList.toggle("is-active", Boolean(preset && sameWeights(weights, preset)));
+    button.disabled = locked || saving;
+    button.classList.toggle("is-active", Boolean(usable && preset && sameWeights(weights, preset)));
   });
-  el("resetScoreWeights").disabled = locked;
-  el("applyScoreWeights").disabled = locked || !dirty || !complete;
+  el("resetScoreWeights").disabled = locked || saving;
+  el("applyScoreWeights").disabled = locked || saving || !dirty || !usable;
   el("scoreWeightStatus").textContent = locked
     ? "当前账户只读"
-    : !complete
-      ? `当前合计 ${formatWeight(total)}%，需为 100%`
+    : saving
+      ? "正在应用并重排"
+    : !usable
+      ? "至少保留一项大于 0"
       : dirty ? "尚未应用" : "已应用";
-  el("scoreWeightStatus").className = locked ? "" : !complete || dirty ? "is-dirty" : "is-applied";
+  el("scoreWeightStatus").className = locked || saving ? "" : !usable || dirty ? "is-dirty" : "is-applied";
 }
 
 function renderScoreEditor() {
-  const weights = state.recommendationWeights || DEFAULT_SCORE_WEIGHTS;
+  const inputs = state.recommendationWeightInputs || scoreInputsFromWeights(state.recommendationWeights || DEFAULT_SCORE_WEIGHTS);
+  const weights = normalizeScoreWeightInputs(inputs);
   const controls = el("scoreWeightControls");
   controls.innerHTML = SCORE_DIMENSIONS.map(({ key, label, color }) => `
     <div class="score-weight-row" style="--weight-color:${color}">
-      <div class="score-weight-label"><i aria-hidden="true"></i><b>${label}</b><output data-score-output="${key}">${formatWeight(weights[key])}%</output></div>
+      <div class="score-weight-label"><i aria-hidden="true"></i><b>${label}</b><span>归一化占比</span><output data-score-output="${key}">${weights ? `${formatWeight(weights[key])}%` : "—"}</output></div>
       <div class="score-weight-inputs">
-        <input id="score-weight-${key}" type="range" min="0" max="100" step="0.1" value="${formatWeight(weights[key])}" data-score-weight="${key}" aria-label="${label}权重">
-        <label class="score-weight-number"><span class="sr-only">${label}权重百分比</span><input type="number" min="0" max="100" step="0.1" inputmode="decimal" value="${formatWeight(weights[key])}" data-score-weight-number="${key}" aria-label="${label}权重百分比"><span aria-hidden="true">%</span></label>
+        <input id="score-weight-${key}" type="range" min="0" max="1" step="0.01" value="${formatWeightInput(inputs[key])}" data-score-weight="${key}" aria-label="${label}原始值，范围 0 到 1">
+        <label class="score-weight-number"><span class="sr-only">${label}原始值，范围 0 到 1</span><input type="number" min="0" max="1" step="0.01" inputmode="decimal" value="${formatWeightInput(inputs[key])}" data-score-weight-number="${key}" aria-label="${label}原始值，范围 0 到 1"></label>
       </div>
     </div>`).join("");
   updateScoreEditorVisuals();
@@ -519,25 +758,30 @@ async function loadScoreWeights() {
   const payload = await api("/api/recommendation-weights");
   state.appliedRecommendationWeights = { ...payload.weights };
   state.recommendationWeights = { ...payload.weights };
+  state.recommendationWeightInputs = scoreInputsFromWeights(payload.weights);
   renderScoreEditor();
 }
 
 async function applyScoreWeights() {
-  if (!weightsAreComplete(state.recommendationWeights)) {
-    toast("五项权重合计需为 100%", true);
+  const weights = normalizeScoreWeightInputs(state.recommendationWeightInputs);
+  if (!weights) {
+    toast("五项原始值不能全部为 0", true);
     updateScoreEditorVisuals();
     return;
   }
+  const submittedInputs = { ...state.recommendationWeightInputs };
   const button = el("applyScoreWeights");
-  button.disabled = true;
+  state.recommendationWeightsSaving = true;
+  updateScoreEditorVisuals();
   button.textContent = "正在重排";
   try {
     const payload = await api("/api/recommendation-weights", {
       method: "POST",
-      body: JSON.stringify({ weights: state.recommendationWeights }),
+      body: JSON.stringify({ weights }),
     });
     state.appliedRecommendationWeights = { ...payload.weights };
     state.recommendationWeights = { ...payload.weights };
+    state.recommendationWeightInputs = submittedInputs;
     el("sortFilter").value = "recommendation";
     renderScoreEditor();
     button.textContent = "应用并重排";
@@ -548,7 +792,9 @@ async function applyScoreWeights() {
     toast(error.message, true);
     renderScoreEditor();
   } finally {
+    state.recommendationWeightsSaving = false;
     button.textContent = "应用并重排";
+    updateScoreEditorVisuals();
   }
 }
 
@@ -593,6 +839,144 @@ async function searchConnector() {
   }
 }
 
+function paperLocatorFromParams(params) {
+  const rawPage = Number.parseInt(params.get("page") || "", 10);
+  const locator = { page: Number.isFinite(rawPage) && rawPage > 0 ? rawPage : 0 };
+  PAPER_LOCATOR_QUERY_FIELDS.forEach((field) => {
+    const value = String(params.get(field) || "").trim();
+    if (value) locator[field] = value.slice(0, field === "quote" ? 1000 : 500);
+  });
+  return locator.page || PAPER_LOCATOR_QUERY_FIELDS.some((field) => locator[field]) ? locator : null;
+}
+
+function clearPaperLocatorParams(url) {
+  url.searchParams.delete("page");
+  PAPER_LOCATOR_QUERY_FIELDS.forEach((field) => url.searchParams.delete(field));
+}
+
+function paperLocatorLabel(locator) {
+  if (!locator) return "";
+  const parts = [];
+  if (locator.page) parts.push(`p.${locator.page}`);
+  for (const field of ["section", "figure", "table", "equation"]) {
+    if (locator[field]) parts.push(locator[field]);
+  }
+  if (locator.quote) parts.push(`“${locator.quote.slice(0, 80)}${locator.quote.length > 80 ? "…" : ""}”`);
+  return parts.join(" / ");
+}
+
+function normalizedLocatorText(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/-\s+(?=[A-Za-z])/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleLowerCase();
+}
+
+function showPaperLocatorStatus(message, matched = true) {
+  const status = el("pdfLocatorStatus");
+  status.textContent = message;
+  status.hidden = false;
+  status.classList.toggle("is-unmatched", !matched);
+}
+
+function clearPaperLocatorStatus() {
+  const status = el("pdfLocatorStatus");
+  status.hidden = true;
+  status.textContent = "";
+  status.classList.remove("is-unmatched");
+  document.querySelectorAll(".pdf-text-layer .is-locator-match").forEach((node) => node.classList.remove("is-locator-match"));
+}
+
+function highlightReaderLocator(shell, query) {
+  const needle = normalizedLocatorText(query);
+  if (!needle) return 0;
+  const spans = [...shell.querySelectorAll(".pdf-text-layer span")];
+  let matched = 0;
+  for (let index = 0; index < spans.length; index += 1) {
+    let combined = "";
+    const candidates = [];
+    for (let cursor = index; cursor < Math.min(spans.length, index + 24); cursor += 1) {
+      candidates.push(spans[cursor]);
+      combined = normalizedLocatorText(candidates.map((span) => span.textContent).join(" "));
+      if (combined.includes(needle)) {
+        candidates.forEach((span) => span.classList.add("is-locator-match"));
+        matched += candidates.length;
+        break;
+      }
+      if (combined.length > needle.length + 160) break;
+    }
+    if (matched) break;
+  }
+  return matched;
+}
+
+async function applyPendingReaderLocator() {
+  const locator = state.readerPendingLocator;
+  const paper = state.readerPaper;
+  if (!locator || !paper || !el("readerDialog").open || !state.readerAsset) return false;
+  const query = new URLSearchParams();
+  if (locator.page) query.set("page", String(locator.page));
+  PAPER_LOCATOR_QUERY_FIELDS.forEach((field) => {
+    if (locator[field]) query.set(field, locator[field]);
+  });
+  let result;
+  try {
+    result = await api(`/api/papers/${encodeURIComponent(paper.id)}/locate?${query}`);
+  } catch (error) {
+    result = { matched: false, page: locator.page || 0, reason: "locator_request_failed", error: error.message };
+  }
+  const targetPage = Number(result.page || locator.page || 0);
+  if (targetPage) await focusReaderPage(targetPage);
+  let highlighted = 0;
+  const shell = targetPage ? el("pdfCanvasViewer").querySelector(`[data-page="${targetPage}"]`) : null;
+  if (result.matched && result.field !== "page" && shell && result.query) highlighted = highlightReaderLocator(shell, result.query);
+  const label = paperLocatorLabel(locator);
+  if (result.matched) {
+    const matchLabel = result.field === "page"
+      ? `页码已验证并定位 / p.${targetPage}`
+      : `已命中 ${result.field || "原文"} / p.${targetPage}${highlighted ? " / 已高亮" : ""}：${String(result.query || "").slice(0, 120)}`;
+    showPaperLocatorStatus(matchLabel);
+  } else {
+    const detail = result.reason === "fulltext_unavailable" ? "全文尚未提取" : "未在缓存全文中找到完全匹配";
+    showPaperLocatorStatus(`${detail}${targetPage ? `，已定位来源页 p.${targetPage}` : ""}：${label}`, false);
+  }
+  state.readerPendingLocator = null;
+  return true;
+}
+
+async function openPaperReference(reference, openWorkspace = false, locator = null, catalogReady = null) {
+  const payload = await api("/api/papers/resolve-reference", {
+    method: "POST",
+    body: JSON.stringify({ ref: reference }),
+  });
+  if (!payload.paper_id) throw new Error("Paperfield did not return a resolved paper ID");
+  const url = new URL(window.location.href);
+  url.searchParams.set("paper", payload.paper_id);
+  url.searchParams.delete("paper_ref");
+  url.searchParams.delete("action");
+  window.history.replaceState({}, "", url);
+  const refreshCatalog = () => Promise.all([
+    loadPapers({ preserveSelection: false }),
+    loadStats(),
+    loadOptions(),
+  ]);
+  const catalogRefresh = catalogReady
+    ? (payload.imported ? catalogReady.then(refreshCatalog) : catalogReady)
+    : refreshCatalog();
+  if (openWorkspace) {
+    const readerReady = openReader(payload.paper_id, locator);
+    await Promise.all([readerReady, catalogRefresh]);
+    await openPaper(payload.paper_id, false, Boolean(locator));
+  } else {
+    await catalogRefresh;
+    await openPaper(payload.paper_id, false);
+  }
+  if (payload.imported) toast("论文已加入 Paperfield");
+  return payload.paper_id;
+}
+
 function formatDate(value) {
   if (!value) return "日期未知";
   const date = new Date(`${value}T00:00:00`);
@@ -617,6 +1001,20 @@ function paperSourceLine(paper) {
   return parts.map((part) => `<span>${escapeHtml(part)}</span>`).join("");
 }
 
+function paperTaxonomyMarkup(paper, compact = false) {
+  const topics = compact ? (paper.topics || []).slice(0, 2) : (paper.topics || []);
+  const subtopics = compact ? (paper.subtopics || []).slice(0, 3) : (paper.subtopics || []);
+  if (!topics.length && !subtopics.length) return "";
+  const label = [
+    topics.length ? `领域：${topics.join("、")}` : "",
+    subtopics.length ? `细分方向：${subtopics.join("、")}` : "",
+  ].filter(Boolean).join("；");
+  return `<div class="paper-topics" aria-label="${escapeHtml(label)}">
+    ${topics.map((topic) => `<span class="topic-tag domain-tag" title="领域：${escapeHtml(topic)}">${escapeHtml(topic)}</span>`).join("")}
+    ${subtopics.map((subtopic) => `<span class="topic-tag subtopic-tag" title="细分方向：${escapeHtml(subtopic)}">${escapeHtml(subtopic)}</span>`).join("")}
+  </div>`;
+}
+
 function paperCitationMarkup(paper) {
   const sourceUrl = paper.source_url || paper.pdf_url || "#";
   const sourceLabel = paper.venue || paper.source || "来源页";
@@ -639,6 +1037,7 @@ function currentParams() {
   const values = {
     q: el("searchInput").value.trim(),
     topic: state.topic || el("topicFilter").value,
+    subtopic: el("subtopicFilter").value,
     venue: el("venueFilter").value,
     author: el("authorFilter").value.trim(),
     institution: el("institutionFilter").value,
@@ -798,11 +1197,11 @@ function applyViewMode() {
   });
   el("overviewTitle").textContent = projectMode ? "今天有哪些项目在更新" : recommendedMode ? "本周先读与复现" : topicMode ? `${state.topic}论文流` : "今天值得读什么";
   el("overviewMessage").textContent = projectMode ? "开源仓库变更与论文关联信号" : recommendedMode ? "自然周研究队列 / 资料后台预处理" : topicMode ? `浏览全部${state.topic}论文，不受每周精选数量限制` : "公开论文元数据与阅读状态";
-  el("statTotalLabel").textContent = projectMode ? "GitHub 项目" : recommendedMode ? "论文精选" : "收录论文";
+  el("statTotalLabel").textContent = projectMode ? "GitHub 项目" : "收录论文";
   el("statUnreadLabel").textContent = projectMode ? "今日更新" : recommendedMode ? "候选论文" : "未读";
   el("statFavoriteLabel").textContent = projectMode ? "论文关联" : recommendedMode ? "项目精选" : "已收藏";
   if (state.stats) {
-    el("statTotal").textContent = projectMode ? state.stats.project_total : recommendedMode ? state.total : state.stats.total;
+    el("statTotal").textContent = projectMode ? state.stats.project_total : state.stats.total;
     el("statUnread").textContent = projectMode ? state.stats.project_updated_today : recommendedMode ? state.stats.total : state.stats.unread;
     el("statFavorite").textContent = projectMode ? state.stats.project_link_count : recommendedMode ? state.weeklyProjects.length : state.stats.favorites;
     if (!state.stats.refresh.running) el("refreshButton").textContent = projectMode ? "更新全部" : "更新论文";
@@ -912,6 +1311,7 @@ function renderProjectDetail(project) {
       <div class="detail-actions">
         <button type="button" data-close-detail>返回列表</button>
         <button type="button" data-open-project-reader>代码工作台</button>
+        <button type="button" data-atlas-project>研究关联</button>
         <a href="${escapeHtml(project.url)}" target="_blank" rel="noreferrer">打开 GitHub</a>
         ${project.homepage ? `<a href="${escapeHtml(project.homepage)}" target="_blank" rel="noreferrer">项目主页</a>` : ""}
       </div>
@@ -933,6 +1333,7 @@ function renderProjectDetail(project) {
     </div>`;
   el("paperDetail").querySelector("[data-close-detail]").addEventListener("click", () => showReadingEmpty(true));
   el("paperDetail").querySelector("[data-open-project-reader]").addEventListener("click", () => openProjectReader(project.full_name));
+  el("paperDetail").querySelector("[data-atlas-project]").addEventListener("click", () => sendProjectToAtlas(project));
   el("paperDetail").querySelectorAll("[data-linked-paper]").forEach((button) => button.addEventListener("click", async () => {
     state.view = "all";
     state.topic = "";
@@ -1438,7 +1839,6 @@ async function loadPapers({ preserveSelection = true, append = false, request = 
       el("resultCount").textContent = `${payload.total} 篇论文 / ${projectPayload.total} 个项目 / ${payload.rotation_week_start} 至 ${payload.rotation_week_end}`;
       el("loadMoreWrap").hidden = true;
       el("navRecommendedCount").textContent = payload.total + projectPayload.total;
-      if (state.stats) el("statTotal").textContent = payload.total;
       applyViewMode();
       finishStreamRequest(activeRequest, "每周精选已就绪");
       return;
@@ -1452,7 +1852,6 @@ async function loadPapers({ preserveSelection = true, append = false, request = 
     state.total = payload.total;
     renderPapers();
     el("resultCount").textContent = `${payload.total} 篇`;
-    if (state.stats && state.topic) el("statTotal").textContent = payload.total;
     el("loadMoreWrap").hidden = !payload.has_more;
     if (append) {
       finishStreamRequest(activeRequest);
@@ -1560,7 +1959,7 @@ function renderPapers() {
         <div class="paper-authors">${escapeHtml(paper.authors.join(", ") || "作者信息缺失")}</div>
         <div class="paper-source-line">${paperSourceLine(paper)}</div>
         <div class="paper-marginalia">
-          <div class="paper-topics">${paper.topics.map((topic) => `<span class="topic-tag">${escapeHtml(topic)}</span>`).join("")}</div>
+          ${paperTaxonomyMarkup(paper, true)}
           ${paper.notable_institutions?.length ? `<div class="institution-tags">${paper.notable_institutions.slice(0, 3).map((institution) => `<span title="${escapeHtml(institution.strengths.join("、"))}">${escapeHtml(institution.name)}</span>`).join("")}</div>` : ""}
         </div>
       </div>
@@ -1636,12 +2035,13 @@ async function toggleFavorite(event, paper) {
   }
 }
 
-async function openPaper(paperId, openPane = true) {
+async function openPaper(paperId, openPane = true, preserveLocator = false) {
   state.selectedId = paperId;
   const url = new URL(window.location.href);
   url.searchParams.set("paper", paperId);
   url.searchParams.delete("project");
   url.searchParams.delete("view");
+  if (!preserveLocator) clearPaperLocatorParams(url);
   window.history.replaceState({}, "", url);
   renderPapers();
   el("readingEmpty").hidden = true;
@@ -1664,6 +2064,8 @@ function renderDetail(paper) {
         <button type="button" data-close-detail>返回列表</button>
         <button type="button" data-favorite-detail>${paper.favorite ? "★ 已收藏" : "☆ 收藏"}</button>
         <button type="button" data-open-reader>打开精读工作台</button>
+        <button type="button" data-atlas-view>系统讲解</button>
+        <button type="button" data-atlas-analyze>加入深度分析</button>
         <a href="${escapeHtml(paper.source_url || paper.pdf_url)}" target="_blank" rel="noreferrer">查看原文</a>
         ${paper.pdf_url ? `<a href="${escapeHtml(paper.pdf_url)}" target="_blank" rel="noreferrer">PDF</a>` : ""}
       </div>
@@ -1681,7 +2083,7 @@ function renderDetail(paper) {
           <span>质量分 ${Math.round(paper.quality_score)}</span>
         </div>
         ${paperCitationMarkup(paper)}
-        <div class="paper-topics">${paper.topics.map((topic) => `<span class="topic-tag">${escapeHtml(topic)}</span>`).join("")}</div>
+        ${paperTaxonomyMarkup(paper)}
       </header>
 
       ${paper.notable_institutions?.length ? `<section class="detail-section">
@@ -1732,6 +2134,8 @@ function renderDetail(paper) {
 
   el("paperDetail").querySelector("[data-close-detail]").addEventListener("click", () => showReadingEmpty(true));
   el("paperDetail").querySelector("[data-open-reader]").addEventListener("click", () => openReader(paper.id));
+  el("paperDetail").querySelector("[data-atlas-view]").addEventListener("click", () => sendPaperToAtlas(paper));
+  el("paperDetail").querySelector("[data-atlas-analyze]").addEventListener("click", () => sendPaperToAtlas(paper, true));
   el("paperDetail").querySelectorAll("[data-linked-project]").forEach((button) => button.addEventListener("click", async () => {
     state.view = "projects";
     applyViewMode();
@@ -2014,6 +2418,7 @@ function releaseReaderPdf() {
   state.readerPdfImageUrls.forEach((url) => URL.revokeObjectURL(url));
   state.readerPdfImageUrls = [];
   state.readerPdfImageQueue = Promise.resolve();
+  clearPaperLocatorStatus();
 }
 
 async function renderPdfTextLayer(page, viewport, surface, canvas, token) {
@@ -2068,6 +2473,12 @@ async function renderPdfPage(pdfDocument, pageNumber, shell, token) {
     canvas.style.width = `${Math.floor(viewport.width)}px`;
     canvas.style.height = `${Math.floor(viewport.height)}px`;
     shell.style.minHeight = `${Math.floor(viewport.height)}px`;
+    shell.dataset.pdfPageWidth = String(baseViewport.width);
+    shell.dataset.pdfPageHeight = String(baseViewport.height);
+    shell.dataset.rasterWidthPx = String(canvas.width);
+    shell.dataset.rasterHeightPx = String(canvas.height);
+    shell.dataset.renderDpi = String(72 * canvas.width / baseViewport.width);
+    shell.dataset.coordinateSpace = "pdf-points";
     const surface = document.createElement("div");
     surface.className = "pdf-page-surface";
     surface.style.width = `${Math.floor(viewport.width)}px`;
@@ -2162,6 +2573,9 @@ async function renderPdfImagePage(asset, pageNumber, shell, token) {
     }
     state.readerPdfImageUrls.push(objectUrl);
     shell.prepend(image);
+    shell.dataset.rasterWidthPx = String(image.naturalWidth);
+    shell.dataset.rasterHeightPx = String(image.naturalHeight);
+    shell.dataset.coordinateSpace = "pixels";
     shell.dataset.rendered = "1";
     return true;
   } catch (error) {
@@ -2260,6 +2674,199 @@ async function renderPdfDocument(url, token) {
   return true;
 }
 
+function nearestRenderedPdfPage() {
+  const viewer = el("pdfCanvasViewer");
+  if (!viewer || viewer.hidden) return null;
+  const viewerTop = viewer.getBoundingClientRect().top;
+  const pages = [...viewer.querySelectorAll(".pdf-page")];
+  return pages
+    .filter((page) => page.dataset.rendered === "1")
+    .sort((left, right) => Math.abs(left.getBoundingClientRect().top - viewerTop) - Math.abs(right.getBoundingClientRect().top - viewerTop))[0] || null;
+}
+
+async function captureRenderedPdfPage(page) {
+  const canvas = page?.querySelector("canvas");
+  if (canvas?.width && canvas?.height) {
+    return {
+      imageDataUrl: canvas.toDataURL("image/png"),
+      rasterWidthPx: canvas.width,
+      rasterHeightPx: canvas.height,
+      pageWidth: Number(page.dataset.pdfPageWidth) || canvas.width,
+      pageHeight: Number(page.dataset.pdfPageHeight) || canvas.height,
+      renderDpi: Number(page.dataset.renderDpi) || undefined,
+      coordinateSpace: page.dataset.coordinateSpace === "pdf-points" ? "pdf-points" : "pixels",
+    };
+  }
+  const image = page?.querySelector("img");
+  if (!image?.complete || !image.naturalWidth || !image.naturalHeight) return null;
+  const canvasFallback = document.createElement("canvas");
+  canvasFallback.width = image.naturalWidth;
+  canvasFallback.height = image.naturalHeight;
+  const context = canvasFallback.getContext("2d", { alpha: false });
+  if (!context) return null;
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvasFallback.width, canvasFallback.height);
+  context.drawImage(image, 0, 0);
+  return {
+    imageDataUrl: canvasFallback.toDataURL("image/png"),
+    rasterWidthPx: canvasFallback.width,
+    rasterHeightPx: canvasFallback.height,
+    pageWidth: canvasFallback.width,
+    pageHeight: canvasFallback.height,
+    coordinateSpace: "pixels",
+  };
+}
+
+async function currentReaderPdfSha256() {
+  if (!state.readerPdfDocument?.getData || !globalThis.crypto?.subtle) return "";
+  try {
+    const bytes = await state.readerPdfDocument.getData();
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+    return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return "";
+  }
+}
+
+async function sendCurrentPdfPageToFlowloom() {
+  const paper = state.readerPaper;
+  const asset = state.readerAsset;
+  const page = nearestRenderedPdfPage();
+  if (!paper || !asset || !page) {
+    toast("请先让当前 PDF 页面完成渲染", true);
+    return;
+  }
+  const pageNumber = Number(page.dataset.page) || 1;
+  const confirmed = window.confirm(
+    `确认把第 ${pageNumber} 页交给 Flowloom 拆为可编辑 SVG？\n\n将发送同源 PDF 地址、当前页 PNG 回退和论文来源定位；处理发生在浏览器中，不会自动上传。`,
+  );
+  if (!confirmed) return;
+  let targetUrl;
+  try {
+    const configuredUrl = localStorage.getItem("paperfield.flowloomUrl") || DEFAULT_FLOWLOOM_URL;
+    targetUrl = new URL(configuredUrl, window.location.href);
+    if (!isSameOriginOrLoopbackTarget(targetUrl)) throw new Error("untrusted target");
+  } catch {
+    toast("Flowloom 地址无效；只能使用同源或本机回环地址", true);
+    return;
+  }
+  let capture = null;
+  let sourceSha256 = "";
+  try {
+    [capture, sourceSha256] = await Promise.all([
+      captureRenderedPdfPage(page),
+      currentReaderPdfSha256(),
+    ]);
+  } catch (error) {
+    toast(`无法读取当前页面图像：${String(error?.message || error).slice(0, 100)}`, true);
+    return;
+  }
+  if (!capture?.imageDataUrl) {
+    toast("当前 PDF 页面没有可发送的渲染图像", true);
+    return;
+  }
+  const messageId = globalThis.crypto?.randomUUID?.() || `pdf-page-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const bridgeToken = `${globalThis.crypto?.randomUUID?.() || messageId}-${Math.random().toString(36).slice(2)}`;
+  const figureId = globalThis.crypto?.randomUUID?.() || `figure-${messageId}`;
+  targetUrl.searchParams.set("paperfieldBridgeSession", messageId);
+  targetUrl.searchParams.set("paperfieldOrigin", window.location.origin);
+  targetUrl.hash = `paperfieldBridge=${encodeURIComponent(bridgeToken)}`;
+  const target = window.open(targetUrl.href, "paperfield-flowloom");
+  if (!target) {
+    toast("浏览器阻止了新窗口，请允许 Paperfield 打开 Flowloom", true);
+    return;
+  }
+  const packet = {
+    type: "paperfield:pdf-page",
+    version: 1,
+    messageId,
+    bridgeToken,
+    imageDataUrl: capture.imageDataUrl,
+    pdfUrl: asset.pdf_url ? new URL(asset.pdf_url, window.location.href).href : undefined,
+    pdfFileName: `${paper.title || paper.id || "paper"}.pdf`,
+    paperTitle: paper.title || "论文",
+    rasterWidthPx: capture.rasterWidthPx,
+    rasterHeightPx: capture.rasterHeightPx,
+    pageWidth: capture.pageWidth,
+    pageHeight: capture.pageHeight,
+    renderDpi: capture.renderDpi,
+    coordinateSpace: capture.coordinateSpace,
+    sourceSha256: sourceSha256 || undefined,
+    paperId: paper.id,
+    title: `${paper.title || "论文"} · p.${pageNumber}`,
+    sourceRef: `${paper.id}#page=${pageNumber}`,
+    page: pageNumber,
+    citation: paper.doi || paper.source_url || paper.pdf_url || "",
+    figureContext: {
+      schema_version: 1,
+      figure_id: figureId,
+      title: `${paper.title || "论文"} · p.${pageNumber}`,
+      asset_kind: "pdf-page",
+      asset_sha256: sourceSha256 || undefined,
+      source_locator: {
+        kind: "paper",
+        canonical_paper_ref: atlasCanonicalPaperRef(paper) || undefined,
+        paperfield_id: paper.id,
+        page: pageNumber,
+        content_sha256: sourceSha256 || undefined,
+        url: paper.source_url || paper.pdf_url || undefined,
+      },
+      provenance: {
+        producer: "paperfield",
+        produced_at: new Date().toISOString(),
+        transformations: ["Original PDF endpoint shared for local operator extraction", "Current page rendered to PNG as a fidelity fallback"],
+      },
+    },
+  };
+  state.flowloomBridgeCleanup?.();
+  let finished = false;
+  const send = () => {
+    try { target.postMessage(packet, targetUrl.origin); } catch {}
+  };
+  const cleanup = () => {
+    if (finished) return;
+    finished = true;
+    window.removeEventListener("message", receive);
+    window.clearTimeout(timeoutId);
+    if (state.flowloomBridgeCleanup === cleanup) state.flowloomBridgeCleanup = null;
+  };
+  const receive = (event) => {
+    const message = event.data;
+    if (event.source !== target || event.origin !== targetUrl.origin || !message || typeof message !== "object") return;
+    if (message.messageId !== messageId || message.bridgeToken !== bridgeToken) return;
+    if (message.type === "flowloom:ready") {
+      send();
+      return;
+    }
+    if (message.type === "flowloom:error") {
+      cleanup();
+      toast(`Flowloom 未接收页面：${message.error || "未知错误"}`, true);
+      return;
+    }
+    if (message.type === "flowloom:figure-processing") {
+      toast(`Flowloom 正在拆解第 ${pageNumber} 页的矢量与文字图元`);
+      return;
+    }
+    if (message.type === "flowloom:figure-accepted") {
+      cleanup();
+      const editableCount = Number(message.editablePrimitives || 0) + Number(message.textPrimitives || 0);
+      if (message.mode === "editable-svg") toast(`第 ${pageNumber} 页已拆为 ${editableCount} 个可编辑 SVG 图元`);
+      else if (message.mode === "visual-reference") toast(`第 ${pageNumber} 页没有可提取矢量，已保留原始页面参考`, true);
+      else toast(`第 ${pageNumber} 页已进入 Flowloom，但本次使用 PNG 视觉回退`, true);
+    }
+  };
+  const timeoutId = window.setTimeout(() => {
+    cleanup();
+    toast("Flowloom 未确认接收，请检查编辑器是否已完成加载", true);
+  }, 60000);
+  state.flowloomBridgeCleanup = cleanup;
+  window.addEventListener("message", receive);
+  send();
+  window.setTimeout(send, 500);
+  window.setTimeout(send, 1500);
+  toast(`正在把第 ${pageNumber} 页送入 Flowloom 拆图`);
+}
+
 function pdfLoadErrorMessage(error) {
   const message = String(error?.message || error || "未知错误");
   if (/401/.test(message)) {
@@ -2297,6 +2904,7 @@ async function loadReaderPdf(asset) {
       el("pdfUnavailable").hidden = true;
       el("pdfActions").hidden = false;
       document.querySelector(".pdf-workspace").setAttribute("aria-busy", "false");
+      await applyPendingReaderLocator();
       return;
     }
     const renderedWithPdfJs = await renderPdfDocument(asset.pdf_url, token);
@@ -2307,6 +2915,7 @@ async function loadReaderPdf(asset) {
     el("pdfUnavailable").hidden = true;
     el("pdfActions").hidden = false;
     document.querySelector(".pdf-workspace").setAttribute("aria-busy", "false");
+    await applyPendingReaderLocator();
   } catch (error) {
     if (!el("readerDialog").open || state.readerPdfToken !== token) return;
     setPdfStatus("PDF 载入失败", pdfLoadErrorMessage(error), true);
@@ -2666,19 +3275,27 @@ function appendPaperChatMessage(role, content, options = {}) {
   return message;
 }
 
-async function openReader(paperId) {
+function prepareReaderLoading({
+  paperId = null,
+  locator = null,
+  title = "论文阅读工作台",
+  meta = "",
+  statusTitle = "正在载入论文",
+  statusDetail = "读取元数据与本地缓存状态",
+} = {}) {
   const dialog = el("readerDialog");
   releaseReaderPdf();
-  state.selectedId = paperId;
+  if (paperId) state.selectedId = paperId;
   state.readerPaper = null;
   state.readerAsset = null;
+  state.readerPendingLocator = locator;
   state.translationPageText = "";
   state.translationLoadRequestId += 1;
   clearTranslationSelection({ clearNativeSelection: false });
   setReaderTab("explain");
-  setPdfStatus("正在载入论文", "读取元数据与本地缓存状态");
-  el("readerTitle").textContent = "论文阅读工作台";
-  el("readerMeta").textContent = "";
+  setPdfStatus(statusTitle, statusDetail);
+  el("readerTitle").textContent = title;
+  el("readerMeta").textContent = meta;
   renderReadingBackupStatus("readerBackupStatus", false);
   el("readerExplanation").innerHTML = `<div class="skeleton-line"></div><div class="skeleton-line"></div><div class="skeleton-line"></div>`;
   el("readerScore").innerHTML = "";
@@ -2686,6 +3303,10 @@ async function openReader(paperId) {
   el("translationResult").textContent = "";
   renderChatHistory([]);
   openModalDialog(dialog, el("readerClose"));
+}
+
+async function openReader(paperId, locator = null) {
+  prepareReaderLoading({ paperId, locator });
   try {
     const paper = await api(`/api/papers/${encodeURIComponent(paperId)}`);
     state.readerPaper = paper;
@@ -2704,6 +3325,7 @@ async function openReader(paperId) {
     el("readerExplanation").querySelector("[data-reader-explain]")?.addEventListener("click", generateReaderExplanation);
     el("readerExplanation").querySelector("[data-explain]")?.addEventListener("click", generateReaderExplanation);
     await Promise.all([resolveReaderAsset(paper), loadChatHistory(paperId)]);
+    if (state.readerPendingLocator && !state.readerAsset?.pdf_available) await applyPendingReaderLocator();
   } catch (error) {
     setPdfStatus("论文载入失败", error.message);
     el("readerExplanation").innerHTML = `<p>${escapeHtml(error.message)}</p>`;
@@ -2838,13 +3460,34 @@ function showReadingEmpty(restoreFocus = false) {
   if (restoreFocus && focusTarget) window.requestAnimationFrame(() => focusTarget.focus({ preventScroll: true }));
 }
 
+function updateSubtopicOptions({ preserve = true } = {}) {
+  const select = el("subtopicFilter");
+  const previous = preserve ? select.value : "";
+  const selectedTopic = state.topic || el("topicFilter").value;
+  const groups = selectedTopic
+    ? state.topicTaxonomy.filter((group) => group.name === selectedTopic)
+    : state.topicTaxonomy;
+  const available = new Set();
+  const groupMarkup = groups.map((group) => {
+    const items = (group.subtopics || []).map((item) => {
+      available.add(item.name);
+      return `<option value="${escapeHtml(item.name)}"${item.count ? "" : " disabled"}>${escapeHtml(item.name)} (${item.count || 0})</option>`;
+    }).join("");
+    return items ? `<optgroup label="${escapeHtml(group.name)}">${items}</optgroup>` : "";
+  }).join("");
+  select.innerHTML = `<option value="">全部细分方向</option>${groupMarkup}`;
+  select.value = available.has(previous) ? previous : "";
+}
+
 async function loadOptions() {
   const options = await api("/api/options");
   const fill = (select, values, placeholder) => {
     select.innerHTML = `<option value="">${placeholder}</option>${values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("")}`;
   };
-  fill(el("topicFilter"), options.topics, "全部主题");
+  state.topicTaxonomy = options.topic_taxonomy || [];
+  fill(el("topicFilter"), options.topics, "全部领域");
   if (state.topic && options.topics.includes(state.topic)) el("topicFilter").value = state.topic;
+  updateSubtopicOptions();
   fill(el("tierFilter"), options.tiers, "全部层级");
   fill(el("platformFilter"), options.platforms, "全部平台");
   const coverageItems = options.venue_coverage?.items || [];
@@ -2932,14 +3575,15 @@ async function triggerRefresh() {
   }
 }
 
-function clearFilters() {
+function clearFilters({ showAll = false } = {}) {
   const projectMode = isProjectMode();
   const recommendedMode = state.view === "recommended";
   state.topic = "";
-  state.view = projectMode ? state.view : recommendedMode ? "recommended" : "all";
+  state.view = showAll ? "all" : projectMode ? state.view : recommendedMode ? "recommended" : "all";
   state.status = "";
   ["searchInput", "authorFilter", "dateFilter"].forEach((id) => { el(id).value = ""; });
-  ["topicFilter", "tierFilter", "platformFilter", "venueFilter", "institutionFilter", "sourceFilter"].forEach((id) => { el(id).value = ""; });
+  ["topicFilter", "subtopicFilter", "tierFilter", "platformFilter", "venueFilter", "institutionFilter", "sourceFilter"].forEach((id) => { el(id).value = ""; });
+  updateSubtopicOptions({ preserve: false });
   el("projectLanguageFilter").value = "";
   el("projectSortFilter").value = "updated";
   el("projectSecondarySortFilter").value = "";
@@ -2974,15 +3618,24 @@ function bindEvents() {
     const key = input.dataset.scoreWeight || input.dataset.scoreWeightNumber;
     if (key) setScoreWeight(key, input.value);
   });
+  el("scoreWeightControls").addEventListener("change", (event) => {
+    const input = event.target.closest("[data-score-weight-number]");
+    if (!input) return;
+    const key = input.dataset.scoreWeightNumber;
+    if (input.value !== "") setScoreWeight(key, input.value);
+    input.value = formatWeightInput(state.recommendationWeightInputs?.[key]);
+  });
   el("scoreWeightPresets").addEventListener("click", (event) => {
     const button = event.target.closest("[data-score-preset]");
     const preset = button && SCORE_WEIGHT_PRESETS[button.dataset.scorePreset];
     if (!preset) return;
     state.recommendationWeights = { ...preset };
+    state.recommendationWeightInputs = scoreInputsFromWeights(preset);
     renderScoreEditor();
   });
   el("resetScoreWeights").addEventListener("click", () => {
     state.recommendationWeights = { ...DEFAULT_SCORE_WEIGHTS };
+    state.recommendationWeightInputs = scoreInputsFromWeights(DEFAULT_SCORE_WEIGHTS);
     renderScoreEditor();
   });
   el("applyScoreWeights").addEventListener("click", applyScoreWeights);
@@ -2992,8 +3645,13 @@ function bindEvents() {
     authorSuggestions();
     updateFilterSummary();
   });
-  ["topicFilter", "tierFilter", "platformFilter", "venueFilter", "institutionFilter", "sourceFilter", "dateFilter", "sortFilter", "secondarySortFilter"].forEach((id) => el(id).addEventListener("change", () => {
-    if (id === "topicFilter") state.topic = "";
+  el("topicFilter").addEventListener("change", () => {
+    state.topic = "";
+    updateSubtopicOptions();
+    updateFilterSummary();
+    loadPapers({ preserveSelection: false });
+  });
+  ["subtopicFilter", "tierFilter", "platformFilter", "venueFilter", "institutionFilter", "sourceFilter", "dateFilter", "sortFilter", "secondarySortFilter"].forEach((id) => el(id).addEventListener("change", () => {
     updateFilterSummary();
     loadPapers({ preserveSelection: false });
   }));
@@ -3001,8 +3659,8 @@ function bindEvents() {
     updateFilterSummary();
     loadPapers({ preserveSelection: false });
   }));
-  el("clearFilters").addEventListener("click", clearFilters);
-  el("emptyClear").addEventListener("click", clearFilters);
+  el("clearFilters").addEventListener("click", () => clearFilters());
+  el("emptyClear").addEventListener("click", () => clearFilters({ showAll: true }));
   el("refreshButton").addEventListener("click", triggerRefresh);
   el("logoutButton").addEventListener("click", async () => {
     try {
@@ -3101,6 +3759,8 @@ function bindEvents() {
     state.selectedId = null;
     state.selectedProject = null;
     el("topicFilter").value = topic;
+    el("subtopicFilter").value = "";
+    updateSubtopicOptions({ preserve: false });
     applyViewMode();
     syncActiveRailLink();
     setMobileNavigation(false);
@@ -3160,6 +3820,8 @@ function bindEvents() {
   el("readerPdfInput").addEventListener("change", () => importReaderPdf(el("readerPdfInput").files?.[0]));
   el("readerCloudButton").addEventListener("click", archiveReaderPdf);
   el("readerStorageMode").addEventListener("change", updateReaderStorageAction);
+  el("readerAtlasViewButton").addEventListener("click", () => sendPaperToAtlas(state.readerPaper));
+  el("readerAtlasAnalyzeButton").addEventListener("click", () => sendPaperToAtlas(state.readerPaper, true));
   el("projectReaderClose").addEventListener("click", () => el("projectReaderDialog").close());
   el("projectReaderDialog").addEventListener("close", () => {
     state.projectWorkspaceToken += 1;
@@ -3167,6 +3829,7 @@ function bindEvents() {
   });
   document.querySelectorAll("[data-project-tab]").forEach((button) => button.addEventListener("click", () => setProjectTab(button.dataset.projectTab)));
   document.querySelectorAll("[data-project-file-mode]").forEach((button) => button.addEventListener("click", () => renderProjectFiles(button.dataset.projectFileMode)));
+  el("projectAtlasButton").addEventListener("click", () => sendProjectToAtlas(state.projectWorkspace?.project));
   el("projectRefreshSource").addEventListener("click", () => state.projectWorkspace && openProjectReader(state.projectWorkspace.project.full_name, true));
   el("projectFileSearch").addEventListener("input", () => {
     if (el("projectFileSearch").value.trim() && state.projectFileMode !== "all") renderProjectFiles("all");
@@ -3198,6 +3861,7 @@ function bindEvents() {
   el("translateSelectionButton").addEventListener("click", translateSelectedText);
   el("clearTranslationSelection").addEventListener("click", () => clearTranslationSelection());
   el("pdfTextButton").addEventListener("click", openReaderText);
+  el("pdfFlowloomButton").addEventListener("click", () => { void sendCurrentPdfPageToFlowloom(); });
   let readerSelectionFrame = 0;
   document.addEventListener("selectionchange", () => {
     if (readerSelectionFrame) return;
@@ -3260,21 +3924,37 @@ async function init() {
   const now = new Date();
   const initialParams = new URLSearchParams(window.location.search);
   const initialPaperId = initialParams.get("paper");
+  const initialPaperReference = initialParams.get("paper_ref");
   const initialProject = initialParams.get("project");
   const requestedView = initialParams.get("view");
+  const initialPaperLocator = paperLocatorFromParams(initialParams);
+  const initialOpenReader = initialParams.get("reader") === "1"
+    || initialParams.get("action") === "resolve"
+    || Boolean(initialPaperLocator);
   if (initialParams.get("weekly") === "projects") state.weeklyKind = "projects";
   if (requestedView === "project-recommended") state.view = "recommended";
   else if (requestedView === "projects" || (initialProject && requestedView !== "recommended")) state.view = "projects";
   el("overviewDate").textContent = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric", weekday: "long" }).format(now);
   state.recommendationWeights = { ...DEFAULT_SCORE_WEIGHTS };
+  state.recommendationWeightInputs = scoreInputsFromWeights(DEFAULT_SCORE_WEIGHTS);
   state.appliedRecommendationWeights = { ...DEFAULT_SCORE_WEIGHTS };
   renderScoreEditor();
   bindEvents();
+  if ((initialPaperReference || initialPaperId) && initialOpenReader) {
+    prepareReaderLoading({
+      paperId: initialPaperId,
+      locator: initialPaperLocator,
+      title: "正在打开论文",
+      meta: initialPaperReference || initialPaperId,
+      statusTitle: "正在定位论文",
+      statusDetail: "解析论文身份并准备精读工作台",
+    });
+  }
   applyViewMode();
   syncActiveRailLink();
   const initialRequest = beginStreamRequest("正在初始化研究工作台");
   try {
-    await Promise.all([
+    const initialCatalogReady = Promise.all([
       loadAuthUser(),
       loadOptions(),
       loadStats(),
@@ -3282,7 +3962,24 @@ async function init() {
       loadScoreWeights(),
       loadPapers({ preserveSelection: false, request: initialRequest }),
     ]);
-    if (initialPaperId) await openPaper(initialPaperId, false);
+    let initialPaperReady = Promise.resolve();
+    if (initialPaperReference) {
+      initialPaperReady = openPaperReference(
+        initialPaperReference,
+        initialOpenReader,
+        initialPaperLocator,
+        initialCatalogReady,
+      );
+    } else if (initialPaperId) {
+      const readerReady = initialOpenReader
+        ? openReader(initialPaperId, initialPaperLocator)
+        : Promise.resolve();
+      const paperSelectionReady = initialCatalogReady.then(
+        () => openPaper(initialPaperId, false, Boolean(initialPaperLocator)),
+      );
+      initialPaperReady = Promise.all([readerReady, paperSelectionReady]);
+    }
+    await Promise.all([initialCatalogReady, initialPaperReady]);
     if (initialProject) await openProjectReader(initialProject);
   } catch (error) {
     toast(error.message, true);

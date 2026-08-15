@@ -9,6 +9,16 @@
 
 Paperfield is a local-first research workspace for embodied intelligence, large language models, multimodal research, and open-source project tracking. It aggregates papers and GitHub projects, finds lawful public PDFs for weekly selections in advance, and keeps close reading, translation, Q&A, source-code guidance, and reading history in one continuous interface.
 
+The repository now contains the complete active sources of `flowloom` and `ai-systems-courses` as one product, one repository, and one browser entry point:
+
+| Workspace | Unified route | Repository location |
+| --- | --- | --- |
+| Paper discovery and close reading | `/` | `src/paperfield/` |
+| Frontier radar, knowledge tree, embedded courses, and deep dossiers | `/atlas/` | `src/research_atlas/` + `content/courses/` |
+| Scientific figures and SVG editing | `/flowloom/` | `apps/flowloom/` |
+
+The embodied-AI knowledge tree and full lesson reader can be opened directly at [http://127.0.0.1:8765/atlas/?view=curriculum&track=embodied](http://127.0.0.1:8765/atlas/?view=curriculum&track=embodied). Legacy `/courses/...` links redirect to the corresponding Atlas lesson.
+
 This is the English project guide. The Chinese guide is the root `README.md`; the Japanese guide is in the same `docs/i18n/` folder. Historical roadmaps, duplicate documentation, and backup copies are not maintained.
 
 ## Core Capabilities
@@ -79,15 +89,19 @@ paper-scout/
 ```powershell
 cd G:\ps\paper-scout
 python -m pip install -r deploy\requirements.txt
-python src\paperfield\app.py
+.\scripts\build-platform.cmd
+.\scripts\run-platform.cmd
 ```
 
-Open [http://127.0.0.1:8765](http://127.0.0.1:8765). The first run initializes the local database and cache. Afterwards, refresh manually in the UI or let the background scheduler update on its configured interval.
+Open only [http://127.0.0.1:8765](http://127.0.0.1:8765). The first run initializes the local databases and cache. The unified launcher starts Atlas internally and mounts the built course and Flowloom sites under the same Paperfield origin. Stop all platform services with `.\scripts\stop-platform.cmd`.
 
 Common commands:
 
 ```powershell
-.\scripts\run.cmd
+.\scripts\run-platform.cmd
+.\scripts\stop-platform.cmd
+.\scripts\run-atlas-worker.cmd
+.\scripts\run-atlas-scanner.cmd
 .\scripts\refresh.cmd
 .\scripts\check.cmd
 ```
@@ -140,15 +154,17 @@ The container uses a named volume for data. Back up the `.env` file and the volu
 
 ```powershell
 python -m py_compile src\paperfield\app.py
+python -m py_compile src\research_atlas\app.py src\research_atlas\worker.py src\research_atlas\schema_validation.py
 node --check src\paperfield\static\app.js
+node --check src\research_atlas\static\app.js
 node --check src\paperfield\static\login.js
-python -m unittest discover -s tests -p test_core.py
+python -m unittest discover -s tests -v
 python scripts\build-release.py
 docker build -f deploy\docker\Dockerfile -t paperfield:test .
 docker compose -f deploy\compose.yaml config --quiet
 ```
 
-`scripts/build-release.py` packages only Git-tracked public files and additionally creates an empty `local/.env.example`. It refuses to put databases, logs, secrets, `local/`, or `data/` in a release package.
+`scripts/build-release.py` packages Git-tracked public files plus explicitly allowlisted unified-workspace sources and the required Flowloom/course production builds. It additionally creates an empty `local/.env.example` and refuses to include databases, logs, secrets, dependency trees, `local/`, or `data/`. The source repositories are not archived until a clean-clone build, license review, commit, and push have completed; provenance and import boundaries are recorded in `provenance.json` and `docs/MONOREPO_INTEGRATION.md`.
 
 ## Official Release Policy
 

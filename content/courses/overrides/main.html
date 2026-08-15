@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block extrahead %}
+  {{ super() }}
+  <script>
+    (() => {
+      const path = window.location.pathname;
+      document.documentElement.dataset.course = path.includes("/embodied/")
+        ? "embodied"
+        : path.includes("/llm/")
+          ? "llm"
+          : "hub";
+    })();
+  </script>
+{% endblock %}
+
+{% block announce %}
+  <nav class="platform-nav" aria-label="Paperfield 平台工作区">
+    <a href="/">论文阅读 <strong>Paperfield</strong></a>
+    <a href="/atlas/">前沿研究 <strong>Atlas</strong></a>
+    <span aria-current="page">系统学习 <strong>课程</strong></span>
+    <a href="/flowloom/">科研绘图 <strong>Flowloom</strong></a>
+  </nav>
+{% endblock %}
+

@@ -1,0 +1,492 @@
+{
+  "format": "flowloom-compiled-figure-showcase",
+  "version": 3,
+  "generatedAt": "2026-08-11T08:41:16.487Z",
+  "renderer": "task-aware-compile+serializePublicationSvg",
+  "editableMetadataVersion": 2,
+  "reviewWorkbench": {
+    "flagshipId": "vla-rt2-overview",
+    "reviewStatus": "needs-revision",
+    "rubricVersion": "top-conference-figure-v1",
+    "dimensions": [
+      {
+        "id": "composition",
+        "label": "构图",
+        "weight": 20,
+        "description": "主路径、面板比例与阅读顺序是否清晰。"
+      },
+      {
+        "id": "semantic-fidelity",
+        "label": "语义忠实度",
+        "weight": 20,
+        "description": "是否保留参考图中的条件、时序、迭代与架构差异。"
+      },
+      {
+        "id": "visual-hierarchy",
+        "label": "视觉层级",
+        "weight": 15,
+        "description": "焦点、主信息与辅助信息是否形成明确层级。"
+      },
+      {
+        "id": "graphic-language",
+        "label": "图形语言",
+        "weight": 15,
+        "description": "图元是否具有科研语义，而非通用业务流程图观感。"
+      },
+      {
+        "id": "typography",
+        "label": "文字系统",
+        "weight": 10,
+        "description": "字号、数学符号、换行与中英文层级是否专业。"
+      },
+      {
+        "id": "routing",
+        "label": "连线",
+        "weight": 10,
+        "description": "连线是否准确、克制、无穿越并能表达关系类型。"
+      },
+      {
+        "id": "publication-fit",
+        "label": "论文版面适配",
+        "weight": 10,
+        "description": "单栏、双栏、打印与缩放状态下是否仍可辨读。"
+      }
+    ],
+    "acceptanceCandidateThreshold": 4.2,
+    "cases": [
+      {
+        "id": "vla-rt2-overview",
+        "page": "index.html",
+        "taskType": "pdf-reconstruction",
+        "reviewStatus": "needs-revision",
+        "trainingRole": "gold-candidate",
+        "baselineRole": "hard-negative",
+        "reconstructionId": "rt2-figure-1-v1",
+        "latestHumanReview": {
+          "reviewedAt": "2026-08-10T15:45:36.321Z",
+          "status": "pending",
+          "weightedScore": 2.8,
+          "scores": {
+            "composition": 3,
+            "semantic-fidelity": 3,
+            "visual-hierarchy": 3,
+            "graphic-language": 3,
+            "typography": 2,
+            "routing": 2,
+            "publication-fit": 3
+          },
+          "findings": [
+            "参考图不一致"
+          ],
+          "artifactContentSha256": null,
+          "appliesToCurrentArtifact": false
+        },
+        "reference": {
+          "arxivId": "2307.15818",
+          "paperVersion": null,
+          "pdfPage": null,
+          "figureLabel": "Figure 1",
+          "imageUrl": "https://ar5iv.labs.arxiv.org/html/2307.15818/assets/x1.png",
+          "sha256": "8402b6eb00ac9441fc22f5c0ffef1dd29a02671c96363e5eda38398a49226d11",
+          "verifiedAt": "2026-08-09",
+          "numberingNote": "Figure 1; overview paragraph",
+          "licenseStatus": "analysis-only"
+        }
+      },
+      {
+        "id": "sim2real-humanoid-standing",
+        "page": "sim2real-humanoid-standing.html",
+        "taskType": "pdf-reconstruction",
+        "reviewStatus": "needs-revision",
+        "trainingRole": "hard-negative",
+        "baselineRole": "hard-negative",
+        "reconstructionId": "sim2real-humanoid-figure-2-v1",
+        "latestHumanReview": {
+          "reviewedAt": "2026-08-10T14:15:04.247Z",
+          "status": "pending",
+          "weightedScore": 1,
+          "scores": {
+            "composition": 1,
+            "semantic-fidelity": 1,
+            "visual-hierarchy": 1,
+            "graphic-language": 1,
+            "typography": 1,
+            "routing": 1,
+            "publication-fit": 1
+          },
+          "findings": [],
+          "artifactContentSha256": null,
+          "appliesToCurrentArtifact": false
+        },
+        "reference": {
+          "arxivId": "2502.08378",
+          "paperVersion": null,
+          "pdfPage": null,
+          "figureLabel": "Figure 2",
+          "imageUrl": "https://ar5iv.labs.arxiv.org/html/2502.08378/assets/x1.png",
+          "sha256": null,
+          "verifiedAt": null,
+          "numberingNote": "Figure 2 caption",
+          "licenseStatus": "analysis-only"
+        }
+      },
+      {
+        "id": "rl-humanoid-real-world",
+        "page": "rl-humanoid-real-world.html",
+        "taskType": "pdf-reconstruction",
+        "reviewStatus": "needs-revision",
+        "trainingRole": "hard-negative",
+        "baselineRole": "hard-negative",
+        "reconstructionId": "rl-humanoid-figure-2-v1",
+        "latestHumanReview": {
+          "reviewedAt": "2026-08-10T14:15:24.853Z",
+          "status": "pending",
+          "weightedScore": 1,
+          "scores": {
+            "composition": 1,
+            "semantic-fidelity": 1,
+            "visual-hierarchy": 1,
+            "graphic-language": 1,
+            "typography": 1,
+            "routing": 1,
+            "publication-fit": 1
+          },
+          "findings": [],
+          "artifactContentSha256": null,
+          "appliesToCurrentArtifact": false
+        },
+        "reference": {
+          "arxivId": "2303.03381",
+          "paperVersion": null,
+          "pdfPage": null,
+          "figureLabel": "Figure 2",
+          "imageUrl": "https://ar5iv.labs.arxiv.org/html/2303.03381/assets/x2.png",
+          "sha256": null,
+          "verifiedAt": null,
+          "numberingNote": "Figure 2 caption",
+          "licenseStatus": "analysis-only"
+        }
+      },
+      {
+        "id": "imitation-diffusion-policy",
+        "page": "imitation-diffusion-policy.html",
+        "taskType": "pdf-reconstruction",
+        "reviewStatus": "needs-revision",
+        "trainingRole": "gold",
+        "baselineRole": "gold",
+        "reconstructionId": "diffusion-policy-figure-2-v1",
+        "latestHumanReview": {
+          "reviewedAt": "2026-08-10T14:15:30.089Z",
+          "status": "pending",
+          "weightedScore": 5,
+          "scores": {
+            "composition": 5,
+            "semantic-fidelity": 5,
+            "visual-hierarchy": 5,
+            "graphic-language": 5,
+            "typography": 5,
+            "routing": 5,
+            "publication-fit": 5
+          },
+          "findings": [
+            "图元完全不具备科研语义"
+          ],
+          "artifactContentSha256": null,
+          "appliesToCurrentArtifact": false
+        },
+        "reference": {
+          "arxivId": "2303.04137",
+          "paperVersion": "v5",
+          "pdfPage": 3,
+          "figureLabel": "Figure 2 (arXiv PDF v5)",
+          "imageUrl": "https://ar5iv.labs.arxiv.org/html/2303.04137/assets/x3.png",
+          "sha256": "37a114a58b5e7e5eb70db5375befcdfc8a7b4637a5565daa5442b6fc8fe4c1d6",
+          "verifiedAt": "2026-08-09",
+          "numberingNote": "arXiv v5 PDF, page 3, Figure 2; the ar5iv DOM labels the same x3 asset as Figure 3",
+          "licenseStatus": "analysis-only"
+        }
+      },
+      {
+        "id": "world-model-gr1",
+        "page": "world-model-gr1.html",
+        "taskType": "pdf-reconstruction",
+        "reviewStatus": "needs-revision",
+        "trainingRole": "hard-negative",
+        "baselineRole": "hard-negative",
+        "reconstructionId": "world-model-gr1-figure-1-v1",
+        "latestHumanReview": {
+          "reviewedAt": "2026-08-10T14:15:35.883Z",
+          "status": "pending",
+          "weightedScore": 1,
+          "scores": {
+            "composition": 1,
+            "semantic-fidelity": 1,
+            "visual-hierarchy": 1,
+            "graphic-language": 1,
+            "typography": 1,
+            "routing": 1,
+            "publication-fit": 1
+          },
+          "findings": [],
+          "artifactContentSha256": null,
+          "appliesToCurrentArtifact": false
+        },
+        "reference": {
+          "arxivId": "2312.13139",
+          "paperVersion": null,
+          "pdfPage": null,
+          "figureLabel": "Figure 1",
+          "imageUrl": "https://ar5iv.labs.arxiv.org/html/2312.13139/assets/x1.png",
+          "sha256": null,
+          "verifiedAt": null,
+          "numberingNote": "Figure 1 caption",
+          "licenseStatus": "analysis-only"
+        }
+      },
+      {
+        "id": "robot-data-bridge-policy",
+        "page": "robot-data-bridge-policy.html",
+        "taskType": "pdf-reconstruction",
+        "reviewStatus": "needs-revision",
+        "trainingRole": "hard-negative",
+        "baselineRole": "hard-negative",
+        "reconstructionId": "robot-data-bridge-figure-1-v1",
+        "latestHumanReview": {
+          "reviewedAt": "2026-08-10T14:15:40.430Z",
+          "status": "pending",
+          "weightedScore": 1,
+          "scores": {
+            "composition": 1,
+            "semantic-fidelity": 1,
+            "visual-hierarchy": 1,
+            "graphic-language": 1,
+            "typography": 1,
+            "routing": 1,
+            "publication-fit": 1
+          },
+          "findings": [],
+          "artifactContentSha256": null,
+          "appliesToCurrentArtifact": false
+        },
+        "reference": {
+          "arxivId": "2308.12952",
+          "paperVersion": null,
+          "pdfPage": null,
+          "figureLabel": "Figure 1",
+          "imageUrl": "https://ar5iv.labs.arxiv.org/html/2308.12952/assets/x1.png",
+          "sha256": null,
+          "verifiedAt": null,
+          "numberingNote": "Figure 1 caption",
+          "licenseStatus": "analysis-only"
+        }
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "id": "vla-rt2-overview",
+      "title": "RT-2 Figure 1 editable reconstruction",
+      "fileName": "vla-rt2-overview.svg",
+      "widthUnits": 822,
+      "heightUnits": 304,
+      "widthMm": 160,
+      "heightMm": 59.173,
+      "audit": {
+        "valid": true,
+        "score": 100,
+        "issues": [],
+        "metrics": {
+          "panelCount": 3,
+          "elementCount": 69,
+          "relationCount": 13,
+          "editableNodeCount": 127,
+          "editableTextCount": 55,
+          "tokenCount": 21,
+          "analysisImageRegionCount": 7,
+          "editableImageCount": 7,
+          "licensedAssetImageCount": 0,
+          "measuredEvidenceImageCount": 7,
+          "directPaperCropImageCount": 7,
+          "syntheticAssetImageCount": 0,
+          "vectorFallbackImageRegionCount": 0,
+          "embeddedReferenceImageCount": 0,
+          "minimumFontSize": 7.5
+        }
+      },
+      "compiler": "figure-reconstruction-v1",
+      "locked": false,
+      "contentSha256": "48f32df16cb057ae7436b9cbcaef5a821713876f60fa2e7d0d3ce21780924676"
+    },
+    {
+      "id": "sim2real-humanoid-standing",
+      "title": "Sim2Real humanoid standing control Figure 2 reconstruction",
+      "fileName": "sim2real-humanoid-standing.svg",
+      "widthUnits": 872,
+      "heightUnits": 390,
+      "widthMm": 160,
+      "heightMm": 71.56,
+      "audit": {
+        "valid": true,
+        "score": 100,
+        "issues": [],
+        "metrics": {
+          "panelCount": 2,
+          "elementCount": 43,
+          "relationCount": 14,
+          "editableNodeCount": 83,
+          "editableTextCount": 37,
+          "tokenCount": 0,
+          "analysisImageRegionCount": 1,
+          "editableImageCount": 1,
+          "licensedAssetImageCount": 0,
+          "measuredEvidenceImageCount": 1,
+          "directPaperCropImageCount": 1,
+          "syntheticAssetImageCount": 0,
+          "vectorFallbackImageRegionCount": 0,
+          "embeddedReferenceImageCount": 0,
+          "minimumFontSize": 14
+        }
+      },
+      "compiler": "figure-reconstruction-v1",
+      "locked": false,
+      "contentSha256": "8fda092100920b67e6b672bee734522656311838e9c7e9c1a30e5332a64961de"
+    },
+    {
+      "id": "rl-humanoid-real-world",
+      "title": "Real-world humanoid locomotion Figure 2 reconstruction",
+      "fileName": "rl-humanoid-real-world.svg",
+      "widthUnits": 922,
+      "heightUnits": 844,
+      "widthMm": 160,
+      "heightMm": 146.464,
+      "audit": {
+        "valid": true,
+        "score": 100,
+        "issues": [],
+        "metrics": {
+          "panelCount": 2,
+          "elementCount": 63,
+          "relationCount": 3,
+          "editableNodeCount": 69,
+          "editableTextCount": 16,
+          "tokenCount": 0,
+          "analysisImageRegionCount": 12,
+          "editableImageCount": 12,
+          "licensedAssetImageCount": 0,
+          "measuredEvidenceImageCount": 12,
+          "directPaperCropImageCount": 12,
+          "syntheticAssetImageCount": 0,
+          "vectorFallbackImageRegionCount": 0,
+          "embeddedReferenceImageCount": 0,
+          "minimumFontSize": 8.5
+        }
+      },
+      "compiler": "figure-reconstruction-v1",
+      "locked": false,
+      "contentSha256": "595af6d4c079b8c64dfabe2b2410fe4ffb9d6002ae6c5f1b344d0cca247de61b"
+    },
+    {
+      "id": "imitation-diffusion-policy",
+      "title": "Diffusion Policy mechanism map",
+      "fileName": "imitation-diffusion-policy.svg",
+      "widthUnits": 830,
+      "heightUnits": 227,
+      "widthMm": 83,
+      "heightMm": 22.7,
+      "audit": {
+        "valid": true,
+        "score": 93,
+        "issues": [
+          {
+            "severity": "warning",
+            "code": "orphan-elements",
+            "detail": "4 个元素没有任何关系。"
+          }
+        ],
+        "metrics": {
+          "nodeCount": 4,
+          "edgeCount": 0,
+          "stageCount": 3,
+          "containmentErrors": 0,
+          "overlapPairs": 0,
+          "orphanNodes": 4,
+          "invalidEdges": 0,
+          "feedbackEdges": 0,
+          "minimumSiblingGap": 16,
+          "focalCount": 3
+        }
+      },
+      "compiler": "figure-plan-v1",
+      "locked": true,
+      "contentSha256": "9d44bf2fcc90df13efd619a88d3be4e216a26fcfc91f5bb1704dad571474cf1f"
+    },
+    {
+      "id": "world-model-gr1",
+      "title": "GR-1 video generative pre-training Figure 1 reconstruction",
+      "fileName": "world-model-gr1.svg",
+      "widthUnits": 876,
+      "heightUnits": 490,
+      "widthMm": 160,
+      "heightMm": 89.498,
+      "audit": {
+        "valid": true,
+        "score": 100,
+        "issues": [],
+        "metrics": {
+          "panelCount": 2,
+          "elementCount": 79,
+          "relationCount": 31,
+          "editableNodeCount": 165,
+          "editableTextCount": 54,
+          "tokenCount": 0,
+          "analysisImageRegionCount": 5,
+          "editableImageCount": 5,
+          "licensedAssetImageCount": 0,
+          "measuredEvidenceImageCount": 5,
+          "directPaperCropImageCount": 5,
+          "syntheticAssetImageCount": 0,
+          "vectorFallbackImageRegionCount": 0,
+          "embeddedReferenceImageCount": 0,
+          "minimumFontSize": 8.5
+        }
+      },
+      "compiler": "figure-reconstruction-v1",
+      "locked": false,
+      "contentSha256": "616e7efae963471fe2f328bbcf5029250906df60a02840155000237fd5cd3a5d"
+    },
+    {
+      "id": "robot-data-bridge-policy",
+      "title": "BridgeData V2 robot data Figure 1 reconstruction",
+      "fileName": "robot-data-bridge-policy.svg",
+      "widthUnits": 830,
+      "heightUnits": 460,
+      "widthMm": 160,
+      "heightMm": 88.675,
+      "audit": {
+        "valid": true,
+        "score": 100,
+        "issues": [],
+        "metrics": {
+          "panelCount": 4,
+          "elementCount": 1314,
+          "relationCount": 4,
+          "editableNodeCount": 1329,
+          "editableTextCount": 8,
+          "tokenCount": 0,
+          "analysisImageRegionCount": 4,
+          "editableImageCount": 4,
+          "licensedAssetImageCount": 0,
+          "measuredEvidenceImageCount": 4,
+          "directPaperCropImageCount": 4,
+          "syntheticAssetImageCount": 0,
+          "vectorFallbackImageRegionCount": 0,
+          "embeddedReferenceImageCount": 0,
+          "minimumFontSize": 8.2
+        }
+      },
+      "compiler": "figure-reconstruction-v1",
+      "locked": false,
+      "contentSha256": "f596bb7766f8368dbf9e7b6d8fe62802c780b0c566401cc20c8d18430aa79ece"
+    }
+  ]
+}

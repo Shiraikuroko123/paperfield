@@ -1,0 +1,12 @@
+{# Keep the repository link without querying GitHub's release API. #}
+<a
+  href="{{ config.repo_url }}"
+  title="{{ lang.t('source') }}"
+  aria-label="{{ lang.t('source') }}"
+  class="md-source md-source--icon-only"
+>
+  <div class="md-source__icon md-icon">
+    {% set icon = config.theme.icon.repo or "fontawesome/brands/git-alt" %}
+    {% include ".icons/" ~ icon ~ ".svg" %}
+  </div>
+</a>

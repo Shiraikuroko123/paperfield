@@ -1,0 +1,32 @@
+{
+  "format": "flowloom-human-figure-review",
+  "version": 1,
+  "caseId": "world-model-gr1",
+  "rubricVersion": "top-conference-figure-v1",
+  "reviewedAt": "2026-08-10T14:15:35.883Z",
+  "status": "pending",
+  "scores": {
+    "composition": 1,
+    "semantic-fidelity": 1,
+    "visual-hierarchy": 1,
+    "graphic-language": 1,
+    "typography": 1,
+    "routing": 1,
+    "publication-fit": 1
+  },
+  "weightedScore": 1,
+  "gates": {},
+  "findings": [],
+  "reference": {
+    "arxivId": "2312.13139",
+    "paperVersion": "",
+    "pdfPage": null,
+    "figureLabel": "Figure 1",
+    "sha256": null,
+    "sourceLocator": "Figure 1 caption"
+  },
+  "compilerAudit": {
+    "purpose": "structural-only",
+    "excludedFromHumanScore": true
+  }
+}

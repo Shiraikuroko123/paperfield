@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Flowloom 强化学习 论文方法图并排评审台：对照论文原图进行人工质量验收。" />
+  <meta name="theme-color" content="#f3f5f6" />
+  <meta name="robots" content="noindex,nofollow" />
+  <link rel="icon" href="../../favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="./review.css?v=2026-08-11T08%3A41%3A16.487Z" />
+  <title>Flowloom Figure Review · 强化学习</title>
+</head>
+<body>
+  <a class="skip-link" href="#flagship-review">跳到当前案例评审</a>
+  <header class="topbar" id="top">
+    <div class="topbar-inner">
+      <a class="product-lockup" href="#top" aria-label="Flowloom Figure Review 首页">
+        <strong>Flowloom</strong><span>Figure Review</span>
+      </a>
+      <div class="status-cluster">
+        <span class="build-label">RECONSTRUCTION v1 · REV 595af6d4c079</span>
+        <output class="review-status is-pending" id="reviewStatus">待复评</output>
+      </div>
+    </div>
+  </header>
+  <nav class="casebar" aria-label="具身智能图形基准">
+    <div class="casebar-inner"><a class="case-tab" href="./index.html">
+      <span>01</span>VLA
+    </a><a class="case-tab" href="./sim2real-humanoid-standing.html">
+      <span>02</span>Sim2Real
+    </a><a class="case-tab is-active" href="#flagship-review" aria-current="page">
+      <span>03</span>强化学习
+    </a><a class="case-tab" href="./imitation-diffusion-policy.html">
+      <span>04</span>Diffusion Policy <b class="case-tab-badge">Gold</b>
+    </a><a class="case-tab" href="./world-model-gr1.html">
+      <span>05</span>世界模型
+    </a><a class="case-tab" href="./robot-data-bridge-policy.html">
+      <span>06</span>机器人数据
+    </a></div>
+  </nav>
+
+  <main>
+    <section class="case-intro" id="flagship-review" aria-labelledby="flagship-title">
+      <div class="case-title-block">
+        <p class="case-context">基准案例 03 / 06 · Figure 2</p>
+        <h1 id="flagship-title">强化学习</h1>
+        <p class="case-summary">Rows A-C show physical disturbances and payloads; row D compares simulated terrain and success-rate outcomes.</p>
+      </div>
+      <dl class="evidence-facts" aria-label="参考证据">
+        <div><dt>论文</dt><dd>2303.03381</dd></div>
+        <div><dt>PDF 定位</dt><dd>Figure 2</dd></div>
+        <div><dt>来源图哈希</dt><dd title="pending">待缓存核验</dd></div>
+        <div><dt>当前状态</dt><dd>pending-rereview</dd></div>
+      </dl>
+    </section>
+
+    <section class="comparison-tool" aria-labelledby="comparison-title">
+      <div class="tool-toolbar">
+        <div>
+          <h2 id="comparison-title">原图与 Flowloom 输出</h2>
+          <span>同一语义范围 · 独立缩放 · 同步滚动</span>
+        </div>
+        <div class="toolbar-controls">
+          <div class="segmented-control" aria-label="对照模式">
+            <button type="button" class="is-active" data-compare-mode="split" aria-pressed="true">并排</button>
+            <button type="button" data-compare-mode="reference" aria-pressed="false">原图</button>
+            <button type="button" data-compare-mode="output" aria-pressed="false">Flowloom</button>
+          </div>
+          <div class="zoom-control">
+            <button type="button" data-zoom-step="-10" aria-label="缩小" title="缩小">−</button>
+            <label><span class="sr-only">缩放比例</span><input id="zoomRange" type="range" min="80" max="180" step="10" value="100" /></label>
+            <output id="zoomValue">100%</output>
+            <button type="button" data-zoom-step="10" aria-label="放大" title="放大">+</button>
+            <button type="button" data-zoom-reset aria-label="重置缩放" title="重置缩放">↺</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="comparison-grid" id="comparisonGrid" data-mode="split">
+        <figure class="compare-pane is-reference" data-compare-pane="reference">
+          <header>
+            <div><span class="pane-kicker">论文参考</span><strong>Figure 2</strong></div>
+            <span class="asset-state">远程原图 · 仅分析</span>
+          </header>
+          <div class="media-viewport" tabindex="0" aria-label="论文原图可滚动视口">
+            <div class="media-canvas">
+              <img
+                src="https://ar5iv.labs.arxiv.org/html/2303.03381/assets/x2.png"
+                alt="Indoor and simulation experiments test disturbances, terrains, and payloads before a subset of scenarios is replicated on hardware."
+                width="461"
+                height="422"
+                loading="eager"
+                fetchpriority="high"
+                referrerpolicy="no-referrer"
+                data-media-image
+              />
+              <div class="media-error" hidden>远程原图未加载。<a href="https://arxiv.org/pdf/2303.03381" target="_blank" rel="noreferrer">打开论文 PDF</a></div>
+            </div>
+          </div>
+          <figcaption>Indoor and simulation experiments test disturbances, terrains, and payloads before a subset of scenarios is replicated on hardware.</figcaption>
+        </figure>
+
+        <figure class="compare-pane is-output" data-compare-pane="output">
+          <header>
+            <div><span class="pane-kicker">Flowloom 编译</span><strong>Real-world humanoid locomotion Figure 2 reconstruction</strong></div>
+            <span class="asset-state">SVG · 可编辑元数据</span>
+          </header>
+          <div class="media-viewport" tabindex="0" aria-label="Flowloom 输出可滚动视口">
+            <div class="media-canvas">
+              <img
+                src="./rl-humanoid-real-world.svg?v=595af6d4c079"
+                alt="Flowloom 编译的 Real-world humanoid locomotion Figure 2 reconstruction 方法图"
+                width="922"
+                height="844"
+                loading="eager"
+                data-media-image
+              />
+              <div class="media-error" hidden>编译 SVG 未加载。</div>
+            </div>
+          </div>
+          <figcaption>Rows A-C show physical disturbances and payloads; row D compares simulated terrain and success-rate outcomes.</figcaption>
+        </figure>
+      </div>
+
+      <div class="provenance-strip">
+        <p><strong>编号核验</strong> Figure 2 caption。评审以论文 PDF 为准。</p>
+        <nav aria-label="当前案例文件">
+          <a href="./rl-humanoid-real-world.svg?v=595af6d4c079">打开 SVG</a>
+          <a href="./rl-humanoid-real-world.svg?v=595af6d4c079" download>下载 SVG</a>
+          <a href="https://arxiv.org/pdf/2303.03381" target="_blank" rel="noreferrer">论文 PDF</a>
+          <a href="https://arxiv.org/abs/2303.03381" target="_blank" rel="noreferrer">arXiv</a>
+        </nav>
+      </div>
+    </section>
+
+    <section class="review-section" aria-labelledby="rubric-title">
+      <form class="rubric-panel" id="reviewForm">
+        <header class="section-heading">
+          <div>
+            <h2 id="rubric-title">人工视觉评分</h2>
+            <p>1 表示明显失真，5 表示达到目标质量。结构分不参与本评分。</p>
+          </div>
+          <span>top-conference-figure-v1</span>
+        </header>
+        <div class="rubric-scale" aria-hidden="true"><span>1 · 失真</span><span>3 · 可用</span><span>5 · 顶会级</span></div>
+        <div class="rubric-rows">
+    <div class="rubric-row" data-dimension="composition" data-weight="20">
+      <div class="rubric-copy">
+        <div><strong>构图</strong><span>20%</span></div>
+        <p>主路径、面板比例与阅读顺序是否清晰。</p>
+      </div>
+      <fieldset class="score-fieldset">
+        <legend class="sr-only">构图评分</legend>
+        
+    <label class="score-option" title="1 / 5">
+      <input type="radio" name="score-composition" value="1" />
+      <span>1</span>
+    </label>
+    <label class="score-option" title="2 / 5">
+      <input type="radio" name="score-composition" value="2" />
+      <span>2</span>
+    </label>
+    <label class="score-option" title="3 / 5">
+      <input type="radio" name="score-composition" value="3" />
+      <span>3</span>
+    </label>
+    <label class="score-option" title="4 / 5">
+      <input type="radio" name="score-composition" value="4" />
+      <span>4</span>
+    </label>
+    <label class="score-option" title="5 / 5">
+      <input type="radio" name="score-composition" value="5" />
+      <span>5</span>
+    </label>
+      </fieldset>
+    </div>
+    <div class="rubric-row" data-dimension="semantic-fidelity" data-weight="20">
+      <div class="rubric-copy">
+        <div><strong>语义忠实度</strong><span>20%</span></div>
+        <p>是否保留参考图中的条件、时序、迭代与架构差异。</p>
+      </div>
+      <fieldset class="score-fieldset">
+        <legend class="sr-only">语义忠实度评分</legend>
+        
+    <label class="score-option" title="1 / 5">
+      <input type="radio" name="score-semantic-fidelity" value="1" />
+      <span>1</span>
+    </label>
+    <label class="score-option" title="2 / 5">
+      <input type="radio" name="score-semantic-fidelity" value="2" />
+      <span>2</span>
+    </label>
+    <label class="score-option" title="3 / 5">
+      <input type="radio" name="score-semantic-fidelity" value="3" />
+      <span>3</span>
+    </label>
+    <label class="score-option" title="4 / 5">
+      <input type="radio" name="score-semantic-fidelity" value="4" />
+      <span>4</span>
+    </label>
+    <label class="score-option" title="5 / 5">
+      <input type="radio" name="score-semantic-fidelity" value="5" />
+      <span>5</span>
+    </label>
+      </fieldset>
+    </div>
+    <div class="rubric-row" data-dimension="visual-hierarchy" data-weight="15">
+      <div class="rubric-copy">
+        <div><strong>视觉层级</strong><span>15%</span></div>
+        <p>焦点、主信息与辅助信息是否形成明确层级。</p>
+      </div>
+      <fieldset class="score-fieldset">
+        <legend class="sr-only">视觉层级评分</legend>
+        
+    <label class="score-option" title="1 / 5">
+      <input type="radio" name="score-visual-hierarchy" value="1" />
+      <span>1</span>
+    </label>
+    <label class="score-option" title="2 / 5">
+      <input type="radio" name="score-visual-hierarchy" value="2" />
+      <span>2</span>
+    </label>
+    <label class="score-option" title="3 / 5">
+      <input type="radio" name="score-visual-hierarchy" value="3" />
+      <span>3</span>
+    </label>
+    <label class="score-option" title="4 / 5">
+      <input type="radio" name="score-visual-hierarchy" value="4" />
+      <span>4</span>
+    </label>
+    <label class="score-option" title="5 / 5">
+      <input type="radio" name="score-visual-hierarchy" value="5" />
+      <span>5</span>
+    </label>
+      </fieldset>
+    </div>
+    <div class="rubric-row" data-dimension="graphic-language" data-weight="15">
+      <div class="rubric-copy">
+        <div><strong>图形语言</strong><span>15%</span></div>
+        <p>图元是否具有科研语义，而非通用业务流程图观感。</p>
+      </div>
+      <fieldset class="score-fieldset">
+        <legend class="sr-only">图形语言评分</legend>
+        
+    <label class="score-option" title="1 / 5">
+      <input type="radio" name="score-graphic-language" value="1" />
+      <span>1</span>
+    </label>
+    <label class="score-option" title="2 / 5">
+      <input type="radio" name="score-graphic-language" value="2" />
+      <span>2</span>
+    </label>
+    <label class="score-option" title="3 / 5">
+      <input type="radio" name="score-graphic-language" value="3" />
+      <span>3</span>
+    </label>
+    <label class="score-option" title="4 / 5">
+      <input type="radio" name="score-graphic-language" value="4" />
+      <span>4</span>
+    </label>
+    <label class="score-option" title="5 / 5">
+      <input type="radio" name="score-graphic-language" value="5" />
+      <span>5</span>
+    </label>
+      </fieldset>
+    </div>
+    <div class="rubric-row" data-dimension="typography" data-weight="10">
+      <div class="rubric-copy">
+        <div><strong>文字系统</strong><span>10%</span></div>
+        <p>字号、数学符号、换行与中英文层级是否专业。</p>
+      </div>
+      <fieldset class="score-fieldset">
+        <legend class="sr-only">文字系统评分</legend>
+        
+    <label class="score-option" title="1 / 5">
+      <input type="radio" name="score-typography" value="1" />
+      <span>1</span>
+    </label>
+    <label class="score-option" title="2 / 5">
+      <input type="radio" name="score-typography" value="2" />
+      <span>2</span>
+    </label>
+    <label class="score-option" title="3 / 5">
+      <input type="radio" name="score-typography" value="3" />
+      <span>3</span>
+    </label>
+    <label class="score-option" title="4 / 5">
+      <input type="radio" name="score-typography" value="4" />
+      <span>4</span>
+    </label>
+    <label class="score-option" title="5 / 5">
+      <input type="radio" name="score-typography" value="5" />
+      <span>5</span>
+    </label>
+      </fieldset>
+    </div>
+    <div class="rubric-row" data-dimension="routing" data-weight="10">
+      <div class="rubric-copy">
+        <div><strong>连线</strong><span>10%</span></div>
+        <p>连线是否准确、克制、无穿越并能表达关系类型。</p>
+      </div>
+      <fieldset class="score-fieldset">
+        <legend class="sr-only">连线评分</legend>
+        
+    <label class="score-option" title="1 / 5">
+      <input type="radio" name="score-routing" value="1" />
+      <span>1</span>
+    </label>
+    <label class="score-option" title="2 / 5">
+      <input type="radio" name="score-routing" value="2" />
+      <span>2</span>
+    </label>
+    <label class="score-option" title="3 / 5">
+      <input type="radio" name="score-routing" value="3" />
+      <span>3</span>
+    </label>
+    <label class="score-option" title="4 / 5">
+      <input type="radio" name="score-routing" value="4" />
+      <span>4</span>
+    </label>
+    <label class="score-option" title="5 / 5">
+      <input type="radio" name="score-routing" value="5" />
+      <span>5</span>
+    </label>
+      </fieldset>
+    </div>
+    <div class="rubric-row" data-dimension="publication-fit" data-weight="10">
+      <div class="rubric-copy">
+        <div><strong>论文版面适配</strong><span>10%</span></div>
+        <p>单栏、双栏、打印与缩放状态下是否仍可辨读。</p>
+      </div>
+      <fieldset class="score-fieldset">
+        <legend class="sr-only">论文版面适配评分</legend>
+        
+    <label class="score-option" title="1 / 5">
+      <input type="radio" name="score-publication-fit" value="1" />
+      <span>1</span>
+    </label>
+    <label class="score-option" title="2 / 5">
+      <input type="radio" name="score-publication-fit" value="2" />
+      <span>2</span>
+    </label>
+    <label class="score-option" title="3 / 5">
+      <input type="radio" name="score-publication-fit" value="3" />
+      <span>3</span>
+    </label>
+    <label class="score-option" title="4 / 5">
+      <input type="radio" name="score-publication-fit" value="4" />
+      <span>4</span>
+    </label>
+    <label class="score-option" title="5 / 5">
+      <input type="radio" name="score-publication-fit" value="5" />
+      <span>5</span>
+    </label>
+      </fieldset>
+    </div></div>
+      </form>
+
+      <aside class="review-summary" aria-labelledby="decision-title">
+        <header>
+          <span>人工验收</span>
+          <h2 id="decision-title">评分结论</h2>
+        </header>
+        <div class="score-readout">
+          <output id="weightedScore">--</output><span>/ 5.00</span>
+        </div>
+        <p class="review-history">上一版人工评分 1.00 / 5，本版 SVG 待复评。</p>
+        <dl class="review-progress">
+          <div><dt>已评分维度</dt><dd id="dimensionProgress">0 / 7</dd></div>
+          <div><dt>硬门槛</dt><dd id="gateProgress">0 / 4</dd></div>
+          <div><dt>候选线</dt><dd>4.20 / 5.00</dd></div>
+        </dl>
+
+        <fieldset class="gate-list">
+          <legend>必须同时满足</legend>
+          <label><input type="checkbox" data-review-gate="main-path" /> <span>5 秒内能识别主路径</span></label>
+          <label><input type="checkbox" data-review-gate="not-business" /> <span>不再像通用业务流程图</span></label>
+          <label><input type="checkbox" data-review-gate="print-readable" /> <span>单栏、双栏和打印均可读</span></label>
+          <label><input type="checkbox" data-review-gate="semantic-match" /> <span>关键语义与参考图一致</span></label>
+        </fieldset>
+
+        <label class="notes-field" for="reviewNotes"><span>评审意见</span><textarea id="reviewNotes" rows="5" placeholder="记录最影响质量的差距"></textarea></label>
+
+        <fieldset class="decision-control">
+          <legend>人工决定</legend>
+          <label><input type="radio" name="review-decision" value="needs-revision" /><span>需要修改</span></label>
+          <label id="acceptDecision"><input type="radio" name="review-decision" value="accepted" disabled /><span>接受本图</span></label>
+        </fieldset>
+        <p class="decision-reason" id="decisionReason">完成 7 个维度与 4 个硬门槛后，才可人工接受。</p>
+        <div class="review-actions">
+          <button type="button" class="primary-action" id="exportReview">导出评审 JSON</button>
+          <button type="button" class="secondary-action" id="resetReview">清空</button>
+        </div>
+      </aside>
+    </section>
+
+    <section class="queue-section" aria-labelledby="queue-title">
+      <header class="section-heading">
+        <div><h2 id="queue-title">其余五个候选案例</h2><p>每个案例都可进入独立对照页评分；只有完成人工验收后才晋级 Gold。</p></div>
+        <span>结构检查 ≠ 视觉验收</span>
+      </header>
+      <div class="queue-list">
+      <article class="queue-row" id="queue-vla-rt2-overview">
+        <div class="queue-index">VLA</div>
+        <div class="queue-title">
+          <strong>RT-2 Figure 1 editable reconstruction</strong>
+          <span>RT-2: Vision-Language-Action Models Transfer Web Knowledge to Robotic Control (2023)</span>
+        </div>
+        <dl class="queue-metrics">
+          <div><dt>结构检查</dt><dd>100</dd></div>
+          <div><dt>人工评分</dt><dd>历史 2.80 · 待复评</dd></div>
+        </dl>
+        <nav class="queue-actions" aria-label="RT-2 Figure 1 editable reconstruction文件">
+          <a class="queue-review-link" href="./index.html">评分</a>
+          <a href="./vla-rt2-overview.svg?v=48f32df16cb0">SVG</a>
+          <a href="https://arxiv.org/pdf/2307.15818" target="_blank" rel="noreferrer">PDF</a>
+        </nav>
+      </article>
+      <article class="queue-row" id="queue-sim2real-humanoid-standing">
+        <div class="queue-index">Sim2Real</div>
+        <div class="queue-title">
+          <strong>Sim2Real humanoid standing control Figure 2 reconstruction</strong>
+          <span>Learning Humanoid Standing-up Control across Diverse Postures (2025)</span>
+        </div>
+        <dl class="queue-metrics">
+          <div><dt>结构检查</dt><dd>100</dd></div>
+          <div><dt>人工评分</dt><dd>历史 1.00 · 待复评</dd></div>
+        </dl>
+        <nav class="queue-actions" aria-label="Sim2Real humanoid standing control Figure 2 reconstruction文件">
+          <a class="queue-review-link" href="./sim2real-humanoid-standing.html">评分</a>
+          <a href="./sim2real-humanoid-standing.svg?v=8fda09210092">SVG</a>
+          <a href="https://arxiv.org/pdf/2502.08378" target="_blank" rel="noreferrer">PDF</a>
+        </nav>
+      </article>
+      <article class="queue-row" id="queue-imitation-diffusion-policy">
+        <div class="queue-index">Diffusion Policy</div>
+        <div class="queue-title">
+          <strong>Diffusion Policy mechanism map</strong>
+          <span>Diffusion Policy: Visuomotor Policy Learning via Action Diffusion (2023)</span>
+        </div>
+        <dl class="queue-metrics">
+          <div><dt>结构检查</dt><dd>93</dd></div>
+          <div><dt>人工评分</dt><dd>历史 5.00 · 待复评</dd></div>
+        </dl>
+        <nav class="queue-actions" aria-label="Diffusion Policy mechanism map文件">
+          <a class="queue-review-link" href="./imitation-diffusion-policy.html">评分</a>
+          <a href="./imitation-diffusion-policy.svg?v=9d44bf2fcc90">SVG</a>
+          <a href="https://arxiv.org/pdf/2303.04137" target="_blank" rel="noreferrer">PDF</a>
+        </nav>
+      </article>
+      <article class="queue-row" id="queue-world-model-gr1">
+        <div class="queue-index">世界模型</div>
+        <div class="queue-title">
+          <strong>GR-1 video generative pre-training Figure 1 reconstruction</strong>
+          <span>Unleashing Large-Scale Video Generative Pre-training for Visual Robot Manipulation (2023)</span>
+        </div>
+        <dl class="queue-metrics">
+          <div><dt>结构检查</dt><dd>100</dd></div>
+          <div><dt>人工评分</dt><dd>历史 1.00 · 待复评</dd></div>
+        </dl>
+        <nav class="queue-actions" aria-label="GR-1 video generative pre-training Figure 1 reconstruction文件">
+          <a class="queue-review-link" href="./world-model-gr1.html">评分</a>
+          <a href="./world-model-gr1.svg?v=616e7efae963">SVG</a>
+          <a href="https://arxiv.org/pdf/2312.13139" target="_blank" rel="noreferrer">PDF</a>
+        </nav>
+      </article>
+      <article class="queue-row" id="queue-robot-data-bridge-policy">
+        <div class="queue-index">机器人数据</div>
+        <div class="queue-title">
+          <strong>BridgeData V2 robot data Figure 1 reconstruction</strong>
+          <span>BridgeData V2: A Dataset for Robot Learning at Scale (2023)</span>
+        </div>
+        <dl class="queue-metrics">
+          <div><dt>结构检查</dt><dd>100</dd></div>
+          <div><dt>人工评分</dt><dd>历史 1.00 · 待复评</dd></div>
+        </dl>
+        <nav class="queue-actions" aria-label="BridgeData V2 robot data Figure 1 reconstruction文件">
+          <a class="queue-review-link" href="./robot-data-bridge-policy.html">评分</a>
+          <a href="./robot-data-bridge-policy.svg?v=f596bb7766f8">SVG</a>
+          <a href="https://arxiv.org/pdf/2308.12952" target="_blank" rel="noreferrer">PDF</a>
+        </nav>
+      </article></div>
+    </section>
+  </main>
+
+  <footer>
+    <p>论文元数据：arXiv API <code>id_list=2303.03381</code>，访问日期 2026-08-09。参考资源仅用于本地比较分析；发布前需复核原作者与出版许可。</p>
+    <p>生成时间：2026-08-11T08:41:16.487Z。</p>
+  </footer>
+  <script id="review-case-data" type="application/json">{"caseId":"rl-humanoid-real-world","rubricVersion":"top-conference-figure-v1","reviewStatus":"pending","humanReview":null,"historicalHumanReview":{"format":"flowloom-human-figure-review","version":1,"caseId":"rl-humanoid-real-world","rubricVersion":"top-conference-figure-v1","reviewedAt":"2026-08-10T14:15:24.853Z","status":"pending","scores":{"composition":1,"semantic-fidelity":1,"visual-hierarchy":1,"graphic-language":1,"typography":1,"routing":1,"publication-fit":1},"weightedScore":1,"gates":{},"findings":[],"reference":{"arxivId":"2303.03381","paperVersion":"","pdfPage":null,"figureLabel":"Figure 2","sha256":null,"sourceLocator":"Figure 2 caption"},"compilerAudit":{"purpose":"structural-only","excludedFromHumanScore":true}},"artifact":{"fileName":"rl-humanoid-real-world.svg","contentSha256":"595af6d4c079b8c64dfabe2b2410fe4ffb9d6002ae6c5f1b344d0cca247de61b"},"reference":{"arxivId":"2303.03381","paperVersion":"","pdfPage":null,"figureLabel":"Figure 2","sha256":null,"sourceLocator":"Figure 2 caption"}}</script>
+  <script src="./review.js?v=2026-08-11T08%3A41%3A16.487Z" defer></script>
+</body>
+</html>

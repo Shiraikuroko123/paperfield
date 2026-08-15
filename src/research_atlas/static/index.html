@@ -1,0 +1,907 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="连接 Paperfield 的论文候选、第一方研究动态、术语证据与深度分析工作台">
+  <meta name="theme-color" content="#f2f5f7">
+  <meta property="og:title" content="Research Atlas">
+  <meta property="og:description" content="大模型与具身智能论文候选、第一方动态和术语证据雷达">
+  <meta property="og:type" content="website">
+  <title>Research Atlas</title>
+  <link rel="canonical" href="/atlas/">
+  <link rel="stylesheet" href="styles.css?v=0.17.4">
+</head>
+<body>
+  <a class="skip-link" href="#mainContent">跳到主要内容</a>
+  <button class="nav-backdrop" id="navBackdrop" type="button" aria-label="关闭导航" hidden></button>
+
+  <div class="app-shell">
+    <aside class="app-rail" id="appRail" aria-label="Research Atlas 导航">
+      <div class="brand-block">
+        <span class="brand-mark" aria-hidden="true">A</span>
+        <span><strong>Research Atlas</strong><small>研究知识谱系</small></span>
+        <button class="nav-close" id="navClose" type="button" aria-label="关闭导航">关闭</button>
+      </div>
+
+      <nav class="rail-nav" aria-label="研究视图">
+        <button class="rail-link is-active" type="button" data-view="radar" aria-current="page">
+          <span>前沿雷达</span><b id="navSignalCount">0</b>
+        </button>
+        <button class="rail-link" type="button" data-view="curriculum">
+          <span>知识树与课程</span><b id="navCurriculumCount">0</b>
+        </button>
+        <button class="rail-link" type="button" data-view="threads">
+          <span>研究线程</span><b id="navThreadCount">0</b>
+        </button>
+        <button class="rail-link" type="button" data-view="terms">
+          <span>术语候选</span><b id="navTermCount">0</b>
+        </button>
+        <button class="rail-link" type="button" data-view="methods">
+          <span>方法与问题</span><b id="navMethodCount">0</b>
+        </button>
+        <button class="rail-link" type="button" data-view="library">
+          <span>论文与项目</span><b id="navLibraryCount">0</b>
+        </button>
+        <button class="rail-link" type="button" data-view="analyses">
+          <span>我的深度分析</span><b id="navTaskCount">0</b>
+        </button>
+        <button class="rail-link" type="button" data-view="loop">
+          <span>研究回路</span><b id="navSavedCount">0</b>
+        </button>
+        <button class="rail-link" type="button" data-view="editor">
+          <span>编辑工作台</span><b id="navEditorCount">0</b>
+        </button>
+      </nav>
+
+      <div class="rail-foot">
+        <nav class="platform-nav" aria-label="平台工作区">
+          <a id="paperfieldRailLink" href="/"><span>论文阅读</span><b>Paperfield</b></a>
+          <span aria-current="page"><span>前沿与系统学习</span><b>Atlas</b></span>
+          <a href="/flowloom/"><span>科研绘图</span><b>Flowloom</b></a>
+        </nav>
+        <div class="service-state">
+          <span class="service-dot" id="serviceDot" aria-hidden="true"></span>
+          <span><strong id="serviceLabel">正在连接</strong><small id="serviceMeta">Atlas 本地服务</small></span>
+        </div>
+      </div>
+    </aside>
+
+    <main class="workspace" id="mainContent">
+      <header class="command-bar">
+        <button class="nav-toggle" id="navToggle" type="button" aria-controls="appRail" aria-expanded="false" aria-label="打开导航">导航</button>
+        <span class="mobile-brand">Research Atlas</span>
+        <label class="search-field" for="globalSearch">
+          <span class="sr-only">搜索已导入的论文或项目</span>
+          <input id="globalSearch" type="search" placeholder="搜索已导入的论文或项目" autocomplete="off">
+        </label>
+        <span class="bridge-state" id="bridgeState" role="status">等待 Paperfield 上下文</span>
+        <a class="button button-secondary command-paperfield" id="paperfieldCommandLink" href="http://127.0.0.1:8765/">打开 Paperfield</a>
+      </header>
+
+      <div class="loading-shell" id="loadingShell" aria-label="正在载入 Research Atlas">
+        <div class="skeleton-line is-short"></div>
+        <div class="skeleton-line is-title"></div>
+        <div class="skeleton-line"></div>
+        <div class="skeleton-line"></div>
+      </div>
+
+      <section class="app-view" id="radarView" data-view-panel="radar" aria-labelledby="radarTitle" hidden>
+        <header class="view-header">
+          <div>
+            <p class="view-context" id="radarDate">截至 --</p>
+            <h1 id="radarTitle">前沿雷达</h1>
+            <p>大模型与具身智能中的近期研究变化，按证据状态而不是热度组织。</p>
+          </div>
+          <div class="scope-switch" id="scopeSwitch" role="tablist" aria-orientation="horizontal" aria-label="雷达范围">
+            <button class="is-active" id="scopeGlobalTab" type="button" role="tab" aria-selected="true" aria-controls="radarView" data-scope="global">全局前沿</button>
+            <button id="scopeReadingTab" type="button" role="tab" aria-selected="false" aria-controls="radarView" tabindex="-1" data-scope="my-reading">我的阅读与学习</button>
+          </div>
+        </header>
+
+        <div class="fact-strip" aria-label="Atlas 当前状态">
+          <div><span>已核查信号</span><strong id="signalCount">0</strong></div>
+          <div><span>待研判论文</span><strong id="candidateCount">0</strong></div>
+          <div><span>第一方动态</span><strong id="updateCount">0</strong></div>
+          <div><span>术语候选</span><strong id="termCandidateCount">0</strong></div>
+          <div><span>待审核变化</span><strong id="signalDraftCount">0</strong></div>
+        </div>
+
+        <section class="frontier-console" aria-labelledby="frontierConsoleTitle">
+          <header class="section-heading">
+            <div>
+              <h2 id="frontierConsoleTitle">排序后的前沿信号</h2>
+              <p>排序只表示值得优先查看的注意力，不是科学质量或真理评分。论文、术语、第一方动态保持不同证据层级。</p>
+            </div>
+            <span class="section-count" id="frontierAsOf">尚未加载</span>
+          </header>
+          <form class="frontier-filter-grid" id="frontierFilterForm" role="search">
+            <label class="field-label" for="frontierDomainFilter">领域
+              <select id="frontierDomainFilter" name="domain">
+                <option value="">全部领域</option>
+                <option value="embodied">具身智能</option>
+                <option value="llm">大模型</option>
+                <option value="cross">跨领域</option>
+              </select>
+            </label>
+            <label class="field-label" for="frontierSourceFilter">来源层
+              <select id="frontierSourceFilter" name="source">
+                <option value="">全部来源</option>
+                <option value="arxiv">论文候选</option>
+                <option value="official_updates">第一方动态</option>
+              </select>
+            </label>
+            <label class="field-label" for="frontierMaturityFilter">成熟度
+              <select id="frontierMaturityFilter" name="maturity">
+                <option value="">全部成熟度</option>
+                <option value="candidate">候选</option>
+                <option value="emerging">正在形成</option>
+                <option value="validated">已有验证</option>
+                <option value="stable">相对稳定</option>
+                <option value="contested">存在争议</option>
+                <option value="cooling">热度回落</option>
+              </select>
+            </label>
+            <label class="field-label" for="frontierDateFrom">起始日期
+              <input id="frontierDateFrom" name="from" type="date">
+            </label>
+            <label class="field-label" for="frontierDateTo">结束日期
+              <input id="frontierDateTo" name="to" type="date">
+            </label>
+            <div class="frontier-filter-actions">
+              <button class="button button-primary" type="submit">更新排序</button>
+              <button class="button button-secondary" type="button" id="frontierFilterReset">清除筛选</button>
+            </div>
+          </form>
+          <div class="source-diagnostic-strip" id="frontierSourceDiagnostics" aria-live="polite"></div>
+          <div class="frontier-ranked-list" id="frontierRankedList" aria-live="polite"></div>
+          <div class="empty-state is-compact" id="frontierRankedEmpty" hidden>
+            <strong>当前范围没有可排序信号</strong>
+            <p>调整领域、来源或日期范围；新闻和官方动态不会被提升为论文科学证据。</p>
+          </div>
+        </section>
+
+        <div class="radar-layout">
+          <div class="evidence-stream">
+            <section class="system-notice" id="sourceNotice" aria-labelledby="sourceNoticeTitle">
+              <div>
+                <span class="state-label is-warning" id="sourceNoticeLabel">来源未接入</span>
+                <h2 id="sourceNoticeTitle">每日论文与第一方动态扫描尚未启动</h2>
+                <p id="sourceNoticeBody">公开来源只进入候选层，不会自动生成前沿结论。</p>
+              </div>
+              <button class="text-action" id="sourceNoticeAction" type="button">查看已接收内容</button>
+            </section>
+
+            <section class="stream-section" id="signalsSection" aria-labelledby="signalsTitle">
+              <div class="section-heading">
+                <div><h2 id="signalsTitle">研究变化</h2><p>只有经过证据核查和发布审核的变化才会进入这里。每条变化都保留论文语境、审核者与未知项。</p></div>
+                <span class="section-count" id="signalResultCount">0 条</span>
+              </div>
+              <div class="signal-list" id="signalList"></div>
+              <div class="empty-state" id="signalEmpty">
+                <strong>尚无可发布的研究变化</strong>
+                <p>候选完成主张提取、跨论文证据校验和发布审核后，才会出现在这里。</p>
+              </div>
+            </section>
+
+            <section class="stream-section" id="updatesSection" aria-labelledby="updatesTitle">
+              <div class="section-heading">
+                <div><h2 id="updatesTitle">第一方研究动态</h2><p>来自实验室、模型团队与研究机构的官方订阅源；用于发现发布与项目线索，不替代论文证据。</p></div>
+                <span class="section-count" id="updateResultCount">0 条</span>
+              </div>
+              <div class="update-list" id="updateList"></div>
+              <div class="empty-state" id="updateEmpty">
+                <strong>尚无匹配的第一方动态</strong>
+                <p>扫描器只保留最近时间窗内且命中大模型或具身智能查询的官方条目。</p>
+              </div>
+            </section>
+
+            <section class="stream-section" id="candidatesSection" aria-labelledby="candidatesTitle">
+              <div class="section-heading">
+                <div><h2 id="candidatesTitle">新到候选论文</h2><p>来自公开来源的元数据与摘要，只用于发现；尚不代表趋势、结论或质量判断。</p></div>
+                <span class="section-count" id="candidateResultCount">0 条</span>
+              </div>
+              <div class="candidate-list" id="candidateList"></div>
+              <div class="empty-state" id="candidateEmpty">
+                <strong>尚无来源候选</strong>
+                <p>运行公开来源扫描器后，符合时间窗与领域查询的论文会在这里等待研判。</p>
+              </div>
+            </section>
+
+            <section class="stream-section" aria-labelledby="contextTitle">
+              <div class="section-heading">
+                <div><h2 id="contextTitle">最近进入 Atlas</h2><p>包括公开来源候选和从 Paperfield 明确发送的论文与项目。</p></div>
+                <button class="text-action" type="button" data-view-target="library">查看全部</button>
+              </div>
+              <div class="context-list" id="recentContextList"></div>
+              <div class="empty-state is-compact" id="contextEmpty">
+                <strong>还没有论文上下文</strong>
+                <p>在 Paperfield 论文详情或阅读台中打开“系统讲解”。</p>
+                <a class="button button-primary" id="emptyPaperfieldLink" href="http://127.0.0.1:8765/">前往 Paperfield</a>
+              </div>
+            </section>
+          </div>
+
+          <aside class="operations-rail" aria-label="分析任务与系统连接">
+            <section class="queue-section" aria-labelledby="queueTitle">
+              <div class="section-heading is-tight"><div><h2 id="queueTitle">分析队列</h2><p id="queueSummary">0 个活动任务</p></div><button class="text-action" type="button" data-view-target="analyses">管理</button></div>
+              <div class="compact-task-list" id="compactTaskList"></div>
+              <p class="rail-empty" id="compactTaskEmpty">尚未加入深度分析。</p>
+            </section>
+
+            <section class="personal-loop-section" aria-labelledby="personalLoopTitle">
+              <div class="section-heading is-tight">
+                <div><h2 id="personalLoopTitle">我的研究回路</h2><p id="focusSummary">尚未设置显式关注范围</p></div>
+                <button class="text-action" id="focusEditButton" type="button">编辑</button>
+              </div>
+              <div class="loop-facts" aria-label="私人研究回路统计">
+                <div><span>收藏</span><strong id="savedCount">0</strong></div>
+                <div><span>匹配信号</span><strong id="privateRadarCount">0</strong></div>
+                <div><span>周报</span><strong id="digestCount">0</strong></div>
+              </div>
+              <div class="personal-loop-actions">
+                <button class="button button-secondary" id="myRadarButton" type="button">查看我的雷达</button>
+                <button class="button button-secondary" id="privateDigestButton" type="button">生成私人周报</button>
+              </div>
+            </section>
+
+            <section class="connection-section" aria-labelledby="connectionTitle">
+              <div class="section-heading is-tight"><div><h2 id="connectionTitle">工作台连接</h2><p>当前应用所有权</p></div></div>
+              <div class="bridge-flow" role="img" aria-label="Paperfield 负责精读，Research Atlas 负责知识与分析，Flowloom 负责图形编辑">
+                <div><strong>Paperfield</strong><span>PDF / 笔记 / 源码</span></div>
+                <span aria-hidden="true">→</span>
+                <div class="is-current"><strong>Atlas</strong><span>档案 / 谱系 / 雷达</span></div>
+                <span aria-hidden="true">→</span>
+                <div><strong>Flowloom</strong><span>图形 / SVG</span></div>
+              </div>
+            </section>
+          </aside>
+        </div>
+      </section>
+
+      <section class="app-view curriculum-view" id="curriculumView" data-view-panel="curriculum" aria-labelledby="curriculumTitle" hidden>
+        <header class="view-header curriculum-header">
+          <div>
+            <p class="view-context">课程、推导、先修与论文入口</p>
+            <h1 id="curriculumTitle">知识树与学习路径</h1>
+            <p>Atlas 直接承载版本化教材与数学推导，并把每章连接到前沿候选、代表论文和 Paperfield 精读；教学关系不会冒充论文证据关系。</p>
+          </div>
+          <div class="curriculum-track-switch" id="curriculumTrackSwitch" role="tablist" aria-orientation="horizontal" aria-label="课程路线">
+            <button class="is-active" id="curriculumEmbodiedTab" type="button" role="tab" aria-selected="true" aria-controls="curriculumWorkspace" data-curriculum-track="embodied">具身智能</button>
+            <button id="curriculumLlmTab" type="button" role="tab" aria-selected="false" aria-controls="curriculumWorkspace" tabindex="-1" data-curriculum-track="llm">大模型</button>
+          </div>
+        </header>
+
+        <div class="curriculum-fact-strip" aria-label="课程目录状态">
+          <div><span>模块</span><strong id="curriculumModuleCount">0</strong></div>
+          <div><span>章节</span><strong id="curriculumChapterCount">0</strong></div>
+          <div><span>教材</span><strong id="curriculumLessonCount">0</strong></div>
+          <div><span>知识点</span><strong id="curriculumConceptCount">0</strong></div>
+          <div><span>代表论文</span><strong id="curriculumPaperCount">0</strong></div>
+          <div><span>目录版本</span><strong id="curriculumVersion">--</strong></div>
+        </div>
+        <div class="curriculum-learning-summary" id="curriculumLearningSummary" aria-label="我的学习状态"></div>
+
+        <p class="curriculum-load-state" id="curriculumLoadState" role="status" aria-live="polite">正在读取课程目录。</p>
+        <div class="curriculum-workspace" id="curriculumWorkspace" role="tabpanel" aria-labelledby="curriculumEmbodiedTab" tabindex="0" hidden>
+          <details class="curriculum-tree-panel" id="curriculumTreePanel" aria-labelledby="curriculumTreeTitle" open>
+            <summary class="curriculum-tree-disclosure">
+              <span><strong id="curriculumTreeTitle" role="heading" aria-level="2">教学顺序</strong><small id="curriculumTrackSummary">按先修关系从上到下学习。</small></span>
+              <span class="section-count" id="curriculumTrackProgress">0 章</span>
+            </summary>
+            <nav class="curriculum-tree" id="curriculumTree" aria-label="课程章节树"></nav>
+          </details>
+          <article class="curriculum-detail" id="curriculumDetail" aria-live="polite">
+            <div class="empty-state is-compact"><strong>选择一个章节</strong><p>查看学习目标、理论、数学重点、研究痛点和代表论文。</p></div>
+          </article>
+        </div>
+        <section class="curriculum-learning-queue" aria-labelledby="curriculumLearningQueueTitle"><div class="section-heading is-tight"><div><h2 id="curriculumLearningQueueTitle">下一步学习队列</h2><p>队列只依据你显式标记的状态和课程先修关系；它不会把推荐分数伪装成掌握度。</p></div></div><div id="curriculumLearningQueue"><p class="learning-empty-line">正在计算先修关系。</p></div></section>
+        <div class="empty-state is-major" id="curriculumError" hidden>
+          <strong>课程目录加载失败</strong>
+          <p id="curriculumErrorMessage">Atlas 无法读取课程数据。</p>
+          <button class="button button-primary" id="curriculumRetry" type="button">重新加载</button>
+        </div>
+        <section class="curriculum-provenance" id="curriculumProvenance" aria-labelledby="curriculumProvenanceTitle" hidden>
+          <div class="section-heading"><div><h2 id="curriculumProvenanceTitle">结构参考与内容边界</h2><p>第一方课程正文按需载入并经过安全清洗；外部论文笔记只用于分类参考，不复制正文。</p></div></div>
+          <div id="curriculumSourceList"></div>
+        </section>
+      </section>
+
+      <section class="app-view simple-view" id="threadsView" data-view-panel="threads" aria-labelledby="threadsTitle" hidden>
+        <header class="view-header thread-view-header">
+          <div><p class="view-context">已发布的科学主张谱系</p><h1 id="threadsTitle">研究线程</h1><p>围绕同一研究问题组织变化、竞争路线、反证和未知项。每条公开主张都回到论文中的精确证据，模型相似度不作为科学置信度。</p></div>
+          <button class="button button-secondary" type="button" data-view-target="curriculum">补足相关基础</button>
+        </header>
+        <div class="thread-boundary" role="note"><strong>公开边界</strong><span>这里只显示已发布修订、已人工审核关系和带 source SHA-256 的论文定位；候选聚类与模型分数仅留在本机编辑流程。</span></div>
+        <div class="thread-workspace">
+          <section class="thread-index" aria-labelledby="threadIndexTitle">
+            <div class="section-heading is-tight"><div><h2 id="threadIndexTitle">已发布线程</h2><p id="threadIndexSummary">正在读取公共投影。</p></div><span class="section-count" id="threadPublicCount">0 条</span></div>
+            <form class="knowledge-filter" id="threadFilterForm" role="search">
+              <label class="field-label" for="threadQuery">搜索线程<input id="threadQuery" type="search" autocomplete="off" placeholder="标题、问题、主张或论文"></label>
+              <button class="button button-secondary" type="submit">筛选</button>
+            </form>
+            <div class="thread-list" id="threadList" aria-live="polite"></div>
+            <div class="empty-state is-major" id="threadEmpty"><strong>研究线程尚未发布</strong><p>先在 Paperfield 精读并生成深度档案，再由编辑流程导入主张、审核关系并发布不可变修订。Atlas 不会用候选论文自动拼出结论。</p><div class="inline-actions"><button class="button button-primary" type="button" data-view-target="radar">查看前沿候选</button><button class="button button-secondary" type="button" data-view-target="analyses">查看深度分析</button></div></div>
+          </section>
+          <article class="thread-detail" id="threadDetail" aria-live="polite"><div class="empty-state is-compact"><strong>选择一个已发布线程</strong><p>查看研究问题、发生的变化、路线分歧、反证、未知项，以及每条主张的论文原文定位。</p></div></article>
+        </div>
+      </section>
+
+      <section class="app-view simple-view" id="termsView" data-view-panel="terms" aria-labelledby="termsTitle" hidden>
+        <header class="view-header"><div><p class="view-context">命名证据</p><h1 id="termsTitle">术语候选</h1><p>从作者明确使用的缩写与方法名中提取，记录原句、展开形式和跨论文采用；不宣称其在学界首次出现。</p></div></header>
+        <div class="term-boundary" role="note"><strong>候选不等于新概念</strong><span>单篇命名、旧概念换名和多篇独立采用会分开显示；只有编辑核查后才进入稳定知识层。</span></div>
+        <section class="review-queue" aria-labelledby="signalDraftsTitle">
+          <div class="section-heading">
+            <div><h2 id="signalDraftsTitle">研究变化审核队列</h2><p>草稿只在本机编辑界面可见；发布前必须补充关注理由、未知项并确认至少两篇独立论文。</p></div>
+            <span class="section-count" id="signalDraftResultCount">0 条</span>
+          </div>
+          <div class="signal-draft-list" id="signalDraftList"></div>
+          <div class="empty-state is-compact" id="signalDraftEmpty">
+            <strong>没有待审核草稿</strong>
+            <p>在下方术语证据中选择“起草研究变化”，把跨论文命名或方法变化整理成可审核草稿。</p>
+          </div>
+        </section>
+        <div class="term-list" id="termList"></div>
+        <div class="empty-state is-major" id="termEmpty"><strong>尚无可追溯的术语候选</strong><p>完成论文候选扫描后，作者在标题或摘要中明确给出的命名语境会出现在这里。</p></div>
+      </section>
+
+      <section class="app-view simple-view" id="methodsView" data-view-panel="methods" aria-labelledby="methodsTitle" hidden>
+        <header class="view-header"><div><p class="view-context">稳定知识层</p><h1 id="methodsTitle">方法与问题</h1><p>方法定义、数学机制、代表论文、限制和待验证假设。候选实体不会混入公共知识投影。</p></div></header>
+        <div class="knowledge-switch" id="knowledgeKindSwitch" role="tablist" aria-orientation="horizontal" aria-label="知识实体类型">
+          <button class="is-active" id="knowledgeMethodTab" type="button" role="tab" aria-selected="true" aria-controls="knowledgePanel" data-knowledge-kind="method">方法 <b id="methodCount">0</b></button>
+          <button id="knowledgeProblemTab" type="button" role="tab" aria-selected="false" aria-controls="knowledgePanel" tabindex="-1" data-knowledge-kind="problem">问题 <b id="problemCount">0</b></button>
+        </div>
+        <div class="knowledge-layout" id="knowledgePanel" role="tabpanel" aria-labelledby="knowledgeMethodTab" tabindex="0">
+          <div>
+            <form class="knowledge-filter" id="methodFilterForm" role="search">
+              <label class="field-label" for="methodQuery">搜索知识节点<input id="methodQuery" type="search" autocomplete="off" placeholder="名称或别名"></label>
+              <button class="button button-secondary" type="submit">筛选</button>
+            </form>
+            <div class="knowledge-list" id="methodList"></div>
+            <div class="empty-state is-major" id="methodEmpty"><strong>方法谱系尚未建立</strong><p>完成首批论文档案后，方法和问题节点会在这里形成。候选论文不会在未经核查时被自动归纳成理论结论。</p><button class="button button-primary" type="button" data-view-target="radar">先看候选论文</button></div>
+          </div>
+          <aside class="knowledge-detail" id="methodDetail" aria-live="polite"><div class="empty-state is-compact"><strong>选择一个知识节点</strong><p>查看定义、限制、关系图和论文回链。</p></div></aside>
+        </div>
+      </section>
+
+      <section class="app-view simple-view" id="libraryView" data-view-panel="library" aria-labelledby="libraryTitle" hidden>
+        <header class="view-header">
+          <div><p class="view-context">跨站上下文</p><h1 id="libraryTitle">论文与项目</h1><p>只显示通过 Paperfield 桥接或 Atlas API 明确导入的对象。</p></div>
+          <div class="library-switch" role="tablist" aria-orientation="horizontal" aria-label="内容类型">
+            <button class="is-active" id="libraryPapersTab" type="button" role="tab" aria-selected="true" aria-controls="libraryList" data-library-kind="papers">论文 <b id="libraryPaperCount">0</b></button>
+            <button id="libraryProjectsTab" type="button" role="tab" aria-selected="false" aria-controls="libraryList" tabindex="-1" data-library-kind="projects">项目 <b id="libraryProjectCount">0</b></button>
+          </div>
+        </header>
+        <div class="library-list" id="libraryList" role="tabpanel" aria-labelledby="libraryPapersTab" tabindex="0"></div>
+        <div class="empty-state is-major" id="libraryEmpty"><strong>尚未接收内容</strong><p>从 Paperfield 打开论文系统讲解或项目研究关联。</p></div>
+      </section>
+
+      <section class="app-view simple-view" id="analysesView" data-view-panel="analyses" aria-labelledby="analysesTitle" hidden>
+        <header class="view-header"><div><p class="view-context">逐篇授权的证据分析</p><h1 id="analysesTitle">我的深度分析</h1><p>论文进入队列后，worker 才会按结构、主张、方法、数学、实验、代码、谱系与批判阶段生成私人档案。</p></div></header>
+        <section class="analysis-readiness" aria-labelledby="analysisReadinessTitle">
+          <div class="analysis-readiness-copy">
+            <span class="state-label" id="analysisWorkerState">正在读取 worker 状态</span>
+            <h2 id="analysisReadinessTitle">档案生成状态</h2>
+            <p id="analysisWorkerMessage">Atlas 正在判断任务、材料授权和执行器状态。</p>
+          </div>
+          <div class="analysis-readiness-actions">
+            <button class="button button-primary" type="button" data-view-target="library">选择论文</button>
+            <button class="button button-secondary" type="button" data-view-target="radar">查看前沿候选</button>
+          </div>
+        </section>
+        <div class="analysis-fact-strip" aria-label="深度分析统计">
+          <div><span>分析任务</span><strong id="analysisTaskTotal">0</strong></div>
+          <div><span>活动任务</span><strong id="analysisActiveTotal">0</strong></div>
+          <div><span>等待授权</span><strong id="analysisAwaitingTotal">0</strong></div>
+          <div><span>部分档案</span><strong id="analysisPartialTotal">0</strong></div>
+          <div><span>完整档案</span><strong id="analysisCompletedTotal">0</strong></div>
+        </div>
+        <details class="worker-config-disclosure" id="workerConfigDisclosure">
+          <summary>查看 worker 配置要求</summary>
+          <p>深度分析使用独立配置，不自动复用普通 <code>OPENAI_API_KEY</code>。</p>
+          <ul><li><code>RESEARCH_ATLAS_WORKER_TOKEN</code></li><li><code>RESEARCH_ATLAS_OPENAI_API_KEY</code></li><li><code>RESEARCH_ATLAS_OPENAI_MODEL</code></li></ul>
+          <p>配置后运行 <code>scripts/run-atlas-worker.ps1</code>；PDF 下载和外部模型处理仍需逐篇授权。</p>
+        </details>
+        <div class="task-list" id="taskList"></div>
+        <div class="empty-state is-major" id="taskEmpty"><strong>尚无深度分析任务</strong><p id="taskEmptyMessage">当前论文库不会自动批量调用模型。打开一篇论文档案，点击“加入深度分析”并确认材料授权后才会创建任务。</p><button class="button button-primary" type="button" data-view-target="library">从论文库选择</button></div>
+      </section>
+
+      <section class="app-view loop-view" id="loopView" data-view-panel="loop" aria-labelledby="loopTitle" hidden>
+        <header class="view-header">
+          <div><p class="view-context">私人研究回路</p><h1 id="loopTitle">研究回路</h1><p>关注、保存与周报都必须由你显式操作。浏览行为不会自动变成关注，也不会把私人数据放入公共雷达。</p></div>
+          <div class="loop-header-actions"><span class="state-label is-success">本机私有</span><button class="button button-secondary" id="loopRefresh" type="button">刷新回路</button></div>
+        </header>
+        <div class="loop-tabs" role="tablist" aria-orientation="horizontal" aria-label="研究回路分区">
+          <button class="is-active" id="loopFocusTab" type="button" role="tab" aria-selected="true" aria-controls="loopFocusPanel" data-loop-tab="focus">我的关注</button>
+          <button id="loopWorkspaceTab" type="button" role="tab" aria-selected="false" tabindex="-1" aria-controls="loopWorkspacePanel" data-loop-tab="workspace">研究工作区 <span class="tab-count" id="loopNotificationCount">0</span></button>
+          <button id="loopSavedTab" type="button" role="tab" aria-selected="false" tabindex="-1" aria-controls="loopSavedPanel" data-loop-tab="saved">已保存对象</button>
+          <button id="loopDigestTab" type="button" role="tab" aria-selected="false" tabindex="-1" aria-controls="loopDigestPanel" data-loop-tab="digests">周报</button>
+          <button id="loopOpsTab" type="button" role="tab" aria-selected="false" tabindex="-1" aria-controls="loopOpsPanel" data-loop-tab="ops">诊断与备份</button>
+        </div>
+        <section class="loop-panel" id="loopFocusPanel" role="tabpanel" aria-labelledby="loopFocusTab" data-loop-panel="focus">
+          <div class="loop-section-heading"><div><h2>关注范围</h2><p>领域、关键词、来源和已审核的方法/问题/线程共同决定私人雷达。</p></div><button class="button button-primary" id="focusEditButtonMain" type="button">编辑关注范围</button></div>
+          <div class="focus-summary-grid" id="focusSummaryGrid"></div>
+          <div class="private-radar-list" id="privateRadarList"></div>
+          <div class="empty-state is-major" id="privateRadarEmpty"><strong>还没有私人雷达</strong><p>先设置一个明确的关注范围；当前没有匹配时也会保留空状态和冻结依据。</p></div>
+        </section>
+        <section class="loop-panel research-workspace-panel" id="loopWorkspacePanel" role="tabpanel" aria-labelledby="loopWorkspaceTab" data-loop-panel="workspace" hidden>
+          <div class="workspace-fact-strip" aria-label="可复现研究工作区状态">
+            <div><span>保存视图</span><strong id="researchViewCount">0</strong></div>
+            <div><span>未读提醒</span><strong id="notificationUnreadCount">0</strong></div>
+            <div><span>证据包</span><strong id="evidenceBundleCount">0</strong></div>
+            <div><span>活动快照</span><strong id="searchSnapshotCount">0</strong></div>
+          </div>
+
+          <section class="workspace-section" aria-labelledby="researchViewsTitle">
+            <div class="loop-section-heading">
+              <div><h2 id="researchViewsTitle">保存的研究视图</h2><p>保存明确的目录搜索、前沿筛选或关注范围；每次运行都会冻结新的结果与证据边界。</p></div>
+              <div class="inline-actions"><button class="button button-primary" id="researchViewCreate" type="button">保存当前视图</button><button class="button button-secondary" id="workspaceRefresh" type="button">刷新</button></div>
+            </div>
+            <div class="research-view-list" id="researchViewList" aria-live="polite"></div>
+            <div class="empty-state is-major" id="researchViewEmpty"><strong>还没有保存研究视图</strong><p>先在目录搜索、前沿雷达或关注范围中确定条件，再把它保存成可重复运行的入口。</p></div>
+          </section>
+
+          <section class="workspace-section" aria-labelledby="notificationsTitle">
+            <div class="loop-section-heading">
+              <div><h2 id="notificationsTitle">变化提醒</h2><p>只把已发布研究变化和已审核知识关系作为结论级提醒；候选论文与第一方动态始终标为待核查线索。</p></div>
+              <div class="inline-actions"><button class="button button-secondary" id="notificationRefresh" type="button">检查变化</button><button class="button button-secondary" id="notificationReadAll" type="button">全部标为已读</button></div>
+            </div>
+            <div class="notification-list" id="notificationList" aria-live="polite"></div>
+            <div class="empty-state is-major" id="notificationEmpty"><strong>没有新的变化提醒</strong><p>保存研究视图或设置关注范围后，已审核变化才会进入这里；浏览行为不会自动创建订阅。</p></div>
+          </section>
+
+          <section class="workspace-section" aria-labelledby="evidenceBundlesTitle">
+            <div class="loop-section-heading"><div><h2 id="evidenceBundlesTitle">证据包</h2><p>从一次视图运行导出筛选条件、结果快照、论文证据、未知项、manifest 与可复算 SHA-256。</p></div></div>
+            <div class="evidence-bundle-list" id="evidenceBundleList"></div>
+            <div class="empty-state is-major" id="evidenceBundleEmpty"><strong>尚无证据包</strong><p>运行一个保存视图后，使用“生成证据包”冻结可复现材料。</p></div>
+          </section>
+        </section>
+        <section class="loop-panel" id="loopSavedPanel" role="tabpanel" aria-labelledby="loopSavedTab" data-loop-panel="saved" hidden>
+          <div class="loop-section-heading"><div><h2>已保存对象</h2><p>保存论文、项目、术语、信号和知识节点，作为下一轮精读入口。</p></div><button class="button button-secondary" id="exportResearchData" type="button">导出私人数据</button></div>
+          <div class="saved-list" id="savedList"></div>
+          <div class="empty-state is-major" id="savedEmpty"><strong>还没有保存对象</strong><p>在前沿雷达、术语详情或知识节点中使用“保存”后会出现在这里。</p></div>
+        </section>
+        <section class="loop-panel" id="loopDigestPanel" role="tabpanel" aria-labelledby="loopDigestTab" data-loop-panel="digests" hidden>
+          <div class="loop-section-heading"><div><h2>冻结周报</h2><p>每份周报记录 `as_of`、信号 revision、来源 run 与内容哈希，可重复生成且不会覆盖旧快照。</p></div><div class="inline-actions"><button class="button button-primary" id="createPrivateDigest" type="button">生成私人周报</button><button class="button button-secondary" id="createPublicDigest" type="button">生成公共周报</button></div></div>
+          <div class="digest-list" id="digestList"></div>
+          <div class="empty-state is-major" id="digestEmpty"><strong>尚无冻结周报</strong><p>选择周期后生成第一份私人或公共快照。</p></div>
+        </section>
+        <section class="loop-panel" id="loopOpsPanel" role="tabpanel" aria-labelledby="loopOpsTab" data-loop-panel="ops" hidden>
+          <div class="loop-section-heading"><div><h2>运行诊断</h2><p>只显示 readiness、计数、版本和完整性状态，不返回 token 或 API key。</p></div><button class="button button-secondary" id="diagnosticsRefresh" type="button">刷新诊断</button></div>
+          <pre class="diagnostics-output" id="diagnosticsOutput" tabindex="0">尚未读取诊断。</pre>
+          <div id="backupOperations">
+            <div class="loop-section-heading backup-heading"><div><h2>SQLite 备份</h2><p>创建使用 SQLite backup API 的完整备份；恢复前会校验 manifest、SHA-256、schema 和 integrity_check。</p></div><button class="button button-primary" id="backupCreate" type="button">创建备份</button></div>
+            <div class="backup-list" id="backupList"></div>
+            <div class="empty-state is-compact" id="backupEmpty"><strong>尚无备份记录</strong><p>创建第一份带清单的 Atlas 数据库备份。</p></div>
+          </div>
+        </section>
+      </section>
+
+      <section class="app-view editor-view" id="editorView" data-view-panel="editor" aria-labelledby="editorTitle" hidden>
+        <header class="view-header editor-header">
+          <div>
+            <p class="view-context">受控知识维护</p>
+            <h1 id="editorTitle">编辑工作台</h1>
+            <p>批量结构化、锚点扩展、实体关系修订与覆盖审计。模型只生成候选差异，已审核内容必须由编辑者显式批准。</p>
+          </div>
+          <div class="editor-header-actions">
+            <span class="state-label is-success">本机或授权编辑账号</span>
+            <button class="button button-secondary" id="editorRefresh" type="button">刷新工作台</button>
+          </div>
+        </header>
+
+        <div class="editor-identity-bar">
+          <label class="field-label" for="editorOperator">当前编辑者
+            <input id="editorOperator" name="editorOperator" type="text" maxlength="120" autocomplete="name" value="本地编辑">
+          </label>
+          <p id="editorBoundaryNote">每次批准、拒绝、合并与修正都会写入审计记录；后台重算不能静默覆盖已审核实体或关系。</p>
+        </div>
+
+        <div class="editor-fact-strip" aria-label="编辑工作台状态">
+          <div><span>活动作业</span><strong id="editorActiveBatchCount">0</strong></div>
+          <div><span>待决策项</span><strong id="editorReviewItemCount">0</strong></div>
+          <div><span>开放缺口</span><strong id="editorCoverageGapCount">0</strong></div>
+          <div><span>失败率</span><strong id="editorFailureRate">0%</strong></div>
+          <div><span>成本单位</span><strong id="editorWorkUnits">0</strong></div>
+        </div>
+
+        <div class="editor-tabs" role="tablist" aria-orientation="horizontal" aria-label="编辑工作台分区">
+          <button class="is-active" id="editorBatchesTab" type="button" role="tab" aria-selected="true" aria-controls="editorBatchesPanel" data-editor-tab="batches">批量作业</button>
+          <button id="editorEntitiesTab" type="button" role="tab" aria-selected="false" aria-controls="editorEntitiesPanel" tabindex="-1" data-editor-tab="entities">实体与别名</button>
+          <button id="editorRelationshipsTab" type="button" role="tab" aria-selected="false" aria-controls="editorRelationshipsPanel" tabindex="-1" data-editor-tab="relationships">关系修正</button>
+          <button id="editorCoverageTab" type="button" role="tab" aria-selected="false" aria-controls="editorCoveragePanel" tabindex="-1" data-editor-tab="coverage">覆盖缺口</button>
+          <button id="editorAuditTab" type="button" role="tab" aria-selected="false" aria-controls="editorAuditPanel" tabindex="-1" data-editor-tab="audit">审计记录</button>
+        </div>
+
+        <p class="editor-workspace-status" id="editorWorkspaceStatus" role="status" aria-live="polite" hidden></p>
+
+        <section class="editor-panel" id="editorBatchesPanel" role="tabpanel" aria-labelledby="editorBatchesTab" data-editor-panel="batches" tabindex="0">
+          <div class="editor-section-heading">
+            <div><h2>批量结构化与重算</h2><p>先生成逐项差异，再批准或拒绝；应用只处理已批准候选。</p></div>
+            <span class="section-count" id="editorBatchResultCount">0 个作业</span>
+          </div>
+
+          <details class="editor-create-disclosure" id="editorBatchCreate" open>
+            <summary>创建批量作业</summary>
+            <form class="editor-form" id="editorBatchForm">
+              <div class="editor-form-grid">
+                <label class="field-label" for="editorBatchKind">作业类型
+                  <select id="editorBatchKind" name="batchKind">
+                    <option value="l1_structure">L1 批量结构化</option>
+                    <option value="l2_anchor">L2 锚点扩展</option>
+                    <option value="coverage_scan">覆盖缺口扫描</option>
+                    <option value="recompute">实体批量重算</option>
+                  </select>
+                </label>
+                <label class="field-label" for="editorBatchLimit">最大条目数
+                  <input id="editorBatchLimit" name="limit" type="number" min="1" max="500" step="1" value="50" inputmode="numeric">
+                </label>
+                <label class="field-label editor-field-span" for="editorBatchTargets">指定 ID 或领域
+                  <textarea id="editorBatchTargets" name="targets" rows="3" placeholder="论文/实体 ID 每行一个；覆盖扫描填写 embodied、llm" aria-describedby="editorBatchTargetsHelp"></textarea>
+                  <small id="editorBatchTargetsHelp">留空时按最近更新对象选择；覆盖扫描默认检查 embodied 与 llm。</small>
+                </label>
+                <label class="field-label" for="editorBatchModel">模型
+                  <input id="editorBatchModel" name="model" type="text" maxlength="240" placeholder="重算作业必填">
+                </label>
+                <label class="field-label" for="editorBatchPromptVersion">提示版本
+                  <input id="editorBatchPromptVersion" name="promptVersion" type="text" maxlength="120" placeholder="重算作业必填">
+                </label>
+                <label class="field-label editor-field-span" for="editorBatchReason">作业理由
+                  <textarea id="editorBatchReason" name="reason" rows="3" minlength="10" maxlength="4000" required placeholder="说明本次范围、预期变化与审核依据"></textarea>
+                </label>
+              </div>
+              <label class="editor-check" for="editorBatchDryRun"><input id="editorBatchDryRun" name="dryRun" type="checkbox" checked><span><strong>仅生成差异预览</strong><small>创建后不会直接写入知识层。</small></span></label>
+              <div class="editor-form-actions"><button class="button button-primary" type="submit" id="editorBatchSubmit">创建作业</button></div>
+            </form>
+          </details>
+
+          <div class="editor-split-layout">
+            <div>
+              <div class="editor-subheading"><h3>最近作业</h3><button class="text-action" id="editorBatchRefresh" type="button">刷新</button></div>
+              <div class="editor-list" id="editorBatchList"></div>
+              <div class="empty-state is-compact" id="editorBatchEmpty"><strong>尚无批量作业</strong><p>创建首个 L1、L2、覆盖扫描或重算作业。</p></div>
+            </div>
+            <div class="editor-detail" id="editorBatchDetail" aria-live="polite">
+              <div class="empty-state is-compact"><strong>选择一个作业</strong><p>查看指标、逐项差异和审核动作。</p></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="editor-panel" id="editorEntitiesPanel" role="tabpanel" aria-labelledby="editorEntitiesTab" data-editor-panel="entities" tabindex="0" hidden>
+          <div class="editor-section-heading"><div><h2>实体、别名与合并</h2><p>维护稳定知识节点，发现同义实体时将来源实体合并到保留实体。</p></div><span class="section-count" id="editorEntityResultCount">0 个实体</span></div>
+          <details class="editor-create-disclosure" open>
+            <summary>创建知识实体</summary>
+            <form class="editor-form" id="editorEntityForm">
+              <div class="editor-form-grid">
+                <label class="field-label" for="editorEntityKind">实体类型
+                  <select id="editorEntityKind" name="entityKind"><option value="method">方法</option><option value="problem">问题</option><option value="term">术语</option><option value="thread">研究线程</option><option value="paper">论文</option><option value="project">项目</option></select>
+                </label>
+                <label class="field-label" for="editorEntityStatus">审核状态
+                  <select id="editorEntityStatus" name="status"><option value="candidate">候选</option><option value="active">已审核/启用</option><option value="retired">已停用</option></select>
+                </label>
+                <label class="field-label editor-field-span" for="editorEntityName">规范名称
+                  <input id="editorEntityName" name="canonicalName" type="text" maxlength="500" required>
+                </label>
+                <label class="field-label editor-field-span" for="editorEntityDescription">定义或描述
+                  <textarea id="editorEntityDescription" name="description" rows="4" maxlength="12000"></textarea>
+                </label>
+                <label class="field-label" for="editorEntityAliases">初始别名
+                  <input id="editorEntityAliases" name="aliases" type="text" maxlength="2000" placeholder="用逗号分隔">
+                </label>
+                <label class="field-label" for="editorEntitySourceRef">来源标识
+                  <input id="editorEntitySourceRef" name="sourceRef" type="text" maxlength="500" placeholder="论文 ref、术语候选或编辑记录">
+                </label>
+                <label class="field-label editor-field-span" for="editorEntityReason">创建理由
+                  <textarea id="editorEntityReason" name="reason" rows="2" minlength="10" maxlength="4000" required></textarea>
+                </label>
+              </div>
+              <div class="editor-form-actions"><button class="button button-primary" type="submit" id="editorEntitySubmit">创建实体</button></div>
+            </form>
+          </details>
+          <form class="editor-filter-bar" id="editorEntityFilterForm" role="search">
+            <label class="field-label" for="editorEntityQuery">搜索实体<input id="editorEntityQuery" type="search" name="query" autocomplete="off"></label>
+            <label class="field-label" for="editorEntityKindFilter">类型<select id="editorEntityKindFilter" name="entityKind"><option value="">全部类型</option><option value="method">方法</option><option value="problem">问题</option><option value="term">术语</option><option value="thread">研究线程</option><option value="paper">论文</option><option value="project">项目</option></select></label>
+            <button class="button button-secondary" type="submit">筛选</button>
+          </form>
+          <div class="editor-split-layout">
+            <div><div class="editor-list" id="editorEntityList"></div><div class="empty-state is-compact" id="editorEntityEmpty"><strong>没有匹配实体</strong><p>调整筛选条件或创建新的知识实体。</p></div></div>
+            <div class="editor-detail" id="editorEntityDetail" aria-live="polite"><div class="empty-state is-compact"><strong>选择一个实体</strong><p>查看别名、关系数量和合并操作。</p></div></div>
+          </div>
+        </section>
+
+        <section class="editor-panel" id="editorRelationshipsPanel" role="tabpanel" aria-labelledby="editorRelationshipsTab" data-editor-panel="relationships" tabindex="0" hidden>
+          <div class="editor-section-heading"><div><h2>关系创建与修正</h2><p>显式连接两个实体，并保留支持、限定或反证语境。</p></div><span class="section-count" id="editorRelationshipResultCount">0 条关系</span></div>
+          <form class="editor-form editor-relation-form" id="editorRelationshipForm">
+            <input id="editorRelationshipId" name="relationshipId" type="hidden">
+            <div class="editor-form-grid">
+              <label class="field-label" for="editorRelationFrom">来源实体<select id="editorRelationFrom" name="fromEntityId" required></select></label>
+              <label class="field-label" for="editorRelationTo">目标实体<select id="editorRelationTo" name="toEntityId" required></select></label>
+              <label class="field-label" for="editorRelationType">关系类型<select id="editorRelationType" name="relationType"><option value="extends">扩展</option><option value="uses">使用</option><option value="compares">比较</option><option value="replicates">复现</option><option value="contradicts">反驳</option><option value="qualifies">限定</option><option value="surveys">综述</option><option value="implements">实现</option><option value="related_to">相关</option></select></label>
+              <label class="field-label" for="editorRelationStatus">审核状态<select id="editorRelationStatus" name="status"><option value="candidate">候选</option><option value="active">已审核/启用</option><option value="rejected">已拒绝</option><option value="retired">已停用</option></select></label>
+              <label class="field-label" for="editorRelationEvidenceLabel">证据名称<input id="editorRelationEvidenceLabel" name="evidenceLabel" type="text" maxlength="300"></label>
+              <label class="field-label" for="editorRelationSourceRef">来源标识<input id="editorRelationSourceRef" name="sourceRef" type="text" maxlength="500"></label>
+              <label class="field-label editor-field-span" for="editorRelationQuote">证据摘录<textarea id="editorRelationQuote" name="quote" rows="3" maxlength="3000"></textarea></label>
+              <label class="field-label editor-field-span" for="editorRelationReason">操作理由<textarea id="editorRelationReason" name="reason" rows="2" minlength="10" maxlength="4000" required></textarea></label>
+            </div>
+            <div class="editor-form-actions"><button class="button button-secondary" id="editorRelationshipCancel" type="button" hidden>取消编辑</button><button class="button button-primary" id="editorRelationshipSubmit" type="submit">创建关系</button></div>
+          </form>
+          <div class="editor-list editor-wide-list" id="editorRelationshipList"></div>
+          <div class="empty-state is-compact" id="editorRelationshipEmpty"><strong>尚无实体关系</strong><p>先创建或批量生成候选实体，再明确建立关系。</p></div>
+        </section>
+
+        <section class="editor-panel" id="editorCoveragePanel" role="tabpanel" aria-labelledby="editorCoverageTab" data-editor-panel="coverage" tabindex="0" hidden>
+          <div class="editor-section-heading"><div><h2>覆盖缺口</h2><p>检查来源候选、深度锚点和关系审核是否足以支撑领域综合。</p></div><span class="section-count" id="editorCoverageResultCount">0 个缺口</span></div>
+          <form class="editor-inline-action" id="editorCoverageForm">
+            <label class="field-label" for="editorCoverageReason">重算理由<input id="editorCoverageReason" name="reason" type="text" minlength="10" maxlength="4000" required></label>
+            <button class="button button-primary" id="editorCoverageRecompute" type="submit">重新检查覆盖</button>
+          </form>
+          <div class="coverage-gap-list" id="editorCoverageList"></div>
+          <div class="empty-state is-compact" id="editorCoverageEmpty"><strong>尚无覆盖检查结果</strong><p>运行覆盖检查后，将按领域和知识层显示证据缺口。</p></div>
+        </section>
+
+        <section class="editor-panel" id="editorAuditPanel" role="tabpanel" aria-labelledby="editorAuditTab" data-editor-panel="audit" tabindex="0" hidden>
+          <div class="editor-section-heading"><div><h2>不可静默覆盖的审计记录</h2><p>显示批量、实体、别名、合并和关系操作的操作者、理由与版本信息。</p></div><button class="button button-secondary" id="editorAuditRefresh" type="button">刷新记录</button></div>
+          <div class="audit-list" id="editorAuditList"></div>
+          <div class="empty-state is-compact" id="editorAuditEmpty"><strong>尚无编辑审计</strong><p>第一项写操作完成后会在这里留下可追溯记录。</p></div>
+        </section>
+      </section>
+
+      <section class="app-view dossier-view" id="dossierView" data-view-panel="dossier" aria-labelledby="dossierTitle" hidden>
+        <header class="dossier-header">
+          <button class="back-action" type="button" id="dossierBack">返回</button>
+          <div class="dossier-kicker"><span class="state-label" id="dossierState">档案未生成</span><span id="dossierRef"></span></div>
+          <h1 id="dossierTitle">论文档案</h1>
+          <p class="dossier-authors" id="dossierAuthors"></p>
+          <div class="dossier-meta" id="dossierMeta"></div>
+          <div class="artifact-bar">
+            <a class="button button-primary" id="dossierPaperfieldLink" href="#">在 Paperfield 精读</a>
+            <button class="button button-secondary" id="dossierAnalyze" type="button">加入深度分析</button>
+            <button class="button button-secondary" id="dossierFlowloom" type="button" disabled>发送到 Flowloom 语义绘图</button>
+            <a class="button button-secondary" id="dossierSourceLink" href="#" target="_blank" rel="noreferrer">外部论文来源</a>
+            <button class="button button-secondary" id="dossierExportJson" type="button">导出 JSON</button>
+            <button class="button button-secondary" id="dossierExportMarkdown" type="button">导出 Markdown</button>
+            <button class="button button-secondary" id="dossierSave" type="button">保存论文</button>
+          </div>
+        </header>
+        <div class="dossier-tabs" role="tablist" aria-orientation="horizontal" aria-label="论文档案章节">
+          <button class="is-active" id="dossierOverviewTab" type="button" role="tab" aria-selected="true" aria-controls="dossierContent" data-dossier-tab="overview">总览</button>
+          <button id="dossierMethodTab" type="button" role="tab" aria-selected="false" aria-controls="dossierContent" tabindex="-1" data-dossier-tab="method">方法</button>
+          <button id="dossierMathTab" type="button" role="tab" aria-selected="false" aria-controls="dossierContent" tabindex="-1" data-dossier-tab="math">数学</button>
+          <button id="dossierEvidenceTab" type="button" role="tab" aria-selected="false" aria-controls="dossierContent" tabindex="-1" data-dossier-tab="evidence">实验与证据</button>
+          <button id="dossierCritiqueTab" type="button" role="tab" aria-selected="false" aria-controls="dossierContent" tabindex="-1" data-dossier-tab="critique">批判评价</button>
+          <button id="dossierLineageTab" type="button" role="tab" aria-selected="false" aria-controls="dossierContent" tabindex="-1" data-dossier-tab="lineage">关系与谱系</button>
+          <button id="dossierArtifactsTab" type="button" role="tab" aria-selected="false" aria-controls="dossierContent" tabindex="-1" data-dossier-tab="artifacts">原文与产物</button>
+        </div>
+        <div class="dossier-content" id="dossierContent" role="tabpanel" aria-labelledby="dossierOverviewTab" tabindex="0"></div>
+      </section>
+
+  <section class="app-view project-view" id="projectView" data-view-panel="project" aria-labelledby="projectTitle" hidden>
+        <header class="dossier-header">
+          <button class="back-action" type="button" id="projectBack">返回</button>
+          <div class="dossier-kicker"><span class="state-label is-warning">关系待建立</span><span>GitHub 项目</span></div>
+          <h1 id="projectTitle">项目研究关联</h1>
+          <p class="dossier-authors" id="projectDescription"></p>
+          <div class="dossier-meta" id="projectMeta"></div>
+          <div class="artifact-bar">
+            <a class="button button-primary" id="projectPaperfieldLink" href="#">在 Paperfield 查看源码</a>
+            <a class="button button-secondary" id="projectGithubLink" href="#" target="_blank" rel="noreferrer">打开 GitHub</a>
+          </div>
+        </header>
+        <div class="empty-state is-major"><strong>论文关系尚未核查</strong><p>当前只保存项目元数据，不根据名称相似度生成研究结论。</p></div>
+      </section>
+    </main>
+  </div>
+
+  <dialog class="analysis-dialog phase5-dialog" id="focusDialog" aria-labelledby="focusDialogTitle" aria-describedby="focusDialogDescription">
+    <form method="dialog" id="focusForm">
+      <header><div><p class="view-context">私人研究回路</p><h2 id="focusDialogTitle">编辑关注范围</h2><p id="focusDialogDescription">只保存你明确选择的范围；不会把浏览行为推断为关注。</p></div><button class="dialog-close" type="button" id="focusClose" aria-label="关闭关注范围编辑器">关闭</button></header>
+      <div class="analysis-dialog-body">
+        <fieldset><legend>领域</legend><div class="focus-check-grid"><label><input type="checkbox" name="focus-domain" value="embodied"><span><strong>具身智能</strong><small>机器人、VLA、世界模型与控制</small></span></label><label><input type="checkbox" name="focus-domain" value="llm"><span><strong>大模型</strong><small>预训练、推理、代理与评测</small></span></label></div></fieldset>
+        <label class="field-label" for="focusKeywords">关键词
+          <input id="focusKeywords" type="text" placeholder="用逗号分隔，例如 WAM, JEPA, policy">
+          <small>用于私人雷达的标题、摘要和变化说明匹配。</small>
+        </label>
+        <label class="field-label" for="focusSources">来源 key
+          <input id="focusSources" type="text" placeholder="用逗号分隔，例如 arxiv, official_updates">
+          <small>只填写已接入来源的 key；来源动态仍保持第一方证据边界。</small>
+        </label>
+        <div class="focus-entity-grid">
+          <label class="field-label" for="focusMethods">关注方法<select id="focusMethods" multiple size="5" aria-describedby="focusMethodsHelp"></select><small id="focusMethodsHelp">按 Ctrl/Command 选择已审核方法。</small></label>
+          <label class="field-label" for="focusProblems">关注问题<select id="focusProblems" multiple size="5"></select></label>
+          <label class="field-label" for="focusThreads">关注线程<select id="focusThreads" multiple size="5"></select></label>
+        </div>
+      </div>
+      <p class="dialog-error" id="focusFormError" role="alert" aria-live="assertive" hidden></p>
+      <footer><button class="button button-secondary" type="button" id="focusCancel">取消</button><button class="button button-primary" type="submit" id="focusSave">保存关注范围</button></footer>
+    </form>
+  </dialog>
+
+  <dialog class="analysis-dialog phase5-dialog phase6-dialog" id="researchViewDialog" aria-labelledby="researchViewDialogTitle" aria-describedby="researchViewDialogDescription">
+    <form method="dialog" id="researchViewForm">
+      <header><div><p class="view-context">可复现研究入口</p><h2 id="researchViewDialogTitle">保存研究视图</h2><p id="researchViewDialogDescription">保存的是明确条件和证据边界，不会保存 API 凭据，也不会自动触发全文分析。</p></div><button class="dialog-close" type="button" id="researchViewClose" aria-label="关闭研究视图编辑器">关闭</button></header>
+      <div class="analysis-dialog-body">
+        <div class="form-grid form-grid-two">
+          <label class="field-label" for="researchViewName">名称
+            <input id="researchViewName" name="name" type="text" maxlength="160" required placeholder="例如：世界模型与动作预测">
+          </label>
+          <label class="field-label" for="researchViewKind">视图类型
+            <select id="researchViewKind" name="viewKind">
+              <option value="search">目录搜索</option>
+              <option value="radar">前沿雷达</option>
+              <option value="focus">我的关注</option>
+            </select>
+          </label>
+        </div>
+        <label class="field-label" for="researchViewDescription">用途说明
+          <textarea id="researchViewDescription" name="description" rows="2" maxlength="1000" placeholder="记录这个视图回答什么研究问题"></textarea>
+        </label>
+        <label class="field-label" for="researchViewQuery" data-research-view-field="search">搜索词
+          <input id="researchViewQuery" name="query" type="search" maxlength="300" placeholder="论文标题、摘要或项目名称">
+        </label>
+        <div class="form-grid form-grid-two" data-research-view-field="search radar">
+          <label class="field-label" for="researchViewDomains" data-research-view-field="search radar">领域
+            <input id="researchViewDomains" name="domains" type="text" placeholder="用逗号分隔，例如 embodied, llm">
+          </label>
+          <label class="field-label" for="researchViewSources" data-research-view-field="radar">来源
+            <input id="researchViewSources" name="sources" type="text" placeholder="例如 arxiv, official_updates">
+          </label>
+        </div>
+        <div class="form-grid form-grid-two" data-research-view-field="search radar">
+          <label class="field-label" for="researchViewStatuses" data-research-view-field="search radar">状态或成熟度
+            <input id="researchViewStatuses" name="statuses" type="text" placeholder="例如 emerging, contested">
+          </label>
+          <label class="field-label" for="researchViewKinds" data-research-view-field="search">目录对象
+            <select id="researchViewKinds" name="kinds" multiple size="2">
+              <option value="paper" selected>论文</option>
+              <option value="project" selected>项目</option>
+            </select>
+          </label>
+        </div>
+        <div class="form-grid form-grid-two" data-research-view-field="radar">
+          <label class="field-label" for="researchViewDateFrom">起始日期<input id="researchViewDateFrom" name="dateFrom" type="date"></label>
+          <label class="field-label" for="researchViewDateTo">结束日期<input id="researchViewDateTo" name="dateTo" type="date"></label>
+        </div>
+        <p class="editor-boundary" id="researchViewBoundary">论文候选和第一方动态只作为待核查线索；只有已审核信号与关系可以生成结论级提醒。</p>
+      </div>
+      <p class="dialog-error" id="researchViewFormError" role="alert" aria-live="assertive" hidden></p>
+      <footer><button class="button button-secondary" type="button" id="researchViewCancel">取消</button><button class="button button-primary" type="submit" id="researchViewSave">保存视图</button></footer>
+    </form>
+  </dialog>
+
+  <dialog class="analysis-dialog phase5-dialog" id="termDetailDialog" aria-labelledby="termDetailTitle" aria-describedby="termDetailSubtitle">
+    <form method="dialog">
+      <header><div><p class="view-context">术语证据</p><h2 id="termDetailTitle">术语详情</h2><p id="termDetailSubtitle"></p></div><button class="dialog-close" type="button" id="termDetailClose" aria-label="关闭术语详情">关闭</button></header>
+      <div class="analysis-dialog-body" id="termDetailContent"></div>
+      <footer><button class="button button-secondary" type="button" id="termDetailCancel">关闭</button></footer>
+    </form>
+  </dialog>
+
+  <dialog class="analysis-dialog phase5-dialog" id="knowledgeDialog" aria-labelledby="knowledgeDialogTitle" aria-describedby="knowledgeDialogSubtitle">
+    <form method="dialog">
+      <header><div><p class="view-context">公共知识投影</p><h2 id="knowledgeDialogTitle">知识节点详情</h2><p id="knowledgeDialogSubtitle"></p></div><button class="dialog-close" type="button" id="knowledgeDialogClose" aria-label="关闭知识节点详情">关闭</button></header>
+      <div class="analysis-dialog-body" id="knowledgeDialogContent"></div>
+      <footer><button class="button button-secondary" type="button" id="knowledgeDialogCancel">关闭</button></footer>
+    </form>
+  </dialog>
+
+  <dialog class="analysis-dialog signal-dialog" id="signalDialog" aria-labelledby="signalDialogTitle" aria-describedby="signalDialogSubtitle signalDialogNote">
+    <form method="dialog" id="signalForm" novalidate>
+      <header>
+        <div>
+          <p class="view-context">受控编辑边界</p>
+          <h2 id="signalDialogTitle">起草研究变化</h2>
+          <p id="signalDialogSubtitle">自动扫描只提供术语证据；保存后仍是草稿，必须显式发布才会进入前沿雷达。</p>
+        </div>
+        <button class="dialog-close" type="button" id="signalClose" aria-label="关闭研究变化编辑器">关闭</button>
+      </header>
+      <div class="analysis-dialog-body">
+        <p class="editor-boundary" id="signalSourceTerm">来源术语待选择</p>
+        <fieldset id="signalContentFieldset">
+          <legend>研究变化主张</legend>
+          <div class="form-grid form-grid-two">
+            <label class="field-label" for="signalType">变化类型
+              <select id="signalType" name="signalType" aria-describedby="signalTypeHelp">
+                <option value="terminology_shift">术语变化</option>
+                <option value="research_question">研究问题</option>
+                <option value="method_change">方法变化</option>
+                <option value="benchmark">基准/评测</option>
+                <option value="replication">复现与反证</option>
+                <option value="artifact_release">工程产物</option>
+              </select>
+              <small id="signalTypeHelp">选择这条变化在研究谱系中的主要角色。</small>
+            </label>
+            <label class="field-label" for="signalMaturity">成熟度
+              <select id="signalMaturity" name="maturity" aria-describedby="signalMaturityHelp">
+                <option value="candidate">候选</option>
+                <option value="emerging">正在形成</option>
+                <option value="validated">已有验证</option>
+                <option value="contested">存在争议</option>
+                <option value="stable">相对稳定</option>
+                <option value="cooling">热度回落</option>
+              </select>
+              <small id="signalMaturityHelp">成熟度是编辑判断，不是论文作者的标签。</small>
+            </label>
+          </div>
+          <label class="field-label" for="signalTitle">标题
+            <input id="signalTitle" name="title" type="text" maxlength="300" required aria-describedby="signalTitleHelp">
+            <small id="signalTitleHelp">用一句可核查的话描述变化，不写“行业都在转向”这类泛化结论。</small>
+          </label>
+          <label class="field-label" for="signalChangeSummary">发生了什么变化
+            <textarea id="signalChangeSummary" name="changeSummary" rows="4" minlength="20" maxlength="6000" required aria-describedby="signalChangeHelp"></textarea>
+            <small id="signalChangeHelp">至少 20 个字符，并指出论文之间的共同变化或分歧。</small>
+          </label>
+          <div class="form-grid form-grid-two">
+            <label class="field-label" for="signalWhyItMatters">为什么值得关注
+              <textarea id="signalWhyItMatters" name="whyItMatters" rows="4" maxlength="6000" aria-describedby="signalWhyHelp"></textarea>
+              <small id="signalWhyHelp">发布前必须补足具体研究价值、决策影响或待验证方向。</small>
+            </label>
+            <label class="field-label" for="signalKnownUnknowns">未知项与边界
+              <textarea id="signalKnownUnknowns" name="knownUnknowns" rows="4" maxlength="6000" aria-describedby="signalUnknownHelp"></textarea>
+              <small id="signalUnknownHelp">写清楚摘要没有回答什么、还缺哪些实验或反例。</small>
+            </label>
+          </div>
+          <label class="field-label" for="signalCounterEvidence">反证或相反证据
+            <textarea id="signalCounterEvidence" name="counterEvidence" rows="3" maxlength="6000" aria-describedby="signalCounterHelp"></textarea>
+            <small id="signalCounterHelp">没有找到时也请明确写“尚未检索到”，不要留作隐含假设。</small>
+          </label>
+        </fieldset>
+
+        <fieldset id="signalEvidenceFieldset">
+          <legend>论文证据 <span class="legend-meta" id="signalEvidenceCount">0 / 至少 2 篇独立论文</span></legend>
+          <p class="field-help" id="signalEvidenceHelp">只显示该术语的已入库语境。勾选的论文会成为研究变化的公开证据，并可跳回 Paperfield 精读。</p>
+          <div class="signal-evidence-picker" id="signalEvidenceList" tabindex="-1"></div>
+        </fieldset>
+
+        <fieldset id="signalReviewFieldset">
+          <legend>审核记录</legend>
+          <div class="form-grid form-grid-two">
+            <label class="field-label" for="signalEditorName">审核者/编辑者
+              <input id="signalEditorName" name="editorName" type="text" maxlength="120" required aria-describedby="signalEditorHelp">
+              <small id="signalEditorHelp">编辑名称会写入修订历史。</small>
+            </label>
+            <label class="field-label" for="signalReviewReason">本次操作理由
+              <textarea id="signalReviewReason" name="reviewReason" rows="3" maxlength="2000" aria-describedby="signalReasonHelp"></textarea>
+              <small id="signalReasonHelp">发布或撤回时必须写至少 10 个字符。</small>
+            </label>
+          </div>
+        </fieldset>
+      </div>
+      <p class="dialog-note" id="signalDialogNote">编辑接口仅接受本机或授权编辑账号。保存草稿不会改变公开雷达。</p>
+      <p class="dialog-error" id="signalFormError" role="alert" aria-live="assertive" hidden></p>
+      <footer>
+        <button class="button button-secondary" type="button" id="signalCancel">取消</button>
+        <button class="button button-secondary" type="submit" data-signal-submit="save" id="signalSave">保存草稿</button>
+        <button class="button button-primary" type="submit" data-signal-submit="publish" id="signalPublish">保存并发布</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog class="analysis-dialog" id="analysisDialog" aria-labelledby="analysisDialogTitle" aria-describedby="analysisPaperTitle analysisDialogNote">
+    <form method="dialog" id="analysisForm">
+      <header><div><h2 id="analysisDialogTitle">加入深度分析</h2><p id="analysisPaperTitle"></p></div><button class="dialog-close" type="button" id="analysisClose" aria-label="关闭">关闭</button></header>
+      <div class="analysis-dialog-body">
+        <fieldset id="analysisScopeFieldset">
+          <legend>本次分析范围</legend>
+          <label><input type="checkbox" name="analysis-section" value="method" checked><span><strong>方法拆解</strong><small>模块、训练目标和与基线的差分</small></span></label>
+          <label><input type="checkbox" name="analysis-section" value="math" checked><span><strong>数学重构</strong><small>符号、推导、直觉和退化形式</small></span></label>
+          <label><input type="checkbox" name="analysis-section" value="experiments" checked><span><strong>实验审计</strong><small>主张、基线、预算、消融和失败</small></span></label>
+          <label><input type="checkbox" name="analysis-section" value="code" checked><span><strong>代码映射</strong><small>论文模块到官方仓库入口</small></span></label>
+          <label><input type="checkbox" name="analysis-section" value="lineage" checked><span><strong>研究谱系</strong><small>前代、竞争、复现、反证与后续</small></span></label>
+          <label><input type="checkbox" name="analysis-section" value="critique"><span><strong>批判评价</strong><small>证据边界与改变判断所需实验</small></span></label>
+        </fieldset>
+        <fieldset class="permission-fieldset" id="analysisPermissionFieldset">
+          <legend>材料与外部处理授权</legend>
+          <p class="permission-source" id="analysisSourceStatus">公开 PDF 地址待确认</p>
+          <label><input id="analysisAllowDownload" type="checkbox" name="allow-public-pdf-download"><span><strong>允许 Atlas 下载并在本地解析公开 PDF</strong><small>文件进入 Atlas 独立材料目录；不会读取 Paperfield 的 PDF 缓存或私人笔记。</small></span></label>
+          <label><input id="analysisAllowExternal" type="checkbox" name="allow-external-model-processing"><span><strong>允许把解析后的论文全文发送给已配置的外部模型 API</strong><small>只有此项和本地下载授权同时开启，worker 才会发起按阶段模型调用。</small></span></label>
+        </fieldset>
+      </div>
+      <p class="dialog-note" id="analysisDialogNote">任务只在你明确加入后创建。执行器未连接时任务会安全保留在队列中，不会自动上传全文。</p>
+      <footer><button class="button button-secondary" type="button" id="analysisCancel">取消</button><button class="button button-primary" type="submit" id="analysisSubmit">加入队列</button></footer>
+    </form>
+  </dialog>
+
+  <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
+  <script src="app.js?v=0.17.4" defer></script>
+</body>
+</html>

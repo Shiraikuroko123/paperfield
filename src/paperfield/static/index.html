@@ -6,7 +6,7 @@
   <meta name="description" content="具身智能与大模型论文、开源项目每周研究工作台">
   <meta name="theme-color" content="#f3f6f7">
   <title>Paperfield</title>
-  <link rel="stylesheet" href="/styles.css?v=1.1.0-digital-manuscript">
+  <link rel="stylesheet" href="/styles.css?v=1.4.0-source-locator">
   <link rel="stylesheet" href="/vendor/katex/katex.min.css?v=0.16.11">
 </head>
 <body>
@@ -50,6 +50,11 @@
       </nav>
 
       <div class="rail-foot">
+        <nav class="platform-nav" aria-label="平台工作区">
+          <span aria-current="page"><span>论文阅读</span><b>Paperfield</b></span>
+          <a href="/atlas/"><span>前沿与系统学习</span><b>Atlas</b></a>
+          <a href="/flowloom/"><span>科研绘图</span><b>Flowloom</b></a>
+        </nav>
         <button class="storage-entry" id="openStorageButton" type="button">
           <span>存储与用量</span><b id="storageEntryStatus">本地</b>
         </button>
@@ -94,7 +99,8 @@
       <section class="filter-strip" aria-label="论文筛选">
         <button class="filter-toggle" id="filterToggle" type="button" aria-expanded="false" aria-controls="filterControls"><span>筛选与排序</span><b id="filterSummary">全部</b></button>
         <div class="filter-controls" id="filterControls">
-          <label>主题<select id="topicFilter"><option value="">全部主题</option></select></label>
+          <label>领域<select id="topicFilter"><option value="">全部领域</option></select></label>
+          <label class="paper-only-filter">细分方向<select id="subtopicFilter"><option value="">全部细分方向</option></select></label>
           <label class="paper-only-filter">平台层级<select id="tierFilter"><option value="">全部层级</option></select></label>
           <label class="paper-only-filter">发布平台<select id="platformFilter"><option value="">全部平台</option></select></label>
           <label class="paper-only-filter">刊物<select id="venueFilter"><option value="">全部刊物</option></select></label>
@@ -125,11 +131,9 @@
               <details class="score-guide" id="scoreGuide">
                 <summary>评分标准 <span id="scoreGuideSummary">30 / 25 / 20 / 15 / 10</span></summary>
                 <div class="score-editor" id="scoreGuideContent">
-                  <div class="score-editor-visual">
-                    <div class="score-weight-ring" id="scoreWeightRing" role="img" aria-label="五项评分权重环">
-                      <div><strong id="scoreWeightTotal">100</strong><span>总权重</span></div>
-                    </div>
-                    <div class="score-ring-caption"><strong>综合评分模型</strong><span>当前比例实时预览</span></div>
+                  <div class="score-editor-heading">
+                    <div><strong>综合评分模型</strong><span>原始值 0–1</span></div>
+                    <output id="scoreWeightTotal" aria-live="polite">占比合计 100%</output>
                   </div>
                   <div class="score-weight-controls" id="scoreWeightControls"></div>
                   <div class="score-weight-presets" id="scoreWeightPresets" role="group" aria-label="评分预设">
@@ -195,6 +199,8 @@
         <div class="reader-header-actions" role="group" aria-label="论文阅读操作">
           <span class="reading-backup-status" id="readerBackupStatus">本地历史</span>
           <a id="readerSourceLink" href="#" target="_blank" rel="noreferrer">来源页</a>
+          <button class="button button-secondary" id="readerAtlasViewButton" type="button">系统讲解</button>
+          <button class="button button-secondary" id="readerAtlasAnalyzeButton" type="button">加入深度分析</button>
           <label class="reader-storage-target">本次保存至
             <select id="readerStorageMode">
               <option value="local">本地</option>
@@ -217,8 +223,10 @@
         <section class="pdf-workspace" aria-label="论文 PDF">
           <div class="pdf-actions" id="pdfActions" hidden>
             <button id="pdfTextButton" type="button" title="打开可选择的论文正文">可选文本</button>
+            <button id="pdfFlowloomButton" type="button" title="在 Flowloom 中把当前 PDF 页拆为可编辑 SVG 图元">拆为 SVG</button>
             <a id="pdfOpenButton" href="#" target="_blank" rel="noreferrer">新窗口打开</a>
           </div>
+          <div class="pdf-locator-status" id="pdfLocatorStatus" role="status" aria-live="polite" hidden></div>
           <div class="pdf-status" id="pdfStatus" role="status" aria-live="polite">
             <strong>正在寻找公开 PDF</strong>
             <span>依次检查公开来源与作者存档</span>
@@ -298,6 +306,7 @@
         <div class="reader-header-actions" role="group" aria-label="项目阅读操作">
           <span class="reading-backup-status" id="projectBackupStatus">本地历史</span>
           <a id="projectGithubLink" href="#" target="_blank" rel="noreferrer">GitHub</a>
+          <button class="button button-secondary" id="projectAtlasButton" type="button">研究关联</button>
           <button class="button button-secondary" id="projectRefreshSource" type="button">更新源码</button>
         </div>
       </header>
@@ -398,6 +407,6 @@
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
   <script src="/vendor/pdfjs/pdf.min.js?v=3.11.174"></script>
   <script src="/vendor/katex/katex.min.js?v=0.16.11" defer></script>
-  <script src="/app.js?v=1.1.0-digital-manuscript" defer></script>
+  <script src="/app.js?v=1.4.1-editor-role" defer></script>
 </body>
 </html>

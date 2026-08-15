@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 720" role="img" aria-labelledby="course-map-title course-map-desc">
+  <title id="course-map-title">LLM 系统课程路径图</title>
+  <desc id="course-map-desc">课程从 M0 导学与诊断开始，经数学与 PyTorch、Transformer 与生成、数据预训练与 SFT、对齐与强化学习、方法与前沿、训练与推理系统，到 M7 评测研究与项目。</desc>
+  <defs>
+    <marker id="course-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="oklch(0.67 0.15 28)"/>
+    </marker>
+  </defs>
+
+  <rect width="1100" height="720" fill="oklch(0.14 0.012 28)"/>
+  <text x="50" y="62" fill="oklch(0.96 0.008 28)" font-family="Noto Sans SC, Microsoft YaHei, sans-serif" font-size="38" font-weight="720">从可解释的 loss，到可复现的系统</text>
+  <text x="52" y="98" fill="oklch(0.75 0.018 28)" font-family="Noto Sans SC, Microsoft YaHei, sans-serif" font-size="18">八个模块 · 三十五个进阶项目 · 七个 CPU 实验</text>
+
+  <g fill="none" stroke="oklch(0.67 0.15 28)" stroke-width="4" stroke-linecap="round" marker-end="url(#course-arrow)">
+    <path d="M270 219 H304"/>
+    <path d="M530 219 H564"/>
+    <path d="M790 219 H824"/>
+    <path d="M940 278 V366"/>
+    <path d="M830 431 H796"/>
+    <path d="M570 431 H536"/>
+    <path d="M310 431 H276"/>
+  </g>
+
+  <g font-family="Noto Sans SC, Microsoft YaHei, sans-serif">
+    <g transform="translate(50 160)">
+      <rect width="220" height="118" rx="8" fill="oklch(0.95 0.025 28)"/>
+      <text x="18" y="34" fill="oklch(0.46 0.17 28)" font-size="21" font-weight="720">M0</text>
+      <text x="18" y="72" fill="oklch(0.2 0.018 28)" font-size="18">导学与诊断</text>
+      <text x="18" y="101" fill="oklch(0.43 0.018 28)" font-size="14">确定起点</text>
+    </g>
+    <g transform="translate(310 160)">
+      <rect width="220" height="118" rx="8" fill="oklch(0.22 0.02 28)" stroke="oklch(0.36 0.035 28)"/>
+      <text x="18" y="34" fill="oklch(0.72 0.15 28)" font-size="21" font-weight="720">M1</text>
+      <text x="18" y="72" fill="oklch(0.96 0.008 28)" font-size="18">数学与 PyTorch</text>
+      <text x="18" y="101" fill="oklch(0.75 0.018 28)" font-size="14">建立训练语言</text>
+    </g>
+    <g transform="translate(570 160)">
+      <rect width="220" height="118" rx="8" fill="oklch(0.22 0.02 28)" stroke="oklch(0.36 0.035 28)"/>
+      <text x="18" y="34" fill="oklch(0.72 0.15 28)" font-size="21" font-weight="720">M2</text>
+      <text x="18" y="72" fill="oklch(0.96 0.008 28)" font-size="18">Transformer 与生成</text>
+      <text x="18" y="101" fill="oklch(0.75 0.018 28)" font-size="14">读懂 token 流</text>
+    </g>
+    <g transform="translate(830 160)">
+      <rect width="220" height="118" rx="8" fill="oklch(0.22 0.02 28)" stroke="oklch(0.36 0.035 28)"/>
+      <text x="18" y="34" fill="oklch(0.72 0.15 28)" font-size="21" font-weight="720">M3</text>
+      <text x="18" y="72" fill="oklch(0.96 0.008 28)" font-size="18">数据、预训练与 SFT</text>
+      <text x="18" y="101" fill="oklch(0.75 0.018 28)" font-size="14">形成基础能力</text>
+    </g>
+    <g transform="translate(830 372)">
+      <rect width="220" height="118" rx="8" fill="oklch(0.36 0.12 28)" stroke="oklch(0.62 0.17 28)"/>
+      <text x="18" y="34" fill="oklch(0.88 0.08 28)" font-size="21" font-weight="720">M4</text>
+      <text x="18" y="72" fill="oklch(0.98 0.006 28)" font-size="18">对齐与 RL</text>
+      <text x="18" y="101" fill="oklch(0.86 0.035 28)" font-size="14">Project 1-12</text>
+    </g>
+    <g transform="translate(570 372)">
+      <rect width="220" height="118" rx="8" fill="oklch(0.31 0.07 185)" stroke="oklch(0.52 0.1 185)"/>
+      <text x="18" y="34" fill="oklch(0.8 0.1 185)" font-size="21" font-weight="720">M5</text>
+      <text x="18" y="72" fill="oklch(0.97 0.012 185)" font-size="18">方法与前沿</text>
+      <text x="18" y="101" fill="oklch(0.82 0.035 185)" font-size="14">Project 13-19</text>
+    </g>
+    <g transform="translate(310 372)">
+      <rect width="220" height="118" rx="8" fill="oklch(0.22 0.02 28)" stroke="oklch(0.62 0.17 28)"/>
+      <text x="18" y="34" fill="oklch(0.72 0.15 28)" font-size="21" font-weight="720">M6</text>
+      <text x="18" y="72" fill="oklch(0.96 0.008 28)" font-size="18">训练与推理系统</text>
+      <text x="18" y="101" fill="oklch(0.75 0.018 28)" font-size="14">Project 20-35</text>
+    </g>
+    <g transform="translate(50 372)">
+      <rect width="220" height="118" rx="8" fill="oklch(0.94 0.035 185)"/>
+      <text x="18" y="34" fill="oklch(0.42 0.11 185)" font-size="21" font-weight="720">M7</text>
+      <text x="18" y="72" fill="oklch(0.2 0.025 185)" font-size="18">评测、研究与项目</text>
+      <text x="18" y="101" fill="oklch(0.4 0.04 185)" font-size="14">独立证据</text>
+    </g>
+  </g>
+
+  <g transform="translate(118 574)" font-family="Noto Sans SC, Microsoft YaHei, sans-serif">
+    <text x="0" y="0" fill="oklch(0.73 0.02 28)" font-size="15">学习闭环</text>
+    <text x="0" y="42" fill="oklch(0.96 0.008 28)" font-size="20" font-weight="700">预测</text>
+    <text x="96" y="42" fill="oklch(0.63 0.13 28)" font-size="20">→</text>
+    <text x="142" y="42" fill="oklch(0.96 0.008 28)" font-size="20" font-weight="700">推导</text>
+    <text x="238" y="42" fill="oklch(0.63 0.13 28)" font-size="20">→</text>
+    <text x="284" y="42" fill="oklch(0.96 0.008 28)" font-size="20" font-weight="700">实现</text>
+    <text x="380" y="42" fill="oklch(0.63 0.13 28)" font-size="20">→</text>
+    <text x="426" y="42" fill="oklch(0.96 0.008 28)" font-size="20" font-weight="700">失效</text>
+    <text x="522" y="42" fill="oklch(0.63 0.13 28)" font-size="20">→</text>
+    <text x="568" y="42" fill="oklch(0.96 0.008 28)" font-size="20" font-weight="700">验收</text>
+    <text x="0" y="84" fill="oklch(0.72 0.02 28)" font-size="16">每一章都必须留下公式、命令、日志、失败与结论边界</text>
+  </g>
+</svg>

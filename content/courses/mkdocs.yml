@@ -1,0 +1,218 @@
+site_name: AI 系统课程
+site_description: 从 LLM 系统到具身智能的中文工程与研究课程
+site_author: Shiraikuroko123
+site_url: http://127.0.0.1:8765/courses/
+repo_name: Shiraikuroko123/paperfield
+repo_url: https://github.com/Shiraikuroko123/paperfield
+edit_uri: edit/main/content/courses/课程/
+docs_dir: 课程
+site_dir: site
+use_directory_urls: true
+strict: true
+
+theme:
+  name: material
+  custom_dir: overrides
+  language: zh
+  font: false
+  icon:
+    logo: material/book-open-page-variant
+    repo: fontawesome/brands/github
+  features:
+    - navigation.instant
+    - navigation.instant.prefetch
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: 切换到深色模式
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: 切换到浅色模式
+
+nav:
+  - 学习中心: README.md
+  - 具身智能课程:
+      - 课程入口: embodied/README.md
+      - M0 导学与诊断:
+          - 导学、诊断与学习方法: embodied/00-导学与诊断/01-导学诊断与学习方法.md
+          - 具身智能全景与核心术语: embodied/00-导学与诊断/02-具身智能全景与核心术语.md
+      - M1 数学与学习基础:
+          - 具身智能所需的数学基础: embodied/01-数学与学习基础/01-数学基础.md
+          - Python、PyTorch 与深度学习: embodied/01-数学与学习基础/02-Python-PyTorch与深度学习.md
+          - 视觉、Transformer 与生成模型: embodied/01-数学与学习基础/03-视觉-Transformer与生成模型.md
+      - M2 机器人系统基础:
+          - 坐标、位姿与运动学: embodied/02-机器人系统基础/01-坐标位姿与运动学.md
+          - 动力学与机器人控制: embodied/02-机器人系统基础/02-动力学与机器人控制.md
+          - 硬件、传感器与安全: embodied/02-机器人系统基础/03-硬件传感器与安全.md
+          - 感知、状态估计、ROS2 与仿真: embodied/02-机器人系统基础/04-感知状态估计ROS2与仿真.md
+      - M3 策略学习:
+          - 强化学习: embodied/03-策略学习/01-强化学习.md
+          - RL 与运动控制: embodied/03-策略学习/02-RL与运动控制-专题.md
+          - 模仿学习与生成式策略: embodied/03-策略学习/03-模仿学习与生成式策略.md
+          - BC、DAgger 与 ACT: embodied/03-策略学习/04-BC到ACT-专题.md
+          - Diffusion Policy: embodied/03-策略学习/05-DiffusionPolicy-专题.md
+          - π0 与 flow matching 动作头: embodied/03-策略学习/06-π0与flow-matching-专题.md
+      - M4 操作、数据与 VLA:
+          - 机器人操作: embodied/04-操作数据与VLA/01-机器人操作.md
+          - 机器人数据工程与数据集: embodied/04-操作数据与VLA/02-数据工程与数据集.md
+          - 具身智能的数据问题: embodied/04-操作数据与VLA/03-数据问题-专题.md
+          - VLM、VLA、跨本体与具身 Agent: embodied/04-操作数据与VLA/04-VLM-VLA跨本体与Agent.md
+          - 从 VLM 到 VLA: embodied/04-操作数据与VLA/05-从VLM到VLA-专题.md
+          - 跨本体基础模型: embodied/04-操作数据与VLA/06-跨本体基础模型-专题.md
+          - 具身智能与 LLM Agent: embodied/04-操作数据与VLA/07-具身智能与LLM-Agent-专题.md
+      - M5 主要分支与迁移:
+          - 导航、SLAM 与移动操作: embodied/05-主要分支与迁移/01-导航SLAM与移动操作.md
+          - 运动控制与人形机器人: embodied/05-主要分支与迁移/02-运动控制与人形机器人.md
+          - 人形全身控制: embodied/05-主要分支与迁移/03-人形全身控制-专题.md
+          - Sim2Real 与世界模型: embodied/05-主要分支与迁移/04-Sim2Real与世界模型.md
+          - Sim2Real 专题: embodied/05-主要分支与迁移/05-Sim2Real-专题.md
+          - 世界模型与具身智能: embodied/05-主要分支与迁移/06-世界模型与具身智能-专题.md
+          - 国内产业与研究格局: embodied/05-主要分支与迁移/07-国内格局-专题.md
+      - M6 研究、评测与项目:
+          - 评测、统计与可复现研究: embodied/06-研究评测与项目/01-评测统计与可复现研究.md
+          - 评测危机: embodied/06-研究评测与项目/02-评测危机-专题.md
+          - 项目实战与验收: embodied/06-研究评测与项目/03-项目实战答案与参考文献.md
+          - 复试问答与模拟面试: embodied/06-研究评测与项目/04-复试问答全集.md
+          - 技术叙事: embodied/06-研究评测与项目/05-技术叙事.md
+      - 附录:
+          - 习题参考答案: embodied/附录/习题参考答案.md
+          - 术语表: embodied/附录/术语表.md
+          - 参考文献与官方资源: embodied/附录/参考文献.md
+      - 实验代码（GitHub）: https://github.com/Shiraikuroko123/paperfield/tree/main/content/courses/课程/embodied/labs
+  - LLM 系统课程:
+      - 课程入口: llm/README.md
+      - M0 导学与诊断:
+          - 课程路线与学习方法: llm/00-导学与诊断/01-课程路线与学习方法.md
+          - 先修诊断与个性化路径: llm/00-导学与诊断/02-先修诊断与个性化路径.md
+          - LLM 全景与核心术语: llm/00-导学与诊断/03-LLM全景与核心术语.md
+      - M1 数学与 PyTorch:
+          - LLM 所需数学基础: llm/01-数学与PyTorch/01-数学基础.md
+          - 张量、自动微分与训练循环: llm/01-数学与PyTorch/02-PyTorch训练基础.md
+          - 概率建模、损失与优化: llm/01-数学与PyTorch/03-概率损失与优化.md
+      - M2 Transformer 与生成:
+          - Tokenization、Embedding 与位置: llm/02-Transformer与生成/01-Tokenization与Embedding.md
+          - Attention 与 Transformer: llm/02-Transformer与生成/02-Attention与Transformer.md
+          - 解码、KV Cache 与推理: llm/02-Transformer与生成/03-解码与KVCache.md
+      - M3 数据、预训练与 SFT:
+          - 数据工程与预训练目标: llm/03-数据预训练与SFT/01-数据与预训练.md
+          - Scaling、训练稳定性与检查点: llm/03-数据预训练与SFT/02-Scaling与训练稳定性.md
+          - SFT、PEFT 与训练数据: llm/03-数据预训练与SFT/03-SFT与PEFT.md
+      - M4 对齐与 RL 基础:
+          - 公式与项目读法: llm/04-对齐与RL基础/00-公式与项目读法.md
+          - P01 Actor-Critic: llm/04-对齐与RL基础/01.md
+          - P02 KL、交叉熵与最大似然: llm/04-对齐与RL基础/02.md
+          - P03 Reward 设计: llm/04-对齐与RL基础/03.md
+          - P04 Monte Carlo 与重要性采样: llm/04-对齐与RL基础/04.md
+          - P05 Advantage 与 baseline: llm/04-对齐与RL基础/05.md
+          - P06 RL 训练与 test-time scaling: llm/04-对齐与RL基础/06.md
+          - P07 PPO clip 与 CISPO: llm/04-对齐与RL基础/07.md
+          - P08 GRPO 与 KL: llm/04-对齐与RL基础/08.md
+          - P09 分布式 loss 归约: llm/04-对齐与RL基础/09.md
+          - P10 DPO reward 与 hacking: llm/04-对齐与RL基础/10.md
+          - P11 MoE 训推一致性: llm/04-对齐与RL基础/11.md
+          - P12 关键超参数: llm/04-对齐与RL基础/12.md
+      - M5 方法与前沿:
+          - 模块说明与论文读法: llm/05-方法与前沿/00-模块说明.md
+          - P13 GRPO 到 CaSP: llm/05-方法与前沿/13.md
+          - P14 Trust region 与 AReaL: llm/05-方法与前沿/14.md
+          - P15 RL 的能力边界: llm/05-方法与前沿/15.md
+          - P16 ProRL 与长期训练: llm/05-方法与前沿/16.md
+          - P17 OPD 与 on-policy 蒸馏: llm/05-方法与前沿/17.md
+          - P18 推理能力的阶段归因: llm/05-方法与前沿/18.md
+          - P19 DeepSeek 路线与证据边界: llm/05-方法与前沿/19.md
+      - M6 训练与推理系统:
+          - 模块说明与系统账本: llm/06-训练与推理系统/00-模块说明.md
+          - P20 GRPO 显存账本: llm/06-训练与推理系统/20.md
+          - P21 KV cache 与多卡通信: llm/06-训练与推理系统/21.md
+          - P22 INT8、FP8 与 RL: llm/06-训练与推理系统/22.md
+          - P23 Rollout 长尾: llm/06-训练与推理系统/23.md
+          - P24 Continuous batching: llm/06-训练与推理系统/24.md
+          - P25 有效 token/s: llm/06-训练与推理系统/25.md
+          - P26 多机多卡反向传播: llm/06-训练与推理系统/26.md
+          - P27 异步 RL 流水线: llm/06-训练与推理系统/27.md
+          - P28 Partial rollout 与旧 KV: llm/06-训练与推理系统/28.md
+          - P29 MoE Expert Parallelism: llm/06-训练与推理系统/29.md
+          - P30 长上下文并行与 overlap: llm/06-训练与推理系统/30.md
+          - P31 确定性与 batch invariance: llm/06-训练与推理系统/31.md
+          - P32 AReaL、slime 与 rollout 瓶颈: llm/06-训练与推理系统/32.md
+          - P33 Full async staleness: llm/06-训练与推理系统/33.md
+          - P34 slime、Megatron 与 loss: llm/06-训练与推理系统/34.md
+          - P35 框架选择实验: llm/06-训练与推理系统/35.md
+      - M7 评测、研究与项目:
+          - 评测、统计与可复现研究: llm/07-评测研究与项目/01-评测与可复现研究.md
+          - 论文阅读、复现与消融: llm/07-评测研究与项目/02-论文复现与消融.md
+          - 工程经验到 LLM 的桥接项目: llm/07-评测研究与项目/03-工程桥接项目.md
+          - 专家能力验收与作品集: llm/07-评测研究与项目/04-专家能力验收.md
+      - 35 题总索引: llm/35题索引.md
+      - 附录:
+          - 学习日志模板: llm/附录/学习日志模板.md
+          - 术语表: llm/附录/术语表.md
+          - 原 35 题课程附录: llm/附录/原课程附录.md
+          - 参考资料与版本边界: llm/附录/参考资料.md
+      - 实验代码（GitHub）: https://github.com/Shiraikuroko123/paperfield/tree/main/content/courses/课程/llm/labs
+
+plugins:
+  - search:
+      lang: zh
+      separator: '[\s\-,:!=\[\]()"`/]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      permalink_title: 链接到本节
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+
+extra_css:
+  - assets/stylesheets/extra.css
+
+extra_javascript:
+  - assets/javascripts/site.js
+  - assets/vendor/mathjax-3.2.2/tex-mml-chtml.js
+  - assets/vendor/mermaid-11.16.1/mermaid.min.js
+
+copyright: Copyright &copy; 2026 Shiraikuroko123
+

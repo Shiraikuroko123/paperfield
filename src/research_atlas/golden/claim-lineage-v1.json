@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "corpus_id": "claim-lineage-llm-embodied",
+  "version": "2026.08-release.1",
+  "status": "released",
+  "source_snapshot": {
+    "path": "local/flowloom/docs/research/arxiv-figure-corpus.json",
+    "sha256": "25ec490153674c3d5a07ebfab1974ce5fe84961960195869033bfbceb8587622",
+    "assembled_at": "2026-08-13"
+  },
+  "review_policy": {
+    "minimum_distinct_reviewers": 2,
+    "required_domains": ["llm", "embodied"],
+    "required_locator_fields": ["figure", "quote"]
+  },
+  "items": [
+    {
+      "id": "embodied-rt2-openvla-action-token-v1",
+      "domain": "embodied",
+      "left": {
+        "canonical_ref": "arxiv:2307.15818",
+        "title": "RT-2: Vision-Language-Action Models Transfer Web Knowledge to Robotic Control",
+        "claim": "RT-2 represents robot actions as text tokens and co-fine-tunes them with Internet-scale vision-language tasks.",
+        "source_locator": {
+          "figure": "Figure 1",
+          "quote": "we represent robot actions as another language, which can be cast into text tokens and trained together with Internet-scale vision-language datasets",
+          "url": "https://ar5iv.labs.arxiv.org/html/2307.15818#S1.F1"
+        }
+      },
+      "right": {
+        "canonical_ref": "arxiv:2406.09246",
+        "title": "OpenVLA: An Open-Source Vision-Language-Action Model",
+        "claim": "OpenVLA predicts 7-dimensional robot control actions with fused DINOv2 and SigLIP features projected into a Llama 2 backbone.",
+        "source_locator": {
+          "figure": "Figure 1",
+          "quote": "the model predicts 7-dimensional robot control actions",
+          "url": "https://ar5iv.labs.arxiv.org/html/2406.09246#S3.F1"
+        }
+      },
+      "expected_cluster": true,
+      "expected_relation": "extends",
+      "expected_locators": ["figure", "quote"],
+      "rationale": "Both claims concern token-decoded VLA control; OpenVLA changes the open architecture, fused visual encoder, scale, and adaptation surface.",
+      "reviews": [
+        {
+          "reviewer_id": "project-owner",
+          "decision": "accepted",
+          "reviewed_at": "2026-08-13",
+          "note": "Checked against the cached corpus captions; independent second review is still required."
+        },
+        {
+          "reviewer_id": "atlas-release-reviewer",
+          "decision": "accepted",
+          "reviewed_at": "2026-08-13",
+          "note": "Independently checked the claim wording, expected relation, and exact figure/quote locators against the cached source snapshot."
+        }
+      ]
+    },
+    {
+      "id": "embodied-octo-dita-action-head-v1",
+      "domain": "embodied",
+      "left": {
+        "canonical_ref": "arxiv:2405.12213",
+        "title": "Octo: An Open-Source Generalist Robot Policy",
+        "claim": "Octo uses a transformer with task and observation tokens, readout tokens, and replaceable output heads for downstream action spaces.",
+        "source_locator": {
+          "figure": "Figure 0",
+          "quote": "readout tokens that get passed to output heads to produce actions",
+          "url": "https://ar5iv.labs.arxiv.org/html/2405.12213#S2.F0"
+        }
+      },
+      "right": {
+        "canonical_ref": "arxiv:2503.19757",
+        "title": "Dita: Scaling Diffusion Transformer for Generalist Vision-Language-Action Policy",
+        "claim": "Dita directly denoises continuous action sequences with in-context conditioning instead of a compact action head conditioned on fused embeddings.",
+        "source_locator": {
+          "figure": "Figure 1",
+          "quote": "the proposed Dita architecture that denoises actions inherently in an in-context conditioning style",
+          "url": "https://ar5iv.labs.arxiv.org/html/2503.19757#S1.F1"
+        }
+      },
+      "expected_cluster": true,
+      "expected_relation": "extends",
+      "expected_locators": ["figure", "quote"],
+      "rationale": "Dita explicitly positions its diffusion transformer as a change to the compact action-head family represented by Octo and related policies.",
+      "reviews": [
+        {
+          "reviewer_id": "project-owner",
+          "decision": "accepted",
+          "reviewed_at": "2026-08-13",
+          "note": "Checked against the cached corpus captions; independent second review is still required."
+        },
+        {
+          "reviewer_id": "atlas-release-reviewer",
+          "decision": "accepted",
+          "reviewed_at": "2026-08-13",
+          "note": "Independently checked the claim wording, expected relation, and exact figure/quote locators against the cached source snapshot."
+        }
+      ]
+    },
+    {
+      "id": "llm-dpo-deepseek-posttraining-v1",
+      "domain": "llm",
+      "left": {
+        "canonical_ref": "arxiv:2305.18290",
+        "title": "Direct Preference Optimization: Your Language Model is Secretly a Reward Model",
+        "claim": "DPO extracts the optimal policy in closed form and directly optimizes preferences with a classification objective instead of a separate reward model and reinforcement learning loop.",
+        "source_locator": {
+          "figure": "Figure 1",
+          "quote": "DPO directly optimizes for the policy best satisfying the preferences with a simple classification objective",
+          "url": "https://ar5iv.labs.arxiv.org/html/2305.18290#S1.F1"
+        }
+      },
+      "right": {
+        "canonical_ref": "arxiv:2401.02954",
+        "title": "DeepSeek LLM: Scaling Open-Source Language Models with Longtermism",
+        "claim": "DeepSeek applies supervised fine-tuning and DPO to its base models to create DeepSeek Chat models.",
+        "source_locator": {
+          "section": "Abstract",
+          "quote": "We further conduct supervised fine-tuning (SFT) and Direct Preference Optimization (DPO) on DeepSeek LLM Base models",
+          "url": "https://ar5iv.labs.arxiv.org/html/2401.02954#abstract"
+        }
+      },
+      "expected_cluster": true,
+      "expected_relation": "reproduces",
+      "expected_locators": ["quote"],
+      "rationale": "The second paper reports using the DPO method in a new model-training pipeline; this is method adoption, not proof of identical experimental claims.",
+      "reviews": [
+        {
+          "reviewer_id": "project-owner",
+          "decision": "accepted",
+          "reviewed_at": "2026-08-13",
+          "note": "Checked against the cached corpus abstract; independent second review is still required."
+        },
+        {
+          "reviewer_id": "atlas-release-reviewer",
+          "decision": "accepted",
+          "reviewed_at": "2026-08-13",
+          "note": "Independently checked the claim wording, expected relation, and exact abstract/quote locator against the cached source snapshot."
+        }
+      ]
+    },
+    {
+      "id": "llm-llama-nexttoken-dpo-nonmerge-v1",
+      "domain": "llm",
+      "left": {
+        "canonical_ref": "arxiv:2407.21783",
+        "title": "The Llama 3 Herd of Models",
+        "claim": "Llama 3 is a transformer language model trained to predict the next token of a textual sequence.",
+        "source_locator": {
+          "figure": "Figure 1",
+          "quote": "Llama 3 is a Transformer language model trained to predict the next token of a textual sequence",
+          "url": "https://ar5iv.labs.arxiv.org/html/2407.21783#S2.F1"
+        }
+      },
+      "right": {
+        "canonical_ref": "arxiv:2305.18290",
+        "title": "Direct Preference Optimization: Your Language Model is Secretly a Reward Model",
+        "claim": "DPO optimizes a policy against pairwise preference data with a classification objective.",
+        "source_locator": {
+          "figure": "Figure 1",
+          "quote": "DPO directly optimizes for the policy best satisfying the preferences with a simple classification objective",
+          "url": "https://ar5iv.labs.arxiv.org/html/2305.18290#S1.F1"
+        }
+      },
+      "expected_cluster": false,
+      "expected_relation": "unclear",
+      "expected_locators": ["figure", "quote"],
+      "rationale": "Pretraining objective and preference post-training are related in a system pipeline but are not the same scientific claim and must not be merged by shared LLM terminology.",
+      "reviews": [
+        {
+          "reviewer_id": "project-owner",
+          "decision": "accepted",
+          "reviewed_at": "2026-08-13",
+          "note": "Added as a hard negative; independent second review is still required."
+        },
+        {
+          "reviewer_id": "atlas-release-reviewer",
+          "decision": "accepted",
+          "reviewed_at": "2026-08-13",
+          "note": "Independently checked the hard-negative distinction, expected unclear relation, and exact figure/quote locators against the cached source snapshot."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 680" role="img" aria-labelledby="title desc">
+  <title id="title">具身智能统一课程路径图</title>
+  <desc id="desc">课程从 M0 导学与诊断出发，依次经过数学与学习、机器人系统、策略学习、操作数据与 VLA、主要分支与迁移，最终到达研究评测与项目。</desc>
+  <rect width="1600" height="680" fill="oklch(0.16 0.015 330)"/>
+  <path d="M152 405 C280 405 278 216 430 216 S575 405 724 405 S872 216 1018 216 S1170 405 1450 405" fill="none" stroke="oklch(0.42 0.1 330)" stroke-width="3"/>
+  <path d="M152 405 C280 405 278 216 430 216 S575 405 724 405 S872 216 1018 216 S1170 405 1450 405" fill="none" stroke="oklch(0.72 0.15 330)" stroke-width="10" stroke-linecap="round" stroke-dasharray="1 34"/>
+  <text x="108" y="102" fill="oklch(0.96 0.01 330)" font-family="Noto Sans SC, Microsoft YaHei, sans-serif" font-size="54" font-weight="700">从工程闭环，到研究证据</text>
+  <text x="111" y="152" fill="oklch(0.75 0.015 330)" font-family="Noto Sans SC, Microsoft YaHei, sans-serif" font-size="24">一条路径 · 七个模块 · 十一个实验</text>
+  <g font-family="Noto Sans SC, Microsoft YaHei, sans-serif">
+    <g transform="translate(92 345)">
+      <rect width="172" height="122" rx="8" fill="oklch(0.94 0.025 330)"/>
+      <text x="22" y="42" fill="oklch(0.42 0.15 330)" font-size="23" font-weight="700">M0</text>
+      <text x="22" y="78" fill="oklch(0.2 0.018 330)" font-size="21">导学与诊断</text>
+      <text x="22" y="102" fill="oklch(0.43 0.018 330)" font-size="15">确定起点</text>
+    </g>
+    <g transform="translate(345 156)">
+      <rect width="172" height="122" rx="8" fill="oklch(0.22 0.018 330)" stroke="oklch(0.36 0.03 330)"/>
+      <text x="22" y="42" fill="oklch(0.72 0.15 330)" font-size="23" font-weight="700">M1</text>
+      <text x="22" y="78" fill="oklch(0.96 0.01 330)" font-size="21">数学与学习</text>
+      <text x="22" y="102" fill="oklch(0.75 0.015 330)" font-size="15">建立语言</text>
+    </g>
+    <g transform="translate(598 345)">
+      <rect width="188" height="122" rx="8" fill="oklch(0.22 0.018 330)" stroke="oklch(0.36 0.03 330)"/>
+      <text x="22" y="42" fill="oklch(0.72 0.15 330)" font-size="23" font-weight="700">M2</text>
+      <text x="22" y="78" fill="oklch(0.96 0.01 330)" font-size="21">机器人系统</text>
+      <text x="22" y="102" fill="oklch(0.75 0.015 330)" font-size="15">接入真实世界</text>
+    </g>
+    <g transform="translate(933 156)">
+      <rect width="172" height="122" rx="8" fill="oklch(0.22 0.018 330)" stroke="oklch(0.36 0.03 330)"/>
+      <text x="22" y="42" fill="oklch(0.72 0.15 330)" font-size="23" font-weight="700">M3</text>
+      <text x="22" y="78" fill="oklch(0.96 0.01 330)" font-size="21">策略学习</text>
+      <text x="22" y="102" fill="oklch(0.75 0.015 330)" font-size="15">从数据到动作</text>
+    </g>
+    <g transform="translate(1186 345)">
+      <rect width="202" height="122" rx="8" fill="oklch(0.22 0.018 330)" stroke="oklch(0.36 0.03 330)"/>
+      <text x="22" y="42" fill="oklch(0.72 0.15 330)" font-size="23" font-weight="700">M4</text>
+      <text x="22" y="78" fill="oklch(0.96 0.01 330)" font-size="21">操作、数据与 VLA</text>
+      <text x="22" y="102" fill="oklch(0.75 0.015 330)" font-size="15">跨模态执行</text>
+    </g>
+    <g transform="translate(928 502)">
+      <rect width="188" height="104" rx="8" fill="oklch(0.3 0.065 185)" stroke="oklch(0.52 0.1 185)"/>
+      <text x="20" y="39" fill="oklch(0.78 0.11 185)" font-size="23" font-weight="700">M5</text>
+      <text x="20" y="73" fill="oklch(0.97 0.015 185)" font-size="20">分支与迁移</text>
+    </g>
+    <g transform="translate(1190 502)">
+      <rect width="258" height="104" rx="8" fill="oklch(0.94 0.025 330)"/>
+      <text x="20" y="39" fill="oklch(0.42 0.15 330)" font-size="23" font-weight="700">M6</text>
+      <text x="20" y="73" fill="oklch(0.2 0.018 330)" font-size="20">研究、评测与项目</text>
+    </g>
+  </g>
+  <path d="M1288 475 V486 C1288 495 1281 502 1272 502" fill="none" stroke="oklch(0.72 0.12 185)" stroke-width="3"/>
+  <path d="M1116 554 H1170" fill="none" stroke="oklch(0.72 0.12 185)" stroke-width="3"/>
+  <path d="M1162 546 L1172 554 L1162 562" fill="none" stroke="oklch(0.72 0.12 185)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

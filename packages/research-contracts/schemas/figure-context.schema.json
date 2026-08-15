@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paperfield.local/contracts/figure-context.schema.json",
+  "title": "Editable figure context",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "figure_id", "title", "source_locator", "provenance"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "figure_id": {"type": "string", "minLength": 8},
+    "title": {"type": "string", "minLength": 1},
+    "document_id": {"type": "string"},
+    "asset_kind": {"enum": ["raster-page", "raster-crop", "svg", "flowloom-document"]},
+    "asset_url": {"type": "string", "format": "uri-reference"},
+    "asset_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "source_locator": {"$ref": "source-locator.schema.json"},
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["producer", "produced_at"],
+      "properties": {
+        "producer": {"enum": ["paperfield", "research-atlas", "courses", "flowloom"]},
+        "produced_at": {"type": "string", "format": "date-time"},
+        "transformations": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

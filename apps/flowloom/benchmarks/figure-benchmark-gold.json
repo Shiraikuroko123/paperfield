@@ -1,0 +1,463 @@
+{
+  "protocolVersion": 1,
+  "rubricVersion": "top-conference-figure-v1",
+  "generatedFrom": "docs/research/arxiv-figure-corpus.json",
+  "licenseBoundary": "Reference images are analysis-only links. They are not bundled as product assets unless a separate license review records permission.",
+  "cases": [
+    {
+      "id": "vla-rt2-overview",
+      "domain": "embodied-ai",
+      "subdomain": "vla",
+      "figureFamily": "architecture",
+      "taskType": "pdf-reconstruction",
+      "reviewStatus": "needs-revision",
+      "trainingRole": "gold-candidate",
+      "baselineRole": "hard-negative",
+      "reconstructionId": "rt2-figure-1-v1",
+      "paper": {
+        "arxivId": "2307.15818",
+        "title": "RT-2: Vision-Language-Action Models Transfer Web Knowledge to Robotic Control",
+        "year": 2023,
+        "absUrl": "https://arxiv.org/abs/2307.15818",
+        "pdfUrl": "https://arxiv.org/pdf/2307.15818"
+      },
+      "figure": {
+        "id": "S1.F1",
+        "label": "Figure 1",
+        "caption": "RT-2 overview: robot actions are represented as language tokens and trained together with Internet-scale vision-language data before deployment to a robot.",
+        "sourceLocator": "Figure 1; overview paragraph",
+        "htmlUrl": "https://ar5iv.labs.arxiv.org/html/2307.15818",
+        "imageUrl": "https://ar5iv.labs.arxiv.org/html/2307.15818/assets/x1.png",
+        "thumbnail": { "width": 822, "height": 304, "kind": "remote-reference" },
+        "fingerprint": { "algorithm": "sha256", "scope": "content", "status": "verified", "value": "8402b6eb00ac9441fc22f5c0ffef1dd29a02671c96363e5eda38398a49226d11" },
+        "license": { "status": "analysis-only", "note": "Verify the paper asset license before redistribution." }
+      },
+      "visualGrammar": {
+        "composition": ["system-overview", "model-architecture", "training-pipeline", "agent-loop"],
+        "elements": ["module-blocks", "token-sequence", "robot-embodiment", "action-trajectory", "feedback-arrow"],
+        "relations": ["multimodal-input", "tokenized-action", "closed-loop-feedback"]
+      },
+      "expectedPlan": {
+        "version": 1,
+        "title": "Vision-language-action robot control",
+        "caption": "Vision and language are fused into an action-token policy that closes the loop with the robot.",
+        "family": "architecture",
+        "orientation": "LR",
+        "focalElementIds": ["vlm-policy"],
+        "sources": [
+          { "id": "paper", "kind": "paper", "title": "RT-2 method overview", "locator": "Figure 1; overview paragraph", "citation": "arXiv:2307.15818" }
+        ],
+        "stages": [
+          { "id": "observe", "label": "Observe", "kind": "lane" },
+          { "id": "model", "label": "Token policy", "kind": "lane" },
+          { "id": "control", "label": "Control", "kind": "lane" }
+        ],
+        "elements": [
+          { "id": "image-observation", "stageId": "observe", "role": "input", "label": "Image observation", "priority": "primary", "evidence": [{ "sourceId": "paper", "claim": "The policy consumes visual observations.", "locator": "Figure 1", "confidence": "direct" }] },
+          { "id": "language-goal", "stageId": "observe", "role": "input", "label": "Language instruction", "priority": "supporting", "evidence": [{ "sourceId": "paper", "claim": "Natural-language instructions condition control.", "locator": "Figure 1", "confidence": "direct" }] },
+          { "id": "vlm-policy", "stageId": "model", "role": "policy", "label": "Vision-language policy", "description": "Shared token space for visual, language, and action tokens", "priority": "focal", "evidence": [{ "sourceId": "paper", "claim": "A VLM is adapted for robotic control.", "locator": "Figure 1", "confidence": "direct" }] },
+          { "id": "action-tokens", "stageId": "model", "role": "action", "label": "Discretized action tokens", "description": "End-effector and base actions", "priority": "primary", "evidence": [{ "sourceId": "paper", "claim": "Robot actions are represented as tokens.", "locator": "Figure 1", "confidence": "direct" }] },
+          { "id": "robot", "stageId": "control", "role": "environment", "label": "Robot environment", "priority": "primary", "evidence": [{ "sourceId": "paper", "claim": "The policy is deployed on a robot.", "locator": "Figure 1", "confidence": "direct" }] },
+          { "id": "new-observation", "stageId": "control", "role": "output", "label": "Next observation", "priority": "supporting", "evidence": [{ "sourceId": "paper", "claim": "Closed-loop control repeatedly observes the scene.", "locator": "Figure 1", "confidence": "derived" }] }
+        ],
+        "relations": [
+          { "id": "r-image-policy", "source": "image-observation", "target": "vlm-policy", "semantic": "data", "evidence": [{ "sourceId": "paper", "locator": "Figure 1", "confidence": "direct" }] },
+          { "id": "r-language-policy", "source": "language-goal", "target": "vlm-policy", "semantic": "data", "evidence": [{ "sourceId": "paper", "locator": "Figure 1", "confidence": "direct" }] },
+          { "id": "r-policy-actions", "source": "vlm-policy", "target": "action-tokens", "semantic": "control", "evidence": [{ "sourceId": "paper", "locator": "Figure 1", "confidence": "direct" }] },
+          { "id": "r-actions-robot", "source": "action-tokens", "target": "robot", "semantic": "sequence", "evidence": [{ "sourceId": "paper", "locator": "Figure 1", "confidence": "direct" }] },
+          { "id": "r-robot-observation", "source": "robot", "target": "new-observation", "semantic": "feedback", "evidence": [{ "sourceId": "paper", "locator": "Figure 1", "confidence": "derived" }] },
+          { "id": "r-observation-policy", "source": "new-observation", "target": "vlm-policy", "semantic": "data", "evidence": [{ "sourceId": "paper", "locator": "Figure 1", "confidence": "derived" }] }
+        ]
+      },
+      "humanReviews": [
+        {
+          "reviewerId": "project-owner",
+          "reviewedAt": "2026-08-10",
+          "rubricVersion": "top-conference-figure-v1",
+          "status": "needs-revision",
+          "scores": { "overall": 1.3 },
+          "findings": ["The baseline output collapses RT-2 Figure 1 into a generic three-column flowchart and loses its paper-specific scientific structure."]
+        }
+      ]
+    },
+    {
+      "id": "sim2real-humanoid-standing",
+      "domain": "embodied-ai",
+      "subdomain": "sim2real",
+      "figureFamily": "experimental",
+      "taskType": "pdf-reconstruction",
+      "reconstructionId": "sim2real-humanoid-figure-2-v1",
+      "reviewStatus": "needs-revision",
+      "trainingRole": "hard-negative",
+      "baselineRole": "hard-negative",
+      "paper": {
+        "arxivId": "2502.08378",
+        "title": "Learning Humanoid Standing-up Control across Diverse Postures",
+        "year": 2025,
+        "absUrl": "https://arxiv.org/abs/2502.08378",
+        "pdfUrl": "https://arxiv.org/pdf/2502.08378"
+      },
+      "figure": {
+        "id": "S3.F2",
+        "label": "Figure 2",
+        "caption": "Policies are trained in simulation with critics, rewards, smoothness regularization, and action bounds, then deployed on a real robot.",
+        "sourceLocator": "Figure 2 caption",
+        "htmlUrl": "https://ar5iv.labs.arxiv.org/html/2502.08378",
+        "imageUrl": "https://ar5iv.labs.arxiv.org/html/2502.08378/assets/x1.png",
+        "thumbnail": { "width": 436, "height": 195, "kind": "remote-reference" },
+        "fingerprint": { "algorithm": "sha256", "scope": "content", "status": "not-cached", "value": null },
+        "license": { "status": "analysis-only", "note": "Verify the paper asset license before redistribution." }
+      },
+      "visualGrammar": {
+        "composition": ["system-overview", "training-pipeline", "sim-to-real-boundary"],
+        "elements": ["environment-scene", "loss-objective", "robot-embodiment", "action-trajectory", "feedback-arrow"],
+        "relations": ["simulation-training", "policy-export", "real-deployment"]
+      },
+      "expectedPlan": {
+        "version": 1,
+        "title": "Simulation-to-real policy transfer",
+        "caption": "A randomized simulator trains a constrained policy that is exported and evaluated on hardware.",
+        "family": "experimental",
+        "orientation": "LR",
+        "focalElementIds": ["sim-policy"],
+        "sources": [
+          { "id": "paper", "kind": "paper", "title": "Humanoid standing-up control", "locator": "Figure 2 caption", "citation": "arXiv:2502.08378" }
+        ],
+        "stages": [
+          { "id": "simulation", "label": "Simulation", "kind": "phase" },
+          { "id": "transfer", "label": "Transfer", "kind": "phase" },
+          { "id": "hardware", "label": "Hardware", "kind": "phase" }
+        ],
+        "elements": [
+          { "id": "simulator", "stageId": "simulation", "role": "environment", "label": "Randomized simulator", "priority": "primary", "evidence": [{ "sourceId": "paper", "claim": "Training starts in simulation.", "locator": "Figure 2", "confidence": "direct" }] },
+          { "id": "constraints", "stageId": "simulation", "role": "loss", "label": "Rewards + constraints", "description": "Reward, smoothness, and action bounds", "priority": "supporting", "evidence": [{ "sourceId": "paper", "claim": "Multiple critics and motion constraints shape the objective.", "locator": "Figure 2 caption", "confidence": "direct" }] },
+          { "id": "sim-policy", "stageId": "simulation", "role": "policy", "label": "RL policy", "description": "Learns stable standing-up motions", "priority": "focal", "evidence": [{ "sourceId": "paper", "claim": "A policy is trained from scratch in simulation.", "locator": "Figure 2 caption", "confidence": "direct" }] },
+          { "id": "exported-policy", "stageId": "transfer", "role": "artifact", "label": "Exported controller", "priority": "primary", "evidence": [{ "sourceId": "paper", "claim": "The trained controller transfers to hardware.", "locator": "Figure 2 caption", "confidence": "direct" }] },
+          { "id": "real-robot", "stageId": "hardware", "role": "environment", "label": "Real humanoid robot", "priority": "primary", "evidence": [{ "sourceId": "paper", "claim": "Deployment is evaluated on a real robot.", "locator": "Figure 2 caption", "confidence": "direct" }] },
+          { "id": "telemetry", "stageId": "hardware", "role": "metric", "label": "Stability telemetry", "priority": "supporting", "evidence": [{ "sourceId": "paper", "claim": "Hardware behavior is observed after transfer.", "locator": "Figure 2", "confidence": "derived" }] }
+        ],
+        "relations": [
+          { "id": "s-simulator-constraints", "source": "simulator", "target": "constraints", "semantic": "data", "evidence": [{ "sourceId": "paper", "locator": "Figure 2 caption", "confidence": "direct" }] },
+          { "id": "s-constraints-policy", "source": "constraints", "target": "sim-policy", "semantic": "gradient", "evidence": [{ "sourceId": "paper", "locator": "Figure 2 caption", "confidence": "direct" }] },
+          { "id": "s-policy-export", "source": "sim-policy", "target": "exported-policy", "semantic": "data", "evidence": [{ "sourceId": "paper", "locator": "Figure 2 caption", "confidence": "direct" }] },
+          { "id": "s-export-robot", "source": "exported-policy", "target": "real-robot", "semantic": "sequence", "evidence": [{ "sourceId": "paper", "locator": "Figure 2 caption", "confidence": "direct" }] },
+          { "id": "s-robot-telemetry", "source": "real-robot", "target": "telemetry", "semantic": "data", "evidence": [{ "sourceId": "paper", "locator": "Figure 2", "confidence": "derived" }] },
+          { "id": "s-telemetry-policy", "source": "telemetry", "target": "sim-policy", "semantic": "feedback", "label": "update", "evidence": [{ "sourceId": "paper", "locator": "Figure 2", "confidence": "inferred" }] }
+        ]
+      },
+      "humanReviews": [
+        {
+          "reviewerId": "project-owner",
+          "reviewedAt": "2026-08-10",
+          "rubricVersion": "top-conference-figure-v1",
+          "status": "needs-revision",
+          "scores": { "overall": 1.0 },
+          "findings": ["The output does not reconstruct the reference figure's scientific composition."]
+        }
+      ]
+    },
+    {
+      "id": "rl-humanoid-real-world",
+      "domain": "embodied-ai",
+      "subdomain": "reinforcement-learning",
+      "figureFamily": "scientific-method",
+      "taskType": "pdf-reconstruction",
+      "reconstructionId": "rl-humanoid-figure-2-v1",
+      "reviewStatus": "needs-revision",
+      "trainingRole": "hard-negative",
+      "baselineRole": "hard-negative",
+      "paper": {
+        "arxivId": "2303.03381",
+        "title": "Real-World Humanoid Locomotion with Reinforcement Learning",
+        "year": 2023,
+        "absUrl": "https://arxiv.org/abs/2303.03381",
+        "pdfUrl": "https://arxiv.org/pdf/2303.03381"
+      },
+      "figure": {
+        "id": "Sx2.F2",
+        "label": "Figure 2",
+        "caption": "Indoor and simulation experiments test disturbances, terrains, and payloads before a subset of scenarios is replicated on hardware.",
+        "sourceLocator": "Figure 2 caption",
+        "htmlUrl": "https://ar5iv.labs.arxiv.org/html/2303.03381",
+        "imageUrl": "https://ar5iv.labs.arxiv.org/html/2303.03381/assets/x2.png",
+        "thumbnail": { "width": 461, "height": 422, "kind": "remote-reference" },
+        "fingerprint": { "algorithm": "sha256", "scope": "content", "status": "not-cached", "value": null },
+        "license": { "status": "analysis-only", "note": "Verify the paper asset license before redistribution." }
+      },
+      "visualGrammar": {
+        "composition": ["training-pipeline", "agent-loop", "qualitative-montage"],
+        "elements": ["environment-scene", "robot-embodiment", "action-trajectory", "stage-containers"],
+        "relations": ["rollout", "reward-update", "evaluation"]
+      },
+      "expectedPlan": {
+        "version": 1,
+        "title": "Reinforcement-learning locomotion loop",
+        "caption": "A policy acts in the environment, receives reward and value estimates, and is updated before evaluation.",
+        "family": "scientific-method",
+        "orientation": "LR",
+        "focalElementIds": ["locomotion-policy"],
+        "sources": [
+          { "id": "paper", "kind": "paper", "title": "Real-world humanoid locomotion", "locator": "Figure 2 caption", "citation": "arXiv:2303.03381" }
+        ],
+        "stages": [
+          { "id": "rollout", "label": "Rollout", "kind": "phase" },
+          { "id": "update", "label": "Policy update", "kind": "phase" },
+          { "id": "evaluation", "label": "Evaluation", "kind": "phase" }
+        ],
+        "elements": [
+          { "id": "locomotion-env", "stageId": "rollout", "role": "environment", "label": "Terrain + humanoid", "priority": "primary", "evidence": [{ "sourceId": "paper", "claim": "The controller interacts with varied terrains and payloads.", "locator": "Figure 2 caption", "confidence": "direct" }] },
+          { "id": "state-observation", "stageId": "rollout", "role": "input", "label": "State observation", "priority": "supporting", "evidence": [{ "sourceId": "paper", "claim": "The controller receives state observations.", "locator": "Method overview", "confidence": "derived" }] },
+          { "id": "locomotion-policy", "stageId": "rollout", "role": "policy", "label": "Locomotion policy", "description": "Maps state to joint actions", "priority": "focal", "evidence": [{ "sourceId": "paper", "claim": "A learned controller produces locomotion actions.", "locator": "Figure 2", "confidence": "direct" }] },
+          { "id": "reward", "stageId": "update", "role": "loss", "label": "Reward + value", "description": "Task reward and critic estimate", "priority": "primary", "evidence": [{ "sourceId": "paper", "claim": "Reinforcement learning uses reward and value signals.", "locator": "Method overview", "confidence": "derived" }] },
+          { "id": "policy-update", "stageId": "update", "role": "process", "label": "Policy gradient update", "priority": "primary", "evidence": [{ "sourceId": "paper", "claim": "The policy is optimized with reinforcement learning.", "locator": "Method overview", "confidence": "direct" }] },
+          { "id": "benchmark", "stageId": "evaluation", "role": "metric", "label": "Robustness benchmark", "description": "Disturbances, terrains, and payloads", "priority": "primary", "evidence": [{ "sourceId": "paper", "claim": "Evaluation spans disturbances, terrains, and payloads.", "locator": "Figure 2 caption", "confidence": "direct" }] }
+        ],
+        "relations": [
+          { "id": "r-env-state", "source": "locomotion-env", "target": "state-observation", "semantic": "feedback", "evidence": [{ "sourceId": "paper", "locator": "Method overview", "confidence": "derived" }] },
+          { "id": "r-state-policy", "source": "state-observation", "target": "locomotion-policy", "semantic": "data", "evidence": [{ "sourceId": "paper", "locator": "Method overview", "confidence": "derived" }] },
+          { "id": "r-policy-env", "source": "locomotion-policy", "target": "locomotion-env", "semantic": "control", "evidence": [{ "sourceId": "paper", "locator": "Figure 2", "confidence": "direct" }] },
+          { "id": "r-env-reward", "source": "locomotion-env", "target": "reward", "semantic": "data", "evidence": [{ "sourceId": "paper", "locator": "Method overview", "confidence": "derived" }] },
+          { "id": "r-reward-update", "source": "reward", "target": "policy-update", "semantic": "gradient", "evidence": [{ "sourceId": "paper", "locator": "Method overview", "confidence": "derived" }] },
+          { "id": "r-update-policy", "source": "policy-update", "target": "locomotion-policy", "semantic": "feedback", "label": "optimize", "evidence": [{ "sourceId": "paper", "locator": "Method overview", "confidence": "derived" }] },
+          { "id": "r-policy-benchmark", "source": "locomotion-policy", "target": "benchmark", "semantic": "comparison", "evidence": [{ "sourceId": "paper", "locator": "Figure 2 caption", "confidence": "direct" }] }
+        ]
+      },
+      "humanReviews": [
+        {
+          "reviewerId": "project-owner",
+          "reviewedAt": "2026-08-10",
+          "rubricVersion": "top-conference-figure-v1",
+          "status": "needs-revision",
+          "scores": { "overall": 1.0 },
+          "findings": ["The output does not reconstruct the reference figure's scientific composition."]
+        }
+      ]
+    },
+    {
+      "id": "imitation-diffusion-policy",
+      "domain": "embodied-ai",
+      "subdomain": "imitation-offline-rl",
+      "figureFamily": "scientific-method",
+      "taskType": "pdf-reconstruction",
+      "reconstructionId": "diffusion-policy-figure-2-v1",
+      "reviewStatus": "needs-revision",
+      "trainingRole": "gold",
+      "baselineRole": "gold",
+      "artifactLock": {
+        "compiler": "figure-plan-v1",
+        "contentSha256": "9d44bf2fcc90df13efd619a88d3be4e216a26fcfc91f5bb1704dad571474cf1f"
+      },
+      "paper": {
+        "arxivId": "2303.04137",
+        "title": "Diffusion Policy: Visuomotor Policy Learning via Action Diffusion",
+        "year": 2023,
+        "absUrl": "https://arxiv.org/abs/2303.04137",
+        "pdfUrl": "https://arxiv.org/pdf/2303.04137"
+      },
+      "figure": {
+        "id": "PDF.F2",
+        "label": "Figure 2 (arXiv PDF v5)",
+        "caption": "Diffusion Policy Overview: observation history conditions iterative denoising of an action horizon, with CNN/FiLM and Transformer/cross-attention implementations.",
+        "sourceLocator": "arXiv v5 PDF, page 3, Figure 2; the ar5iv DOM labels the same x3 asset as Figure 3",
+        "htmlUrl": "https://ar5iv.labs.arxiv.org/html/2303.04137",
+        "imageUrl": "https://ar5iv.labs.arxiv.org/html/2303.04137/assets/x3.png",
+        "thumbnail": { "width": 830, "height": 227, "kind": "remote-reference" },
+        "fingerprint": { "algorithm": "sha256", "scope": "content", "status": "verified", "value": "37a114a58b5e7e5eb70db5375befcdfc8a7b4637a5565daa5442b6fc8fe4c1d6" },
+        "license": { "status": "analysis-only", "note": "Remote ar5iv asset, visually cross-checked against arXiv v5 PDF Figure 2. Verify redistribution rights before caching or publishing the source image." }
+      },
+      "visualGrammar": {
+        "composition": ["evidence-rollout", "closed-loop-horizon", "architecture-comparison"],
+        "elements": ["robot-camera-history", "robot-pose-conditioning", "noisy-to-clean-action-trajectory", "observation-horizon", "prediction-horizon", "execution-horizon", "iterative-denoiser", "film-scale-bias", "conv1d-stack", "cross-attention", "qkv-routing", "causal-mask"],
+        "relations": ["observation-conditioning", "iterative-denoising", "receding-horizon-execution", "warm-start-replanning", "alternative-noise-predictors"]
+      },
+      "expectedPlan": {
+        "version": 1,
+        "title": "Diffusion Policy mechanism map",
+        "caption": "Observation-conditioned K-step action denoising with receding-horizon control and two noise-prediction backbones.",
+        "family": "scientific-method",
+        "orientation": "LR",
+        "focalElementIds": ["policy-horizon", "film-denoiser", "causal-transformer"],
+        "sources": [
+          { "id": "paper", "kind": "paper", "title": "Diffusion Policy overview", "locator": "arXiv v5 PDF Figure 2 and Sections 2.2-3.1", "citation": "Chi et al., arXiv:2303.04137v5" }
+        ],
+        "stages": [
+          { "id": "rollout", "label": "Input / output rollout", "description": "camera history, robot pose, and noisy-to-clean action sequence", "kind": "region", "arrangement": "stack" },
+          { "id": "general", "label": "Closed-loop formulation", "description": "observation, prediction, and execution horizons", "kind": "region", "arrangement": "stack" },
+          { "id": "architectures", "label": "Noise-prediction architectures", "description": "two explicit implementations of εθ", "kind": "region", "arrangement": "grid" }
+        ],
+        "elements": [
+          { "id": "robot-rollout", "stageId": "rollout", "role": "input", "representation": "robot-observation-rollout", "label": "Robot observation and action rollout", "description": "image sequence + robot pose; A_t^K to A_t^0", "priority": "primary", "evidence": [{ "sourceId": "paper", "claim": "The overview pairs an image-observation sequence and robot pose with a noisy-to-denoised action sequence.", "locator": "PDF Figure 2 overview", "confidence": "direct" }] },
+          { "id": "policy-horizon", "stageId": "general", "role": "policy", "representation": "closed-loop-action-horizon", "label": "Closed-loop diffusion policy horizon", "description": "T_o observations; T_p predicted actions; execute T_a; denoise K times", "priority": "focal", "evidence": [{ "sourceId": "paper", "claim": "The policy consumes T_o observations, denoises an action sequence for K iterations, predicts T_p actions, executes T_a actions, and replans.", "locator": "PDF Figure 2a and Section 2.3", "confidence": "direct" }] },
+          { "id": "film-denoiser", "stageId": "architectures", "role": "backbone", "representation": "film-conditioned-cnn", "label": "CNN + FiLM denoiser", "description": "Observation O_t produces a,b for repeated Conv1D blocks", "priority": "focal", "evidence": [{ "sourceId": "paper", "claim": "The CNN implementation applies FiLM scale and bias from the observation feature to every temporal convolution layer.", "locator": "PDF Figure 2b caption and Section 3.1", "confidence": "direct" }] },
+          { "id": "causal-transformer", "stageId": "architectures", "role": "backbone", "representation": "causal-cross-attention", "label": "Transformer causal cross-attention", "description": "Observation K,V; masked action Q; lower-triangular causal mask", "priority": "focal", "evidence": [{ "sourceId": "paper", "claim": "The Transformer implementation uses observation embeddings in cross-attention and constrains each action embedding to attend only to itself and earlier actions.", "locator": "PDF Figure 2c caption", "confidence": "direct" }] }
+        ],
+        "relations": []
+      },
+      "humanReviews": [
+        {
+          "reviewerId": "project-owner",
+          "reviewedAt": "2026-08-10",
+          "rubricVersion": "top-conference-figure-v1",
+          "status": "needs-revision",
+          "scores": { "overall": 5.0 },
+          "findings": ["Visual score is high, but the formal review hard gates remain incomplete, so the artifact is not yet human-accepted."]
+        }
+      ]
+    },
+    {
+      "id": "world-model-gr1",
+      "domain": "embodied-ai",
+      "subdomain": "world-model",
+      "figureFamily": "scientific-method",
+      "taskType": "pdf-reconstruction",
+      "reconstructionId": "world-model-gr1-figure-1-v1",
+      "reviewStatus": "needs-revision",
+      "trainingRole": "hard-negative",
+      "baselineRole": "hard-negative",
+      "paper": {
+        "arxivId": "2312.13139",
+        "title": "Unleashing Large-Scale Video Generative Pre-training for Visual Robot Manipulation",
+        "year": 2023,
+        "absUrl": "https://arxiv.org/abs/2312.13139",
+        "pdfUrl": "https://arxiv.org/pdf/2312.13139"
+      },
+      "figure": {
+        "id": "S1.F1",
+        "label": "Figure 1",
+        "caption": "GR-1 is pre-trained for video prediction on a large-scale video dataset and then fine-tuned on robot data for multi-task manipulation.",
+        "sourceLocator": "Figure 1 caption",
+        "htmlUrl": "https://ar5iv.labs.arxiv.org/html/2312.13139",
+        "imageUrl": "https://ar5iv.labs.arxiv.org/html/2312.13139/assets/x1.png",
+        "thumbnail": { "width": 438, "height": 245, "kind": "remote-reference" },
+        "fingerprint": { "algorithm": "sha256", "scope": "content", "status": "not-cached", "value": null },
+        "license": { "status": "analysis-only", "note": "Verify the paper asset license before redistribution." }
+      },
+      "visualGrammar": {
+        "composition": ["system-overview", "training-pipeline", "data-pipeline"],
+        "elements": ["dataset-stack", "image-strip", "robot-embodiment", "action-trajectory"],
+        "relations": ["video-prediction-pretrain", "robot-finetune", "closed-loop-rollout"]
+      },
+      "expectedPlan": {
+        "version": 1,
+        "title": "Video world model to robot policy",
+        "caption": "Video prediction pretraining supplies a world model that is adapted with robot data to control a manipulator.",
+        "family": "scientific-method",
+        "orientation": "LR",
+        "focalElementIds": ["world-model"],
+        "sources": [
+          { "id": "paper", "kind": "paper", "title": "GR-1 video pretraining", "locator": "Figure 1 caption", "citation": "arXiv:2312.13139" }
+        ],
+        "stages": [
+          { "id": "pretrain", "label": "Video pretraining", "kind": "phase" },
+          { "id": "adapt", "label": "Robot adaptation", "kind": "phase" },
+          { "id": "rollout", "label": "Manipulation rollout", "kind": "phase" }
+        ],
+        "elements": [
+          { "id": "video-dataset", "stageId": "pretrain", "role": "dataset", "label": "Large-scale video data", "priority": "primary", "evidence": [{ "sourceId": "paper", "claim": "Video data is used for pretraining.", "locator": "Figure 1 caption", "confidence": "direct" }] },
+          { "id": "world-model", "stageId": "pretrain", "role": "backbone", "label": "Video world model", "description": "Predicts future visual tokens", "priority": "focal", "evidence": [{ "sourceId": "paper", "claim": "The model is pretrained for video prediction.", "locator": "Figure 1 caption", "confidence": "direct" }] },
+          { "id": "robot-data", "stageId": "adapt", "role": "dataset", "label": "Robot trajectories", "priority": "primary", "evidence": [{ "sourceId": "paper", "claim": "Robot data is used for fine-tuning.", "locator": "Figure 1 caption", "confidence": "direct" }] },
+          { "id": "policy-head", "stageId": "adapt", "role": "policy", "label": "Manipulation policy head", "priority": "primary", "evidence": [{ "sourceId": "paper", "claim": "Fine-tuning learns a robot manipulation policy.", "locator": "Figure 1 caption", "confidence": "direct" }] },
+          { "id": "action", "stageId": "rollout", "role": "action", "label": "Predicted action chunk", "priority": "primary", "evidence": [{ "sourceId": "paper", "claim": "The adapted model produces robot actions.", "locator": "Figure 1", "confidence": "derived" }] },
+          { "id": "robot-env", "stageId": "rollout", "role": "environment", "label": "Robot + scene", "priority": "primary", "evidence": [{ "sourceId": "paper", "claim": "The policy is evaluated on manipulation tasks.", "locator": "Figure 1 caption", "confidence": "direct" }] },
+          { "id": "predicted-frame", "stageId": "rollout", "role": "output", "label": "Next video frame", "priority": "supporting", "evidence": [{ "sourceId": "paper", "claim": "Video prediction represents future observations.", "locator": "Figure 1 caption", "confidence": "derived" }] }
+        ],
+        "relations": [
+          { "id": "w-video-model", "source": "video-dataset", "target": "world-model", "semantic": "data", "evidence": [{ "sourceId": "paper", "locator": "Figure 1 caption", "confidence": "direct" }] },
+          { "id": "w-model-policy", "source": "world-model", "target": "policy-head", "semantic": "data", "evidence": [{ "sourceId": "paper", "locator": "Figure 1 caption", "confidence": "derived" }] },
+          { "id": "w-robot-policy", "source": "robot-data", "target": "policy-head", "semantic": "data", "evidence": [{ "sourceId": "paper", "locator": "Figure 1 caption", "confidence": "direct" }] },
+          { "id": "w-policy-action", "source": "policy-head", "target": "action", "semantic": "control", "evidence": [{ "sourceId": "paper", "locator": "Figure 1", "confidence": "derived" }] },
+          { "id": "w-action-env", "source": "action", "target": "robot-env", "semantic": "sequence", "evidence": [{ "sourceId": "paper", "locator": "Figure 1", "confidence": "derived" }] },
+          { "id": "w-env-frame", "source": "robot-env", "target": "predicted-frame", "semantic": "feedback", "evidence": [{ "sourceId": "paper", "locator": "Figure 1", "confidence": "derived" }] },
+          { "id": "w-frame-model", "source": "predicted-frame", "target": "world-model", "semantic": "feedback", "evidence": [{ "sourceId": "paper", "locator": "Figure 1 caption", "confidence": "derived" }] }
+        ]
+      },
+      "humanReviews": [
+        {
+          "reviewerId": "project-owner",
+          "reviewedAt": "2026-08-10",
+          "rubricVersion": "top-conference-figure-v1",
+          "status": "needs-revision",
+          "scores": { "overall": 1.0 },
+          "findings": ["The output does not reconstruct the reference figure's scientific composition."]
+        }
+      ]
+    },
+    {
+      "id": "robot-data-bridge-policy",
+      "domain": "embodied-ai",
+      "subdomain": "robot-data-policy",
+      "figureFamily": "process",
+      "taskType": "pdf-reconstruction",
+      "reconstructionId": "robot-data-bridge-figure-1-v1",
+      "reviewStatus": "needs-revision",
+      "trainingRole": "hard-negative",
+      "baselineRole": "hard-negative",
+      "paper": {
+        "arxivId": "2308.12952",
+        "title": "BridgeData V2: A Dataset for Robot Learning at Scale",
+        "year": 2023,
+        "absUrl": "https://arxiv.org/abs/2308.12952",
+        "pdfUrl": "https://arxiv.org/pdf/2308.12952"
+      },
+      "figure": {
+        "id": "S0.F1",
+        "label": "Figure 1",
+        "caption": "BridgeData V2 is a large-scale robotic manipulation dataset with trajectories across many environments and skills.",
+        "sourceLocator": "Figure 1 caption",
+        "htmlUrl": "https://ar5iv.labs.arxiv.org/html/2308.12952",
+        "imageUrl": "https://ar5iv.labs.arxiv.org/html/2308.12952/assets/x1.png",
+        "thumbnail": { "width": 415, "height": 230, "kind": "remote-reference" },
+        "fingerprint": { "algorithm": "sha256", "scope": "content", "status": "not-cached", "value": null },
+        "license": { "status": "analysis-only", "note": "Verify the paper asset license before redistribution." }
+      },
+      "visualGrammar": {
+        "composition": ["data-pipeline", "agent-loop", "system-overview"],
+        "elements": ["dataset-stack", "robot-embodiment", "environment-scene", "action-trajectory", "chart-axes"],
+        "relations": ["teleoperation-data", "quality-filter", "policy-learning", "held-out-evaluation"]
+      },
+      "expectedPlan": {
+        "version": 1,
+        "title": "Robot data to scalable policy",
+        "caption": "Teleoperated trajectories are curated into a dataset, used for policy learning, and tested on held-out tasks.",
+        "family": "process",
+        "orientation": "LR",
+        "focalElementIds": ["policy"],
+        "sources": [
+          { "id": "paper", "kind": "paper", "title": "BridgeData V2 dataset overview", "locator": "Figure 1 caption", "citation": "arXiv:2308.12952" }
+        ],
+        "stages": [
+          { "id": "collect", "label": "Collect", "kind": "phase" },
+          { "id": "curate", "label": "Curate", "kind": "phase" },
+          { "id": "learn", "label": "Learn", "kind": "phase" },
+          { "id": "evaluate", "label": "Evaluate", "kind": "phase" }
+        ],
+        "elements": [
+          { "id": "teleoperation", "stageId": "collect", "role": "actor", "label": "Teleoperation", "priority": "primary", "evidence": [{ "sourceId": "paper", "claim": "Robot trajectories are collected across tasks.", "locator": "Figure 1", "confidence": "direct" }] },
+          { "id": "trajectory-dataset", "stageId": "collect", "role": "dataset", "label": "Multi-task trajectories", "description": "Many environments and skills", "priority": "primary", "evidence": [{ "sourceId": "paper", "claim": "The dataset contains trajectories across environments and skills.", "locator": "Figure 1 caption", "confidence": "direct" }] },
+          { "id": "quality-filter", "stageId": "curate", "role": "process", "label": "Quality and task split", "priority": "supporting", "evidence": [{ "sourceId": "paper", "claim": "Data is organized for scalable policy learning.", "locator": "Dataset section", "confidence": "derived" }] },
+          { "id": "policy", "stageId": "learn", "role": "policy", "label": "Goal-conditioned policy", "description": "Behavior cloning over robot data", "priority": "focal", "evidence": [{ "sourceId": "paper", "claim": "Goal-conditioned behavior cloning is trained on the dataset.", "locator": "Figure 5 caption", "confidence": "direct" }] },
+          { "id": "heldout-tasks", "stageId": "evaluate", "role": "metric", "label": "Held-out tasks", "priority": "primary", "evidence": [{ "sourceId": "paper", "claim": "Policies are evaluated on unseen tasks.", "locator": "Figure 5 caption", "confidence": "direct" }] },
+          { "id": "success-rate", "stageId": "evaluate", "role": "result", "label": "Success rate", "description": "Report trials and uncertainty", "priority": "primary", "evidence": [{ "sourceId": "paper", "claim": "Evaluation reports task performance over trials.", "locator": "Figure 5 caption", "confidence": "direct" }] }
+        ],
+        "relations": [
+          { "id": "d-teleop-dataset", "source": "teleoperation", "target": "trajectory-dataset", "semantic": "data", "evidence": [{ "sourceId": "paper", "locator": "Figure 1", "confidence": "direct" }] },
+          { "id": "d-dataset-filter", "source": "trajectory-dataset", "target": "quality-filter", "semantic": "data", "evidence": [{ "sourceId": "paper", "locator": "Dataset section", "confidence": "derived" }] },
+          { "id": "d-filter-policy", "source": "quality-filter", "target": "policy", "semantic": "control", "evidence": [{ "sourceId": "paper", "locator": "Figure 5 caption", "confidence": "derived" }] },
+          { "id": "d-policy-heldout", "source": "policy", "target": "heldout-tasks", "semantic": "comparison", "evidence": [{ "sourceId": "paper", "locator": "Figure 5 caption", "confidence": "direct" }] },
+          { "id": "d-heldout-success", "source": "heldout-tasks", "target": "success-rate", "semantic": "data", "evidence": [{ "sourceId": "paper", "locator": "Figure 5 caption", "confidence": "direct" }] },
+          { "id": "d-success-dataset", "source": "success-rate", "target": "trajectory-dataset", "semantic": "feedback", "label": "expand coverage", "evidence": [{ "sourceId": "paper", "locator": "Figure 5 caption", "confidence": "inferred" }] }
+        ]
+      },
+      "humanReviews": [
+        {
+          "reviewerId": "project-owner",
+          "reviewedAt": "2026-08-10",
+          "rubricVersion": "top-conference-figure-v1",
+          "status": "needs-revision",
+          "scores": { "overall": 1.0 },
+          "findings": ["The output does not reconstruct the reference figure's scientific composition."]
+        }
+      ]
+    }
+  ]
+}

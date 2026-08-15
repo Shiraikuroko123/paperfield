@@ -20,11 +20,18 @@ jobs:
         with:
           node-version: "22"
       - name: Install dependencies
-        run: python -m pip install -r deploy/requirements.txt
+        run: |
+          python -m pip install -r deploy/requirements.txt
+          python -m pip install -r content/courses/requirements-docs.txt
+          npm ci --prefix apps/flowloom
       - name: Verify release
         run: |
           python -B -m unittest discover -s tests -v
           node --check src/paperfield/static/app.js
+          node --check src/research_atlas/static/app.js
+          npm test --prefix apps/flowloom
+          npm run build --prefix apps/flowloom
+          python -m mkdocs build --clean --strict --config-file content/courses/mkdocs.yml --site-dir .build/course-validation
           python scripts/build-release.py
       - name: Create GitHub Release
         shell: bash

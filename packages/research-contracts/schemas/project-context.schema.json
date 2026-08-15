@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paperfield.local/contracts/project-context.schema.json",
+  "title": "Research code project context",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "full_name", "repository_url", "provenance"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "full_name": {"type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$"},
+    "repository_url": {"type": "string", "format": "uri"},
+    "commit": {"type": "string"},
+    "description": {"type": "string"},
+    "homepage": {"type": "string", "format": "uri-reference"},
+    "language": {"type": "string"},
+    "license": {"type": ["string", "null"]},
+    "topics": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "paper_refs": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["producer", "produced_at"],
+      "properties": {
+        "producer": {"enum": ["paperfield", "research-atlas", "courses", "flowloom"]},
+        "produced_at": {"type": "string", "format": "date-time"}
+      }
+    }
+  }
+}

@@ -38,6 +38,122 @@ class ClassifierTests(unittest.TestCase):
         self.assertIn("具身智能", topics)
         self.assertTrue(any(topic in topics for topic in ["触觉与灵巧操作", "多模态大模型"]))
 
+    def test_embodied_paper_gets_method_and_transfer_subtopics(self):
+        paper = {
+            "title": "Sim-to-Real Reinforcement Learning for Dexterous Robot Manipulation",
+            "abstract": "Domain randomization and PPO transfer a robot policy from simulation to reality.",
+            "venue": "CoRL",
+            "journal_ref": "",
+        }
+        self.assertIn("具身智能", self.classifier.classify(paper))
+        self.assertIn("强化学习与策略优化", paper["subtopics"])
+        self.assertIn("Sim2Real 与域适应", paper["subtopics"])
+        self.assertIn("机器人操作与抓取", paper["subtopics"])
+
+    def test_llm_paper_gets_reasoning_subtopic(self):
+        paper = {
+            "title": "Scaling Test-Time Compute for Large Language Model Reasoning",
+            "abstract": "A verifier improves chain-of-thought reasoning at inference time.",
+            "venue": "ICLR",
+            "journal_ref": "",
+        }
+        self.assertEqual(self.classifier.classify(paper), ["大语言模型"])
+        self.assertIn("推理与测试时计算", paper["subtopics"])
+
+    def test_subtopic_filter_is_independent_from_domain_filter(self):
+        base = {
+            "abstract": "", "authors": [], "venue": "CoRL", "source": "test",
+            "venue_tier": "顶级会议", "platform": "OpenReview", "published": "",
+            "status": "unread", "favorite": False, "topics": ["具身智能"],
+        }
+        papers = [
+            {**base, "id": "sim2real", "title": "Transfer", "subtopics": ["Sim2Real 与域适应"]},
+            {**base, "id": "vla", "title": "Policy", "subtopics": ["VLA 与机器人基础模型"]},
+        ]
+        filtered = APP.filter_papers(papers, {"subtopic": ["Sim2Real 与域适应"]})
+        self.assertEqual([paper["id"] for paper in filtered], ["sim2real"])
+
+    def test_store_reclassifies_existing_papers_once_per_taxonomy_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = APP.PaperStore(Path(directory) / "papers.db")
+            store.upsert(
+                {
+                    "id": "paper",
+                    "title": "Sim2Real Robot Policy",
+                    "abstract": "Domain randomization transfers a robot policy from simulation to reality.",
+                    "authors": [], "institutions": [], "venue": "CoRL", "published": "2026-01-01",
+                    "updated": "2026-01-01", "source": "test", "source_url": "", "pdf_url": "",
+                    "doi": "", "journal_ref": "", "topics": ["其他相关"], "quality_score": 0,
+                    "citation_count": 0,
+                }
+            )
+            self.assertTrue(store.reclassify_papers(self.classifier))
+            saved = store.get_paper("paper")
+            self.assertIn("Sim2Real 与域适应", saved["subtopics"])
+            self.assertFalse(store.reclassify_papers(self.classifier))
+
+    def test_quality_maintenance_is_daily_and_does_not_emit_atlas_events(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = APP.PaperStore(Path(directory) / "papers.db")
+            topic = next(iter(self.classifier.topics))
+            store.upsert(
+                {
+                    "id": "paper", "title": "Embodied Robot Policy",
+                    "abstract": "A robot policy for manipulation.", "authors": [],
+                    "institutions": [], "venue": "CoRL", "published": "2026-01-01",
+                    "updated": "2026-01-01", "source": "test", "source_url": "",
+                    "pdf_url": "", "doi": "", "journal_ref": "", "topics": [topic],
+                    "subtopics": [], "quality_score": 0, "citation_count": 0,
+                }
+            )
+            db = store.connect()
+            try:
+                before = db.execute("SELECT COUNT(*) FROM atlas_catalog_changes").fetchone()[0]
+            finally:
+                db.close()
+
+            self.assertTrue(store.recalculate_quality_if_due(self.classifier))
+            self.assertFalse(store.recalculate_quality_if_due(self.classifier))
+
+            db = store.connect()
+            try:
+                after = db.execute("SELECT COUNT(*) FROM atlas_catalog_changes").fetchone()[0]
+                recalculated_on = db.execute(
+                    "SELECT value FROM app_metadata WHERE key='quality_recalculated_on'"
+                ).fetchone()[0]
+            finally:
+                db.close()
+            self.assertEqual(after, before)
+            self.assertEqual(recalculated_on, APP.utc_now().date().isoformat())
+
+    def test_atlas_catalog_trigger_tracks_content_but_not_local_ranking_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = APP.PaperStore(Path(directory) / "papers.db")
+            topic = next(iter(self.classifier.topics))
+            store.upsert(
+                {
+                    "id": "paper", "title": "Original title", "abstract": "robot learning",
+                    "authors": [], "institutions": [], "venue": "CoRL",
+                    "published": "2026-01-01", "updated": "2026-01-01", "source": "test",
+                    "source_url": "", "pdf_url": "", "doi": "", "journal_ref": "",
+                    "topics": [topic], "subtopics": [], "quality_score": 1,
+                    "citation_count": 0,
+                }
+            )
+            db = store.connect()
+            try:
+                baseline = db.execute("SELECT COUNT(*) FROM atlas_catalog_changes").fetchone()[0]
+                db.execute("UPDATE papers SET quality_score=99, citation_count=7 WHERE id='paper'")
+                local_only = db.execute("SELECT COUNT(*) FROM atlas_catalog_changes").fetchone()[0]
+                db.execute("UPDATE papers SET title='Revised title' WHERE id='paper'")
+                content_change = db.execute("SELECT COUNT(*) FROM atlas_catalog_changes").fetchone()[0]
+                db.commit()
+            finally:
+                db.close()
+
+            self.assertEqual(local_only, baseline)
+            self.assertEqual(content_change, baseline + 1)
+
     def test_agent_keyword_does_not_match_gradient(self):
         paper = {
             "title": "Stochastic Gradient Optimization",
@@ -206,6 +322,54 @@ class ExplanationTests(unittest.TestCase):
 
 
 class FeedTests(unittest.TestCase):
+    def test_store_marks_only_stale_sync_runs_as_interrupted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = APP.PaperStore(Path(directory) / "papers.db")
+            stale_id = store.begin_sync()
+            current_id = store.begin_sync()
+            stale_started_at = (APP.utc_now() - timedelta(hours=3)).isoformat()
+            db = store.connect()
+            try:
+                db.execute("UPDATE sync_runs SET started_at = ? WHERE id = ?", (stale_started_at, stale_id))
+                db.commit()
+            finally:
+                db.close()
+
+            self.assertEqual(store.fail_stale_syncs(max_age_hours=2), 1)
+            db = store.connect()
+            try:
+                rows = {row["id"]: dict(row) for row in db.execute("SELECT * FROM sync_runs").fetchall()}
+            finally:
+                db.close()
+            self.assertEqual(rows[stale_id]["status"], "error")
+            self.assertEqual(rows[stale_id]["finished_at"], stale_started_at)
+            self.assertEqual(rows[current_id]["status"], "running")
+
+    def test_complete_dblp_archive_retains_unmatched_papers_without_misclassification(self):
+        config = {
+            **APP.CONFIG,
+            "dblp_archive_pages": 1,
+            "targeted_venue_years_back": 3,
+            "retain_unmatched_archive_venues": ["NeurIPS"],
+        }
+        source = APP.PaperSources(config, APP.CLASSIFIER)
+        index_xml = """<bht><li><ref href="db/conf/nips/nips2026.html">NeurIPS 2026</ref></li></bht>"""
+        page_xml = """<dblp><inproceedings key="conf/nips/example">
+          <author>Ada Lovelace</author>
+          <title>Combinatorial Identities for Finite Groups</title>
+          <year>2026</year><booktitle>NeurIPS</booktitle>
+          <ee>https://example.com/paper</ee>
+        </inproceedings></dblp>"""
+
+        with mock.patch.object(source, "request_text", side_effect=[index_xml, page_xml]), mock.patch.object(
+            APP.time, "sleep"
+        ):
+            papers = source.fetch_dblp_archive(next(item for item in APP.VENUE_CATALOG.entries if item["name"] == "NeurIPS"))
+
+        self.assertEqual(len(papers), 1)
+        self.assertEqual(papers[0]["topics"], ["其他相关"])
+        self.assertEqual(papers[0]["subtopics"], [])
+
     def test_arxiv_focus_queries_use_updated_date_and_deduplicate(self):
         config = {
             "arxiv_categories": ["cs.RO"],
@@ -270,7 +434,12 @@ class FeedTests(unittest.TestCase):
             self.assertIsNone(auth.authenticate("tester-one", "incorrect"))
             self.assertNotIn("123456", path.read_text(encoding="utf-8"))
 
-            for index in range(2, 5):
+            editor = auth.upsert_user("atlas-editor", "123456", "Atlas Editor", "editor")
+            self.assertEqual(editor["role"], "editor")
+            with self.assertRaisesRegex(ValueError, "beta、editor 或 standard"):
+                auth.upsert_user("invalid-role", "123456", role="admin")
+
+            for index in range(3, 5):
                 auth.upsert_user(f"tester-{index}", "123456")
             with self.assertRaisesRegex(ValueError, "最多允许 4 个"):
                 auth.upsert_user("tester-five", "123456")
@@ -320,6 +489,192 @@ class FeedTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
                 APP.AUTH = original_auth
+
+    def test_pdf_endpoint_allows_only_configured_flowloom_cors_origins(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pdf_path = Path(directory) / "paper.pdf"
+            pdf_path.write_bytes(b"%PDF-1.7\\nflowloom-cors-test")
+
+            class FakeAssets:
+                @staticmethod
+                def pdf_path(_paper_id):
+                    return pdf_path
+
+            class FakeStore:
+                @staticmethod
+                def get_paper(paper_id, _owner):
+                    return {"id": paper_id, "title": "CORS test"}
+
+            original_auth = APP.AUTH
+            original_store = APP.STORE
+            original_assets = APP.ASSETS
+            APP.AUTH = APP.AuthService(Path(directory) / "auth-users.json", required=False)
+            APP.STORE = FakeStore()
+            APP.ASSETS = FakeAssets()
+            server = ThreadingHTTPServer(("127.0.0.1", 0), APP.AppHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f"http://127.0.0.1:{server.server_port}"
+            try:
+                preflight = urllib.request.Request(
+                    f"{base}/api/papers/test-paper/pdf",
+                    method="OPTIONS",
+                    headers={
+                        "Origin": "http://127.0.0.1:5173",
+                        "Access-Control-Request-Method": "GET",
+                        "Access-Control-Request-Headers": "ngrok-skip-browser-warning",
+                    },
+                )
+                with urllib.request.urlopen(preflight, timeout=5) as response:
+                    self.assertEqual(response.status, 204)
+                    self.assertEqual(response.headers["Access-Control-Allow-Origin"], "http://127.0.0.1:5173")
+
+                request = urllib.request.Request(
+                    f"{base}/api/papers/test-paper/pdf",
+                    headers={
+                        "Origin": "http://127.0.0.1:5173",
+                        "ngrok-skip-browser-warning": "flowloom",
+                    },
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    self.assertEqual(response.read(), b"%PDF-1.7\\nflowloom-cors-test")
+                    self.assertEqual(response.headers["Access-Control-Allow-Origin"], "http://127.0.0.1:5173")
+
+                rejected = urllib.request.Request(
+                    f"{base}/api/papers/test-paper/pdf",
+                    method="OPTIONS",
+                    headers={
+                        "Origin": "http://attacker.invalid",
+                        "Access-Control-Request-Method": "GET",
+                    },
+                )
+                with self.assertRaises(urllib.error.HTTPError) as denied:
+                    urllib.request.urlopen(rejected, timeout=5)
+                self.assertEqual(denied.exception.code, 403)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+                APP.AUTH = original_auth
+                APP.STORE = original_store
+                APP.ASSETS = original_assets
+
+    def test_paper_reference_resolution_reuses_existing_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = APP.PaperStore(Path(directory) / "papers.db")
+            store.upsert(
+                {
+                    "id": "arxiv:2406.09246", "title": "Existing VLA paper", "abstract": "robot learning",
+                    "authors": ["Researcher"], "institutions": [], "venue": "arXiv", "published": "2024-06-13",
+                    "updated": "2024-06-13", "source": "arXiv", "source_url": "https://arxiv.org/abs/2406.09246",
+                    "pdf_url": "https://arxiv.org/pdf/2406.09246", "doi": "", "journal_ref": "",
+                    "topics": ["具身智能"], "subtopics": [], "quality_score": 1, "citation_count": 0,
+                    "fetched_at": "2026-08-12T00:00:00+00:00",
+                }
+            )
+            original_store = APP.STORE
+            original_connector = APP.CONNECTOR
+            APP.STORE = store
+            connector = mock.Mock()
+            APP.CONNECTOR = connector
+            server = ThreadingHTTPServer(("127.0.0.1", 0), APP.AppHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_port}/api/papers/resolve-reference",
+                    data=json.dumps({"ref": "arxiv:2406.09246v1"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(payload["paper_id"], "arxiv:2406.09246")
+                self.assertFalse(payload["imported"])
+                connector.search.assert_not_called()
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+                APP.STORE = original_store
+                APP.CONNECTOR = original_connector
+
+    def test_paper_reference_resolution_imports_missing_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = APP.PaperStore(Path(directory) / "papers.db")
+            original_store = APP.STORE
+            original_connector = APP.CONNECTOR
+            APP.STORE = store
+
+            class FakeConnector:
+                def search(self, reference, limit=1):
+                    self.reference = reference
+                    return [{
+                        "id": "arxiv:2608.10976", "title": "New VLA paper", "abstract": "robot learning",
+                        "authors": ["Researcher"], "institutions": [], "venue": "arXiv",
+                        "published": "2026-08-11", "updated": "2026-08-11", "source": "Connector / arXiv",
+                        "source_url": "https://arxiv.org/abs/2608.10976", "pdf_url": "https://arxiv.org/pdf/2608.10976",
+                        "doi": "", "journal_ref": "", "topics": ["具身智能"], "subtopics": [],
+                        "quality_score": 1, "citation_count": 0, "already_saved": False, "existing_id": "",
+                    }]
+
+                def import_paper(self, payload):
+                    store.upsert({**payload, "fetched_at": "2026-08-12T00:00:00+00:00"})
+                    return store.get_paper(payload["id"])
+
+            fake = FakeConnector()
+            APP.CONNECTOR = fake
+            server = ThreadingHTTPServer(("127.0.0.1", 0), APP.AppHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_port}/api/papers/resolve-reference",
+                    data=json.dumps({"ref": "arxiv:2608.10976"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(payload["paper_id"], "arxiv:2608.10976")
+                self.assertTrue(payload["imported"])
+                self.assertIsNotNone(store.get_paper("arxiv:2608.10976"))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+                APP.STORE = original_store
+                APP.CONNECTOR = original_connector
+
+    def test_stats_total_includes_records_hidden_by_future_issue_dates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = APP.PaperStore(Path(directory) / "papers.db")
+            base = {
+                "abstract": "", "authors": [], "institutions": [], "venue": "ICLR",
+                "updated": "2026-01-01", "source": "test", "source_url": "", "pdf_url": "",
+                "doi": "", "journal_ref": "", "topics": ["other"], "subtopics": [],
+                "quality_score": 0, "citation_count": 0,
+            }
+            store.upsert({**base, "id": "visible", "title": "Visible", "published": "2026-01-01"})
+            store.upsert({**base, "id": "future", "title": "Future issue", "published": "2099-01-01"})
+            original_store = APP.STORE
+            APP.STORE = store
+            server = ThreadingHTTPServer(("127.0.0.1", 0), APP.AppHandler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with mock.patch.object(APP.EXPLAINER, "connection", return_value=None):
+                    with urllib.request.urlopen(
+                        f"http://127.0.0.1:{server.server_port}/api/stats", timeout=5
+                    ) as response:
+                        payload = json.loads(response.read().decode("utf-8"))
+                self.assertEqual(payload["total"], 2)
+                self.assertEqual(payload["visible_total"], 1)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+                APP.STORE = original_store
 
     def test_cloud_can_be_explicitly_disabled_for_beta_profile(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.dict(
@@ -849,6 +1204,100 @@ class FeedTests(unittest.TestCase):
                 expected_chat,
             )
 
+    def test_private_reading_state_isolated_between_accounts_while_catalog_and_cache_are_shared(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = APP.PaperStore(Path(directory) / "papers.db")
+            store.upsert(
+                {
+                    "id": "paper", "title": "Shared paper", "abstract": "Abstract", "authors": ["Author"],
+                    "institutions": [], "venue": "CoRL", "published": "2026-01-01", "updated": "2026-01-01",
+                    "source": "test", "source_url": "https://example.com", "pdf_url": "", "doi": "",
+                    "journal_ref": "", "topics": ["embodied"], "quality_score": 80, "citation_count": 3,
+                }
+            )
+            store.upsert_projects(
+                [{
+                    "full_name": "owner/project", "name": "project", "owner": "owner",
+                    "description": "Shared source cache", "url": "https://github.com/owner/project",
+                    "homepage": "", "stars": 10, "forks": 1, "open_issues": 0, "language": "Python",
+                    "license": "MIT", "default_branch": "main", "size_kb": 12, "topics": ["robotics"],
+                    "categories": ["embodied"], "created_at": "2026-01-01", "updated_at": "2026-01-01",
+                    "pushed_at": "2026-01-01",
+                }]
+            )
+            store.save_project_asset(
+                "owner/project",
+                {"local_repo_path": str(Path(directory) / "repo"), "file_count": 2, "source_chars": 100},
+                "alice",
+            )
+
+            self.assertEqual([item["id"] for item in store.list_papers("alice")], ["paper"])
+            self.assertEqual([item["id"] for item in store.list_papers("bob")], ["paper"])
+            self.assertEqual(store.get_paper("paper", "bob")["status"], "unread")
+
+            store.update_state("paper", {"status": "read", "favorite": True, "notes": "Alice note"}, "alice")
+            store.save_explanation("paper", {"provider": "alice-model"}, "alice")
+            store.add_chat_message("paper", "user", "Alice question", "alice")
+            store.add_chat_message("paper", "assistant", "Alice answer", "alice")
+
+            alice = store.get_paper("paper", "alice")
+            bob = store.get_paper("paper", "bob")
+            self.assertEqual(alice["status"], "read")
+            self.assertTrue(alice["favorite"])
+            self.assertEqual(alice["notes"], "Alice note")
+            self.assertEqual(alice["explanation"]["provider"], "alice-model")
+            self.assertEqual(store.chat_history("paper", 0, "alice")[0]["content"], "Alice question")
+            self.assertEqual(bob["status"], "unread")
+            self.assertFalse(bob["favorite"])
+            self.assertEqual(bob["notes"], "")
+            self.assertIsNone(bob["explanation"])
+            self.assertEqual(store.chat_history("paper", 0, "bob"), [])
+
+            store.save_project_explanation("owner/project", {"provider": "alice-project-model"}, "alice")
+            store.add_project_chat_message("owner/project", "user", "Project question", "alice")
+            alice_project = store.get_project_asset("owner/project", "alice")
+            bob_project = store.get_project_asset("owner/project", "bob")
+            self.assertEqual(alice_project["file_count"], bob_project["file_count"])
+            self.assertEqual(alice_project["explanation"]["provider"], "alice-project-model")
+            self.assertIsNone(bob_project["explanation"])
+            self.assertEqual(store.project_chat_history("owner/project", 0, "bob"), [])
+
+            self.assertNotEqual(
+                APP.ReadingArchiveService._key("papers", "paper", "alice"),
+                APP.ReadingArchiveService._key("papers", "paper", "bob"),
+            )
+            self.assertNotEqual(
+                APP.ReadingArchiveService._key("projects", "owner/project", "alice"),
+                APP.ReadingArchiveService._key("projects", "owner/project", "bob"),
+            )
+
+    def test_model_reading_notes_are_isolated_by_owner_while_fulltext_cache_remains_shared(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_fulltext_dir = APP.FULLTEXT_DIR
+            APP.FULLTEXT_DIR = Path(directory) / "fulltext"
+            try:
+                settings = APP.RuntimeSettings(Path(directory) / "settings.json")
+                settings._values["pdf_dir"] = str(Path(directory) / "pdfs")
+                assets = APP.PaperAssetService(APP.PaperStore(Path(directory) / "papers.db"), mock.Mock(configured=False), settings)
+                fulltext = "shared full text"
+                alice_notes = [{"method": ["alice"]}]
+                bob_notes = [{"method": ["bob"]}]
+                assets.save_reading_notes("arxiv:paper", fulltext, alice_notes, "alice")
+                assets.save_reading_notes("arxiv:paper", fulltext, bob_notes, "bob")
+
+                self.assertEqual(assets.reading_notes("arxiv:paper", fulltext, "alice"), alice_notes)
+                self.assertEqual(assets.reading_notes("arxiv:paper", fulltext, "bob"), bob_notes)
+                self.assertIsNone(assets.reading_notes("arxiv:paper", fulltext, "charlie"))
+                self.assertEqual(
+                    assets.reading_notes("arxiv:paper", fulltext),
+                    None,
+                )
+                note_files = sorted(path.name for path in APP.FULLTEXT_DIR.glob("*.notes.json"))
+                self.assertEqual(len(note_files), 2)
+                self.assertTrue(all("alice" not in name and "bob" not in name for name in note_files))
+            finally:
+                APP.FULLTEXT_DIR = original_fulltext_dir
+
     def test_project_workspace_groups_files_and_sanitizes_readme(self):
         files = [
             "README.md", "CHANGELOG.md", "CONTRIBUTING.md", "docs/guide.md",
@@ -1352,6 +1801,63 @@ class FeedTests(unittest.TestCase):
             self.assertEqual(saved["provider"], "arXiv")
             self.assertEqual(saved["page_count"], 12)
             self.assertEqual(store.assets_for_papers(["paper"])["paper"]["text_chars"], 42000)
+
+    def test_fulltext_locator_prefers_requested_page_and_reports_misses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original_fulltext_dir = APP.FULLTEXT_DIR
+            APP.FULLTEXT_DIR = root / "fulltext"
+            APP.FULLTEXT_DIR.mkdir(parents=True)
+            try:
+                store = APP.PaperStore(root / "papers.db")
+                assets = APP.PaperAssetService(
+                    store,
+                    APP.S3ObjectStorage(store),
+                    APP.RuntimeSettings(root / "settings.json"),
+                )
+                text_path = APP.FULLTEXT_DIR / "locator.json"
+                text_path.write_text(
+                    json.dumps(
+                        {
+                            "pages": [
+                                {"page": 1, "text": "Introduction and background."},
+                                {"page": 2, "text": "Action-conditioned world models predict future observations."},
+                                {"page": 3, "text": "Figure 2 shows the learned dynamics."},
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                store.save_asset(
+                    "paper",
+                    {"local_text_path": str(text_path), "page_count": 3, "text_chars": 10000},
+                )
+                quoted = assets.locate(
+                    "paper",
+                    {"page": 3, "quote": "Action-conditioned world models predict future observations."},
+                )
+                self.assertTrue(quoted["matched"])
+                self.assertEqual(quoted["page"], 2)
+                self.assertEqual(quoted["field"], "quote")
+                page_only = assets.locate("paper", {"page": 3})
+                self.assertTrue(page_only["matched"])
+                self.assertEqual(page_only["reason"], "page_match")
+                missed = assets.locate("paper", {"page": 3, "quote": "not in the paper"})
+                self.assertFalse(missed["matched"])
+                self.assertEqual(missed["page"], 3)
+                self.assertEqual(missed["reason"], "locator_text_not_found")
+            finally:
+                APP.FULLTEXT_DIR = original_fulltext_dir
+
+    def test_large_paper_id_lookups_are_batched_below_sqlite_variable_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = APP.PaperStore(Path(directory) / "papers.db")
+            store.save_asset("target", {"provider": "test"})
+            store.replace_project_links([("target", "owner/repository", 1.0, "test")])
+            paper_ids = [f"paper-{index}" for index in range(33_000)] + ["target"]
+
+            self.assertEqual(store.assets_for_papers(paper_ids)["target"]["provider"], "test")
+            self.assertEqual(store.paper_ids_with_projects(paper_ids), {"target"})
 
     def test_imported_pdf_can_archive_and_restore_from_cloud(self):
         import fitz

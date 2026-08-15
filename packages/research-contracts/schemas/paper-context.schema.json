@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paperfield.local/contracts/paper-context.schema.json",
+  "title": "Source-bounded paper context",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "title", "paperfield_path", "dossier", "claims", "provenance"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "canonical_paper_ref": {"type": "string", "minLength": 1},
+    "paperfield_id": {"type": "string", "minLength": 1},
+    "title": {"type": "string", "minLength": 1},
+    "abstract": {"type": "string"},
+    "authors": {"type": "array", "items": {"type": "string"}},
+    "venue": {"type": "string"},
+    "published": {"type": "string"},
+    "version": {"type": "string"},
+    "source_url": {"type": "string", "format": "uri-reference"},
+    "pdf_url": {"type": "string", "format": "uri-reference"},
+    "paperfield_path": {"type": "string", "pattern": "^/", "minLength": 1},
+    "doi": {"type": "string"},
+    "topics": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "dossier": {"$ref": "#/$defs/dossier"},
+    "claims": {
+      "type": "array",
+      "maxItems": 80,
+      "items": {"$ref": "#/$defs/claim"}
+    },
+    "terms": {"type": "array", "items": {"type": "string"}},
+    "curriculum": {"type": "object", "additionalProperties": true},
+    "insufficient_information": {"type": "array", "items": {"type": "string"}},
+    "template_ids": {"type": "array", "items": {"type": "string"}},
+    "library_elements": {"type": "array", "items": {"type": "string"}},
+    "provenance": {"$ref": "#/$defs/provenance"}
+  },
+  "anyOf": [
+    {"required": ["canonical_paper_ref"]},
+    {"required": ["paperfield_id"]}
+  ],
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "locator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {"const": "paper"},
+        "canonical_paper_ref": {"type": "string"},
+        "paperfield_id": {"type": "string"},
+        "url": {"type": "string", "format": "uri-reference"},
+        "page": {"type": "integer", "minimum": 1},
+        "section": {"type": "string"},
+        "figure": {"type": "string"},
+        "table": {"type": "string"},
+        "equation": {"type": "string"},
+        "quote": {"type": "string"},
+        "content_sha256": {"$ref": "#/$defs/hash"}
+      },
+      "anyOf": [
+        {"required": ["page"]},
+        {"required": ["section"]},
+        {"required": ["figure"]},
+        {"required": ["table"]},
+        {"required": ["equation"]},
+        {"required": ["quote"]}
+      ]
+    },
+    "claim_locator": {
+      "allOf": [
+        {"$ref": "#/$defs/locator"},
+        {"required": ["content_sha256"]}
+      ]
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["paperfield_path", "source_locator"],
+      "properties": {
+        "evidence_id": {"type": "string"},
+        "label": {"type": "string"},
+        "direction": {"enum": ["supports", "contradicts", "qualifies"]},
+        "paperfield_path": {"type": "string", "pattern": "^/", "minLength": 1},
+        "source_locator": {"$ref": "#/$defs/locator"}
+      }
+    },
+    "claim_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["paperfield_path", "source_locator"],
+      "properties": {
+        "evidence_id": {"type": "string"},
+        "label": {"type": "string"},
+        "direction": {"enum": ["supports", "contradicts", "qualifies"]},
+        "paperfield_path": {"type": "string", "pattern": "^/", "minLength": 1},
+        "source_locator": {"$ref": "#/$defs/claim_locator"}
+      }
+    },
+    "section": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim_id", "title", "body", "source_kind", "confidence", "evidence"],
+      "properties": {
+        "claim_id": {"type": "string"},
+        "title": {"type": "string"},
+        "body": {"type": "string"},
+        "source_kind": {"enum": ["paper_claim", "platform_derivation", "editorial_judgment", "insufficient_information"]},
+        "confidence": {"enum": ["high", "medium", "low", "unknown"]},
+        "evidence": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/evidence"}}
+      }
+    },
+    "stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "summary", "source_basis", "sections"],
+      "properties": {
+        "stage": {"type": "string", "minLength": 1},
+        "summary": {"type": "string"},
+        "source_basis": {"enum": ["metadata", "abstract", "fulltext", "supplementary", "code", "mixed", ""]},
+        "source_sha256": {"$ref": "#/$defs/hash"},
+        "sections": {"type": "array", "maxItems": 12, "items": {"$ref": "#/$defs/section"}}
+      }
+    },
+    "dossier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "analysis_level", "source_basis", "coverage", "stages"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "status": {"type": "string", "minLength": 1},
+        "analysis_level": {"type": "string", "minLength": 1},
+        "source_basis": {"enum": ["metadata", "abstract", "fulltext", "supplementary", "code", "mixed", ""]},
+        "source_sha256": {"$ref": "#/$defs/hash"},
+        "coverage": {"type": "object", "additionalProperties": true},
+        "stages": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "structure": {"$ref": "#/$defs/stage"},
+            "claims": {"$ref": "#/$defs/stage"},
+            "method": {"$ref": "#/$defs/stage"},
+            "math": {"$ref": "#/$defs/stage"},
+            "experiments": {"$ref": "#/$defs/stage"},
+            "code": {"$ref": "#/$defs/stage"},
+            "lineage": {"$ref": "#/$defs/stage"},
+            "critique": {"$ref": "#/$defs/stage"},
+            "citations": {"$ref": "#/$defs/stage"}
+          }
+        }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim_id", "stage", "title", "statement", "source_kind", "confidence", "source_sha256", "evidence"],
+      "properties": {
+        "claim_id": {"type": "string", "minLength": 1},
+        "stage": {"type": "string", "minLength": 1},
+        "title": {"type": "string"},
+        "statement": {"type": "string", "minLength": 1},
+        "source_kind": {"enum": ["paper_claim", "platform_derivation"]},
+        "confidence": {"enum": ["high", "medium", "low", "unknown"]},
+        "source_sha256": {"$ref": "#/$defs/hash"},
+        "evidence": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"$ref": "#/$defs/claim_evidence"}}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["producer", "produced_at", "source_bounded"],
+      "properties": {
+        "producer": {"enum": ["paperfield", "research-atlas", "courses", "flowloom"]},
+        "produced_at": {"type": "string", "format": "date-time"},
+        "source_owner": {"type": "string"},
+        "source_bounded": {"const": true}
+      }
+    }
+  }
+}

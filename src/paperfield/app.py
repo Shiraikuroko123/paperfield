@@ -8,8 +8,10 @@ import hmac
 import html
 import http.client
 import ipaddress
+import inspect
 import json
 import math
+import mimetypes
 import os
 import posixpath
 import re
@@ -19,6 +21,7 @@ import secrets
 import textwrap
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -53,6 +56,13 @@ except ImportError:
     pass
 STATIC_DIR = PACKAGE_DIR / "static"
 CATALOG_DIR = PACKAGE_DIR / "catalog"
+FLOWLOOM_DIST_DIR = Path(
+    os.environ.get("PAPERFIELD_FLOWLOOM_DIST_DIR", ROOT / "apps" / "flowloom" / "dist")
+).expanduser().resolve()
+ATLAS_INTERNAL_URL = os.environ.get(
+    "PAPERFIELD_ATLAS_INTERNAL_URL", "http://127.0.0.1:8795"
+).strip().rstrip("/")
+PLATFORM_MAX_PROXY_BYTES = 96 * 1024 * 1024
 LEGACY_DATA_DIR = ROOT / "data"
 DEFAULT_DATA_DIR = LEGACY_DATA_DIR if LEGACY_DATA_DIR.exists() and not (LOCAL_DIR / "data").exists() else LOCAL_DIR / "data"
 DATA_DIR = Path(os.environ.get("PAPERFIELD_DATA_DIR", DEFAULT_DATA_DIR)).expanduser().resolve()
@@ -70,9 +80,43 @@ SETTINGS_PATH = Path(os.environ.get("PAPERFIELD_SETTINGS_PATH", DATA_DIR / "sett
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", CATALOG_DIR / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", CATALOG_DIR / "venues.json")).expanduser().resolve()
 INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", CATALOG_DIR / "institutions.json")).expanduser().resolve()
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.5"
+PAPERFIELD_ATLAS_SYNC_TOKEN = os.environ.get("PAPERFIELD_ATLAS_SYNC_TOKEN", "").strip()
+PAPERFIELD_ATLAS_PROXY_TOKEN = os.environ.get("PAPERFIELD_ATLAS_PROXY_TOKEN", "").strip()
+ATLAS_EDITOR_ROLES = {"beta", "editor"}
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
+
+
+def normalize_http_origin(value: Any) -> str:
+    try:
+        parsed = urllib.parse.urlsplit(str(value or "").strip())
+    except ValueError:
+        return ""
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        return ""
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+
+
+FLOWLOOM_CORS_ORIGINS = frozenset(
+    normalized
+    for normalized in (
+        normalize_http_origin(value)
+        for value in os.environ.get(
+            "PAPERFIELD_FLOWLOOM_CORS_ORIGINS",
+            "http://127.0.0.1:5173,http://localhost:5173,http://[::1]:5173,http://127.0.0.1:4178,http://localhost:4178,http://[::1]:4178",
+        ).split(",")
+    )
+    if normalized
+)
 RECOMMENDATION_WEIGHT_KEYS = (
     "academic", "relevance", "freshness", "evidence", "impact_reproducibility",
 )
@@ -97,6 +141,95 @@ class AIRequestError(RuntimeError):
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _catalog_json_list(value: Any) -> list[Any]:
+    try:
+        parsed = json.loads(str(value or "[]"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _catalog_unique(values: list[Any]) -> list[Any]:
+    result: list[Any] = []
+    seen: set[str] = set()
+    for value in values:
+        key = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if key not in seen:
+            seen.add(key)
+            result.append(value)
+    return result
+
+
+def _paper_catalog_payload_json(
+    paper_id: Any,
+    title: Any,
+    abstract: Any,
+    authors_json: Any,
+    venue: Any,
+    published: Any,
+    updated: Any,
+    source: Any,
+    source_url: Any,
+    pdf_url: Any,
+    doi: Any,
+    topics_json: Any,
+    subtopics_json: Any,
+    fetched_at: Any,
+) -> str:
+    payload = {
+        "paperfieldId": str(paper_id or ""),
+        "title": str(title or ""),
+        "abstract": str(abstract or ""),
+        "authors": _catalog_json_list(authors_json),
+        "venue": str(venue or ""),
+        "published": str(published or ""),
+        "updated": str(updated or ""),
+        "source": str(source or ""),
+        "sourceUrl": str(source_url or ""),
+        "pdfUrl": str(pdf_url or ""),
+        "doi": str(doi or ""),
+        "topics": _catalog_unique(_catalog_json_list(topics_json) + _catalog_json_list(subtopics_json)),
+        "fetchedAt": str(fetched_at or ""),
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _project_catalog_payload_json(
+    full_name: Any,
+    description: Any,
+    url: Any,
+    homepage: Any,
+    language: Any,
+    license_name: Any,
+    topics_json: Any,
+    categories_json: Any,
+    pushed_at: Any,
+    updated_at: Any,
+    fetched_at: Any,
+) -> str:
+    payload = {
+        "fullName": str(full_name or ""),
+        "description": str(description or ""),
+        "url": str(url or ""),
+        "homepage": str(homepage or ""),
+        "language": str(language or ""),
+        "license": str(license_name or ""),
+        "topics": _catalog_unique(_catalog_json_list(topics_json) + _catalog_json_list(categories_json)),
+        "sourceUpdatedAt": str(pushed_at or updated_at or ""),
+        "fetchedAt": str(fetched_at or ""),
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _catalog_payload_sha256(payload_json: Any) -> str:
+    try:
+        payload = json.loads(str(payload_json or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        payload = {}
+    canonical = json.dumps(payload if isinstance(payload, dict) else {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def iso_date(value: Any) -> str:
@@ -179,8 +312,8 @@ class AuthService:
     ) -> dict[str, Any]:
         normalized = self._normalize_username(username)
         normalized_role = compact_text(role).lower() if role is not None else ""
-        if normalized_role and normalized_role not in {"beta", "standard"}:
-            raise ValueError("账户角色必须是 beta 或 standard")
+        if normalized_role and normalized_role not in {"beta", "editor", "standard"}:
+            raise ValueError("账户角色必须是 beta、editor 或 standard")
         salt, password_hash = self._password_record(password)
         with self._lock:
             payload = self._load()
@@ -424,7 +557,267 @@ class PaperStore:
     def connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30)
         connection.row_factory = sqlite3.Row
+        connection.create_function("atlas_paper_catalog_payload", 14, _paper_catalog_payload_json)
+        connection.create_function("atlas_project_catalog_payload", 11, _project_catalog_payload_json)
+        connection.create_function("atlas_catalog_payload_sha256", 1, _catalog_payload_sha256)
         return connection
+
+    @staticmethod
+    def _owner_id(owner_id: Any = "local") -> str:
+        """Normalize the authenticated account used for private reading data."""
+        value = compact_text(str(owner_id or "")).lower()
+        if not value:
+            return "local"
+        return value[:120]
+
+    def owner_reading_export(self, owner_id: str = "local") -> dict[str, Any]:
+        """Return only private reading records for one authenticated owner."""
+        owner = self._owner_id(owner_id)
+        papers = {}
+        for paper_id in self.paper_ids_with_reading(owner):
+            paper = self.get_paper(paper_id, owner)
+            if paper:
+                papers[paper_id] = {
+                    "state": {key: paper.get(key) for key in ("status", "favorite", "notes", "explanation")},
+                    "chat": self.chat_history(paper_id, 0, owner),
+                }
+        projects = {}
+        for full_name in self.project_ids_with_reading(owner):
+            asset = self.get_project_asset(full_name, owner) or {}
+            projects[full_name] = {
+                "explanation": asset.get("explanation"),
+                "chat": self.project_chat_history(full_name, 0, owner),
+            }
+        return {"owner_id": owner, "papers": papers, "projects": projects}
+
+    @staticmethod
+    def _install_atlas_catalog_triggers(db: sqlite3.Connection) -> None:
+        """Install snapshot-producing triggers after the event table migrates."""
+        db.executescript(
+            """
+            DROP TRIGGER IF EXISTS atlas_paper_insert;
+            DROP TRIGGER IF EXISTS atlas_paper_update;
+            DROP TRIGGER IF EXISTS atlas_paper_delete;
+            DROP TRIGGER IF EXISTS atlas_project_insert;
+            DROP TRIGGER IF EXISTS atlas_project_update;
+            DROP TRIGGER IF EXISTS atlas_project_delete;
+            CREATE TRIGGER atlas_paper_insert
+            AFTER INSERT ON papers BEGIN
+                INSERT INTO atlas_catalog_changes(
+                    object_kind, object_id, operation, changed_at, payload_json, payload_sha256
+                ) VALUES(
+                    'paper', NEW.id, 'upsert', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                    atlas_paper_catalog_payload(
+                        NEW.id, NEW.title, NEW.abstract, NEW.authors_json, NEW.venue,
+                        NEW.published, NEW.updated, NEW.source, NEW.source_url, NEW.pdf_url,
+                        NEW.doi, NEW.topics_json, NEW.subtopics_json, NEW.fetched_at
+                    ),
+                    atlas_catalog_payload_sha256(atlas_paper_catalog_payload(
+                        NEW.id, NEW.title, NEW.abstract, NEW.authors_json, NEW.venue,
+                        NEW.published, NEW.updated, NEW.source, NEW.source_url, NEW.pdf_url,
+                        NEW.doi, NEW.topics_json, NEW.subtopics_json, NEW.fetched_at
+                    ))
+                );
+            END;
+            CREATE TRIGGER atlas_paper_update
+            AFTER UPDATE OF
+                title, abstract, authors_json, venue, published, updated, source,
+                source_url, pdf_url, doi, topics_json, subtopics_json, fetched_at
+            ON papers BEGIN
+                INSERT INTO atlas_catalog_changes(
+                    object_kind, object_id, operation, changed_at, payload_json, payload_sha256
+                ) VALUES(
+                    'paper', NEW.id, 'upsert', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                    atlas_paper_catalog_payload(
+                        NEW.id, NEW.title, NEW.abstract, NEW.authors_json, NEW.venue,
+                        NEW.published, NEW.updated, NEW.source, NEW.source_url, NEW.pdf_url,
+                        NEW.doi, NEW.topics_json, NEW.subtopics_json, NEW.fetched_at
+                    ),
+                    atlas_catalog_payload_sha256(atlas_paper_catalog_payload(
+                        NEW.id, NEW.title, NEW.abstract, NEW.authors_json, NEW.venue,
+                        NEW.published, NEW.updated, NEW.source, NEW.source_url, NEW.pdf_url,
+                        NEW.doi, NEW.topics_json, NEW.subtopics_json, NEW.fetched_at
+                    ))
+                );
+            END;
+            CREATE TRIGGER atlas_paper_delete
+            AFTER DELETE ON papers BEGIN
+                INSERT INTO atlas_catalog_changes(
+                    object_kind, object_id, operation, changed_at, payload_json, payload_sha256
+                ) VALUES(
+                    'paper', OLD.id, 'delete', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                    '{}', atlas_catalog_payload_sha256('{}')
+                );
+            END;
+            CREATE TRIGGER atlas_project_insert
+            AFTER INSERT ON github_projects BEGIN
+                INSERT INTO atlas_catalog_changes(
+                    object_kind, object_id, operation, changed_at, payload_json, payload_sha256
+                ) VALUES(
+                    'project', NEW.full_name, 'upsert', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                    atlas_project_catalog_payload(
+                        NEW.full_name, NEW.description, NEW.url, NEW.homepage, NEW.language,
+                        NEW.license, NEW.topics_json, NEW.categories_json, NEW.pushed_at,
+                        NEW.updated_at, NEW.fetched_at
+                    ),
+                    atlas_catalog_payload_sha256(atlas_project_catalog_payload(
+                        NEW.full_name, NEW.description, NEW.url, NEW.homepage, NEW.language,
+                        NEW.license, NEW.topics_json, NEW.categories_json, NEW.pushed_at,
+                        NEW.updated_at, NEW.fetched_at
+                    ))
+                );
+            END;
+            CREATE TRIGGER atlas_project_update
+            AFTER UPDATE OF
+                description, url, homepage, language, license, topics_json,
+                categories_json, pushed_at, updated_at, fetched_at
+            ON github_projects BEGIN
+                INSERT INTO atlas_catalog_changes(
+                    object_kind, object_id, operation, changed_at, payload_json, payload_sha256
+                ) VALUES(
+                    'project', NEW.full_name, 'upsert', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                    atlas_project_catalog_payload(
+                        NEW.full_name, NEW.description, NEW.url, NEW.homepage, NEW.language,
+                        NEW.license, NEW.topics_json, NEW.categories_json, NEW.pushed_at,
+                        NEW.updated_at, NEW.fetched_at
+                    ),
+                    atlas_catalog_payload_sha256(atlas_project_catalog_payload(
+                        NEW.full_name, NEW.description, NEW.url, NEW.homepage, NEW.language,
+                        NEW.license, NEW.topics_json, NEW.categories_json, NEW.pushed_at,
+                        NEW.updated_at, NEW.fetched_at
+                    ))
+                );
+            END;
+            CREATE TRIGGER atlas_project_delete
+            AFTER DELETE ON github_projects BEGIN
+                INSERT INTO atlas_catalog_changes(
+                    object_kind, object_id, operation, changed_at, payload_json, payload_sha256
+                ) VALUES(
+                    'project', OLD.full_name, 'delete', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                    '{}', atlas_catalog_payload_sha256('{}')
+                );
+            END;
+            """
+        )
+
+    @staticmethod
+    def _backfill_atlas_catalog_snapshots(db: sqlite3.Connection) -> None:
+        db.execute(
+            """
+            UPDATE atlas_catalog_changes AS c
+            SET payload_json = (
+                    SELECT atlas_paper_catalog_payload(
+                        p.id, p.title, p.abstract, p.authors_json, p.venue, p.published,
+                        p.updated, p.source, p.source_url, p.pdf_url, p.doi,
+                        p.topics_json, p.subtopics_json, p.fetched_at
+                    )
+                    FROM papers p WHERE p.id = c.object_id
+                ),
+                payload_sha256 = atlas_catalog_payload_sha256(
+                    (
+                        SELECT atlas_paper_catalog_payload(
+                            p.id, p.title, p.abstract, p.authors_json, p.venue, p.published,
+                            p.updated, p.source, p.source_url, p.pdf_url, p.doi,
+                            p.topics_json, p.subtopics_json, p.fetched_at
+                        )
+                        FROM papers p WHERE p.id = c.object_id
+                    )
+                )
+            WHERE c.object_kind='paper' AND c.operation<>'delete'
+              AND EXISTS (SELECT 1 FROM papers p WHERE p.id=c.object_id)
+            """
+        )
+        db.execute(
+            """
+            UPDATE atlas_catalog_changes AS c
+            SET payload_json = (
+                    SELECT atlas_project_catalog_payload(
+                        p.full_name, p.description, p.url, p.homepage, p.language, p.license,
+                        p.topics_json, p.categories_json, p.pushed_at, p.updated_at, p.fetched_at
+                    )
+                    FROM github_projects p WHERE p.full_name = c.object_id
+                ),
+                payload_sha256 = atlas_catalog_payload_sha256(
+                    (
+                        SELECT atlas_project_catalog_payload(
+                            p.full_name, p.description, p.url, p.homepage, p.language, p.license,
+                            p.topics_json, p.categories_json, p.pushed_at, p.updated_at, p.fetched_at
+                        )
+                        FROM github_projects p WHERE p.full_name = c.object_id
+                    )
+                )
+            WHERE c.object_kind='project' AND c.operation<>'delete'
+              AND EXISTS (SELECT 1 FROM github_projects p WHERE p.full_name=c.object_id)
+            """
+        )
+        db.execute(
+            """
+            UPDATE atlas_catalog_changes
+            SET operation='delete', payload_json='{}', payload_sha256=atlas_catalog_payload_sha256('{}')
+            WHERE operation='delete'
+               OR payload_json='' OR payload_sha256=''
+            """
+        )
+
+    @staticmethod
+    def _catalog_snapshots_are_complete(db: sqlite3.Connection) -> bool:
+        """Recognize legacy catalogs whose immutable snapshots are already valid.
+
+        Some beta profiles were copied after snapshot payloads had been
+        materialized but before the schema marker was written. Recomputing
+        every payload during process startup is needlessly expensive for a
+        large library. Validate the stored bytes and hashes first; only an
+        incomplete or malformed catalog falls back to the full backfill.
+        """
+        rows = db.execute(
+            "SELECT seq, object_kind, object_id, operation, payload_json, payload_sha256 "
+            "FROM atlas_catalog_changes ORDER BY seq"
+        ).fetchall()
+        current_papers = {str(row["id"]) for row in db.execute("SELECT id FROM papers")}
+        current_projects = {
+            str(row["full_name"]) for row in db.execute("SELECT full_name FROM github_projects")
+        }
+        if not rows:
+            return not current_papers and not current_projects
+        latest_operations: dict[tuple[str, str], str] = {}
+        for row in rows:
+            object_kind = str(row["object_kind"] or "")
+            object_id = str(row["object_id"] or "")
+            operation = str(row["operation"] or "")
+            if object_kind not in {"paper", "project"} or not object_id:
+                return False
+            if operation not in {"upsert", "delete"}:
+                return False
+            raw_payload = str(row["payload_json"] or "")
+            stored_hash = str(row["payload_sha256"] or "").lower()
+            if not re.fullmatch(r"[a-f0-9]{64}", stored_hash):
+                return False
+            try:
+                payload = json.loads(raw_payload or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return False
+            if not isinstance(payload, dict):
+                return False
+            if operation == "delete" and payload != {}:
+                return False
+            identity_field = "paperfieldId" if object_kind == "paper" else "fullName"
+            if operation == "upsert" and str(payload.get(identity_field) or "") != object_id:
+                return False
+            canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            if not hmac.compare_digest(stored_hash, hashlib.sha256(canonical.encode("utf-8")).hexdigest()):
+                return False
+            latest_operations[(object_kind, object_id)] = operation
+        active_papers = {
+            object_id
+            for (kind, object_id), operation in latest_operations.items()
+            if kind == "paper" and operation == "upsert"
+        }
+        active_projects = {
+            object_id
+            for (kind, object_id), operation in latest_operations.items()
+            if kind == "project" and operation == "upsert"
+        }
+        return active_papers == current_papers and active_projects == current_projects
 
     def initialize(self) -> None:
         with self.connect() as db:
@@ -446,6 +839,7 @@ class PaperStore:
                     doi TEXT NOT NULL DEFAULT '',
                     journal_ref TEXT NOT NULL DEFAULT '',
                     topics_json TEXT NOT NULL DEFAULT '[]',
+                    subtopics_json TEXT NOT NULL DEFAULT '[]',
                     quality_score REAL NOT NULL DEFAULT 0,
                     citation_count INTEGER NOT NULL DEFAULT 0,
                     fetched_at TEXT NOT NULL
@@ -466,6 +860,10 @@ class PaperStore:
                     status TEXT NOT NULL,
                     inserted_count INTEGER NOT NULL DEFAULT 0,
                     error_text TEXT NOT NULL DEFAULT ''
+                );
+                CREATE TABLE IF NOT EXISTS app_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL DEFAULT ''
                 );
                 CREATE TABLE IF NOT EXISTS github_projects (
                     full_name TEXT PRIMARY KEY,
@@ -514,6 +912,14 @@ class PaperStore:
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
                     created_at TEXT NOT NULL,
+                    FOREIGN KEY(project_full_name) REFERENCES github_projects(full_name)
+                );
+                CREATE TABLE IF NOT EXISTS project_reading_state (
+                    owner_id TEXT NOT NULL,
+                    project_full_name TEXT NOT NULL,
+                    explanation_json TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(owner_id, project_full_name),
                     FOREIGN KEY(project_full_name) REFERENCES github_projects(full_name)
                 );
                 CREATE TABLE IF NOT EXISTS paper_assets (
@@ -574,6 +980,45 @@ class PaperStore:
                     item_count INTEGER NOT NULL DEFAULT 0,
                     error_text TEXT NOT NULL DEFAULT ''
                 );
+                CREATE TABLE IF NOT EXISTS atlas_catalog_changes (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    object_kind TEXT NOT NULL,
+                    object_id TEXT NOT NULL,
+                    operation TEXT NOT NULL,
+                    changed_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    payload_sha256 TEXT NOT NULL DEFAULT ''
+                );
+                CREATE TRIGGER IF NOT EXISTS atlas_paper_insert
+                AFTER INSERT ON papers BEGIN
+                    INSERT INTO atlas_catalog_changes(object_kind, object_id, operation, changed_at)
+                    VALUES('paper', NEW.id, 'upsert', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+                END;
+                CREATE TRIGGER IF NOT EXISTS atlas_paper_update
+                AFTER UPDATE ON papers BEGIN
+                    INSERT INTO atlas_catalog_changes(object_kind, object_id, operation, changed_at)
+                    VALUES('paper', NEW.id, 'upsert', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+                END;
+                CREATE TRIGGER IF NOT EXISTS atlas_paper_delete
+                AFTER DELETE ON papers BEGIN
+                    INSERT INTO atlas_catalog_changes(object_kind, object_id, operation, changed_at)
+                    VALUES('paper', OLD.id, 'delete', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+                END;
+                CREATE TRIGGER IF NOT EXISTS atlas_project_insert
+                AFTER INSERT ON github_projects BEGIN
+                    INSERT INTO atlas_catalog_changes(object_kind, object_id, operation, changed_at)
+                    VALUES('project', NEW.full_name, 'upsert', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+                END;
+                CREATE TRIGGER IF NOT EXISTS atlas_project_update
+                AFTER UPDATE ON github_projects BEGIN
+                    INSERT INTO atlas_catalog_changes(object_kind, object_id, operation, changed_at)
+                    VALUES('project', NEW.full_name, 'upsert', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+                END;
+                CREATE TRIGGER IF NOT EXISTS atlas_project_delete
+                AFTER DELETE ON github_projects BEGIN
+                    INSERT INTO atlas_catalog_changes(object_kind, object_id, operation, changed_at)
+                    VALUES('project', OLD.full_name, 'delete', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+                END;
                 CREATE INDEX IF NOT EXISTS idx_papers_title_normalized
                     ON papers(lower(trim(title)));
                 CREATE INDEX IF NOT EXISTS idx_github_projects_pushed_at
@@ -584,11 +1029,20 @@ class PaperStore:
                     ON paper_chat_messages(paper_id, id);
                 CREATE INDEX IF NOT EXISTS idx_project_chat_messages_project
                     ON project_chat_messages(project_full_name, id);
+                CREATE INDEX IF NOT EXISTS idx_project_reading_state_owner
+                    ON project_reading_state(owner_id, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_atlas_catalog_changes_kind
+                    ON atlas_catalog_changes(object_kind, seq);
+                CREATE INDEX IF NOT EXISTS idx_atlas_catalog_changes_object
+                    ON atlas_catalog_changes(object_kind, object_id, seq DESC);
                 """
             )
+            self._migrate_private_owner_schema(db)
             paper_columns = {row["name"] for row in db.execute("PRAGMA table_info(papers)").fetchall()}
             if "institutions_json" not in paper_columns:
                 db.execute("ALTER TABLE papers ADD COLUMN institutions_json TEXT NOT NULL DEFAULT '[]'")
+            if "subtopics_json" not in paper_columns:
+                db.execute("ALTER TABLE papers ADD COLUMN subtopics_json TEXT NOT NULL DEFAULT '[]'")
             asset_columns = {row["name"] for row in db.execute("PRAGMA table_info(paper_assets)").fetchall()}
             for name, definition in (
                 ("cloud_pdf_key", "TEXT NOT NULL DEFAULT ''"),
@@ -604,23 +1058,318 @@ class PaperStore:
             ):
                 if name not in project_columns:
                     db.execute(f"ALTER TABLE github_projects ADD COLUMN {name} {definition}")
+            catalog_columns = {row["name"] for row in db.execute("PRAGMA table_info(atlas_catalog_changes)").fetchall()}
+            for name, definition in (
+                ("payload_json", "TEXT NOT NULL DEFAULT '{}'"),
+                ("payload_sha256", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                if name not in catalog_columns:
+                    db.execute(f"ALTER TABLE atlas_catalog_changes ADD COLUMN {name} {definition}")
+            catalog_schema = db.execute(
+                "SELECT value FROM app_metadata WHERE key='atlas_catalog_schema_version'"
+            ).fetchone()
+            trigger_schema = db.execute(
+                "SELECT value FROM app_metadata WHERE key='atlas_catalog_trigger_version'"
+            ).fetchone()
+            # Snapshot payloads are immutable event data.  Recompute them only
+            # when upgrading an older catalog; doing this on every startup is
+            # quadratic in the size of a long-lived Paperfield library.
+            if catalog_schema is None or catalog_schema["value"] != "2":
+                if not self._catalog_snapshots_are_complete(db):
+                    db.execute(
+                        """
+                        INSERT INTO atlas_catalog_changes(object_kind, object_id, operation, changed_at)
+                        SELECT 'paper', p.id, 'upsert', p.fetched_at
+                        FROM papers p
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM atlas_catalog_changes c
+                            WHERE c.object_kind='paper' AND c.object_id=p.id
+                        )
+                        """
+                    )
+                    db.execute(
+                        """
+                        INSERT INTO atlas_catalog_changes(object_kind, object_id, operation, changed_at)
+                        SELECT 'project', p.full_name, 'upsert', p.fetched_at
+                        FROM github_projects p
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM atlas_catalog_changes c
+                            WHERE c.object_kind='project' AND c.object_id=p.full_name
+                        )
+                        """
+                    )
+                    self._backfill_atlas_catalog_snapshots(db)
+            if trigger_schema is None or trigger_schema["value"] != "2":
+                self._install_atlas_catalog_triggers(db)
+                db.execute(
+                    """
+                    INSERT INTO app_metadata(key, value) VALUES('atlas_catalog_trigger_version', '2')
+                    ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                    """
+                )
+            db.execute(
+                """
+                INSERT INTO app_metadata(key, value) VALUES('atlas_catalog_schema_version', '2')
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """
+            )
 
     def count(self) -> int:
         with self.connect() as db:
             return int(db.execute("SELECT COUNT(*) FROM papers").fetchone()[0])
 
-    def recalculate_quality(self, classifier: "PaperClassifier") -> None:
+    def atlas_catalog_page(self, cursor: int = 0, limit: int = 250, compact: bool = False) -> dict[str, Any]:
+        safe_cursor = int(cursor)
+        if safe_cursor < 0:
+            raise ValueError("cursor must be non-negative")
+        safe_limit = max(1, min(500, int(limit)))
+        db = self.connect()
+        try:
+            # Pin watermark and event rows to one SQLite snapshot.  A writer
+            # may append a later event while this page is being serialized,
+            # but it cannot change the rows visible to this cursor request.
+            db.execute("BEGIN")
+            watermark = int(db.execute("SELECT COALESCE(MAX(seq), 0) FROM atlas_catalog_changes").fetchone()[0])
+            if safe_cursor > watermark:
+                raise ValueError("cursor is ahead of the catalog watermark")
+            if compact:
+                # A new Atlas installation should not replay every historical
+                # update for a large Paperfield library.  Return the latest
+                # immutable event for each object while preserving event
+                # sequence order so the normal cursor protocol still applies.
+                rows = db.execute(
+                    """
+                    WITH latest AS (
+                        SELECT object_kind, object_id, MAX(seq) AS seq
+                        FROM atlas_catalog_changes
+                        WHERE seq <= ?
+                        GROUP BY object_kind, object_id
+                    )
+                    SELECT changes.*
+                    FROM atlas_catalog_changes AS changes
+                    JOIN latest
+                      ON latest.object_kind=changes.object_kind
+                     AND latest.object_id=changes.object_id
+                     AND latest.seq=changes.seq
+                    WHERE changes.seq > ? AND changes.seq <= ?
+                    ORDER BY changes.seq
+                    LIMIT ?
+                    """,
+                    (watermark, safe_cursor, watermark, safe_limit + 1),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    """
+                    SELECT * FROM atlas_catalog_changes
+                    WHERE seq > ? AND seq <= ?
+                    ORDER BY seq
+                    LIMIT ?
+                    """,
+                    (safe_cursor, watermark, safe_limit + 1),
+                ).fetchall()
+            has_more = len(rows) > safe_limit
+            rows = rows[:safe_limit]
+            events: list[dict[str, Any]] = []
+            for row in rows:
+                kind = row["object_kind"]
+                object_id = row["object_id"]
+                operation = str(row["operation"] or "")
+                if kind not in {"paper", "project"} or not object_id:
+                    raise ValueError("catalog event identity is invalid")
+                if operation not in {"upsert", "delete"}:
+                    raise ValueError("catalog event operation is invalid")
+                deleted = operation == "delete"
+                try:
+                    snapshot = json.loads(row["payload_json"] or "{}")
+                except (TypeError, ValueError, json.JSONDecodeError) as error:
+                    raise ValueError("catalog event payload snapshot is invalid") from error
+                if not isinstance(snapshot, dict):
+                    raise ValueError("catalog event payload snapshot must be an object")
+                payload: dict[str, Any] | None = None if deleted else snapshot
+                canonical = json.dumps(payload or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                expected_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+                stored_hash = str(row["payload_sha256"] or "").lower()
+                if not re.fullmatch(r"[a-f0-9]{64}", stored_hash) or not hmac.compare_digest(stored_hash, expected_hash):
+                    raise ValueError("catalog event payload snapshot hash is invalid")
+                events.append(
+                    {
+                        "seq": int(row["seq"]),
+                        "kind": kind,
+                        "externalId": object_id,
+                        "operation": operation,
+                        "deleted": deleted,
+                        "changedAt": row["changed_at"],
+                        "payloadSha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+                        "payload": payload,
+                    }
+                )
+            next_cursor = int(events[-1]["seq"]) if events else safe_cursor
+            result = {
+                "schemaVersion": 1,
+                "cursor": safe_cursor,
+                "nextCursor": next_cursor,
+                "watermark": watermark,
+                "hasMore": has_more,
+                "compacted": bool(compact),
+                "items": events,
+            }
+            db.commit()
+            return result
+        finally:
+            db.close()
+
+    @staticmethod
+    def _migrate_private_owner_schema(db: sqlite3.Connection) -> None:
+        """Add account scope to mutable reading data; legacy rows belong to local."""
+        user_columns = {row["name"] for row in db.execute("PRAGMA table_info(user_state)").fetchall()}
+        if "owner_id" not in user_columns:
+            db.execute("ALTER TABLE user_state RENAME TO user_state_legacy")
+            db.execute(
+                """CREATE TABLE user_state (
+                    owner_id TEXT NOT NULL DEFAULT 'local', paper_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'unread', favorite INTEGER NOT NULL DEFAULT 0,
+                    notes TEXT NOT NULL DEFAULT '', explanation_json TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL, PRIMARY KEY(owner_id, paper_id),
+                    FOREIGN KEY(paper_id) REFERENCES papers(id)
+                )"""
+            )
+            db.execute(
+                """INSERT INTO user_state(owner_id,paper_id,status,favorite,notes,explanation_json,updated_at)
+                   SELECT 'local',paper_id,status,favorite,notes,explanation_json,updated_at
+                   FROM user_state_legacy"""
+            )
+            db.execute("DROP TABLE user_state_legacy")
+        asset_columns = {row["name"] for row in db.execute("PRAGMA table_info(project_assets)").fetchall()}
+        if "owner_id" not in asset_columns:
+            db.execute("ALTER TABLE project_assets RENAME TO project_assets_legacy")
+            db.execute(
+                """CREATE TABLE project_assets (
+                    owner_id TEXT NOT NULL DEFAULT 'local', project_full_name TEXT NOT NULL,
+                    local_repo_path TEXT NOT NULL DEFAULT '', readme_path TEXT NOT NULL DEFAULT '',
+                    file_count INTEGER NOT NULL DEFAULT 0, source_chars INTEGER NOT NULL DEFAULT 0,
+                    checked_at TEXT NOT NULL DEFAULT '', error_text TEXT NOT NULL DEFAULT '',
+                    explanation_json TEXT NOT NULL DEFAULT '', PRIMARY KEY(owner_id, project_full_name),
+                    FOREIGN KEY(project_full_name) REFERENCES github_projects(full_name)
+                )"""
+            )
+            db.execute(
+                """INSERT INTO project_assets(owner_id,project_full_name,local_repo_path,readme_path,file_count,source_chars,checked_at,error_text,explanation_json)
+                   SELECT 'local',project_full_name,local_repo_path,readme_path,file_count,source_chars,checked_at,error_text,explanation_json
+                   FROM project_assets_legacy"""
+            )
+            db.execute("DROP TABLE project_assets_legacy")
+        for table in ("paper_chat_messages", "project_chat_messages"):
+            columns = {row["name"] for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
+            if "owner_id" not in columns:
+                db.execute(f"ALTER TABLE {table} ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'local'")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_user_state_owner ON user_state(owner_id, updated_at DESC)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_project_assets_owner ON project_assets(owner_id, checked_at DESC)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_paper_chat_owner ON paper_chat_messages(owner_id, paper_id, id)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_project_chat_owner ON project_chat_messages(owner_id, project_full_name, id)")
+        db.execute(
+            """
+            INSERT INTO project_reading_state(owner_id, project_full_name, explanation_json, updated_at)
+            SELECT owner_id, project_full_name, explanation_json, COALESCE(checked_at, '')
+            FROM project_assets
+            WHERE explanation_json <> ''
+            ON CONFLICT(owner_id, project_full_name) DO UPDATE SET
+                explanation_json=CASE WHEN excluded.updated_at >= project_reading_state.updated_at
+                    THEN excluded.explanation_json ELSE project_reading_state.explanation_json END,
+                updated_at=CASE WHEN excluded.updated_at >= project_reading_state.updated_at
+                    THEN excluded.updated_at ELSE project_reading_state.updated_at END
+            """
+        )
+        # Source metadata remains a shared cache.  Explanations now live in
+        # project_reading_state and must not be exposed through the cache row.
+        db.execute("UPDATE project_assets SET explanation_json='' WHERE explanation_json <> ''")
+
+    def recalculate_quality(self, classifier: "PaperClassifier") -> int:
         with self._lock, self.connect() as db:
             rows = db.execute(
-                "SELECT id, venue, journal_ref, source, published, citation_count, topics_json FROM papers"
+                """
+                SELECT id, venue, journal_ref, source, published, citation_count,
+                       topics_json, quality_score
+                FROM papers
+                """
             ).fetchall()
             updates = []
             for row in rows:
                 paper = dict(row)
                 paper["topics"] = json.loads(paper.pop("topics_json") or "[]")
                 classifier.enrich(paper)
-                updates.append((classifier.quality(paper), paper["id"]))
+                quality = classifier.quality(paper)
+                if quality != float(paper.get("quality_score", 0) or 0):
+                    updates.append((quality, paper["id"]))
             db.executemany("UPDATE papers SET quality_score = ? WHERE id = ?", updates)
+            db.execute(
+                """
+                INSERT INTO app_metadata(key, value) VALUES('quality_recalculated_on', ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """,
+                (utc_now().date().isoformat(),),
+            )
+            return len(updates)
+
+    def recalculate_quality_if_due(self, classifier: "PaperClassifier") -> bool:
+        today = utc_now().date().isoformat()
+        with self._lock:
+            with self.connect() as db:
+                current = db.execute(
+                    "SELECT value FROM app_metadata WHERE key='quality_recalculated_on'"
+                ).fetchone()
+                if current and current["value"] == today:
+                    return False
+            self.recalculate_quality(classifier)
+            return True
+
+    def reclassify_papers(self, classifier: "PaperClassifier", force: bool = False) -> bool:
+        with self._lock, self.connect() as db:
+            taxonomy_version = str(classifier.config.get("taxonomy_version", 1))
+            current = db.execute(
+                "SELECT value FROM app_metadata WHERE key = 'taxonomy_version'"
+            ).fetchone()
+            if not force and current and current["value"] == taxonomy_version:
+                return False
+            rows = db.execute(
+                """
+                SELECT id, title, abstract, venue, journal_ref, source, published,
+                       citation_count
+                FROM papers
+                """
+            ).fetchall()
+            updates = []
+            for row in rows:
+                paper = dict(row)
+                classifier.enrich(paper)
+                topics = classifier.classify(paper)
+                paper["topics"] = topics
+                updates.append(
+                    (
+                        json.dumps(topics, ensure_ascii=False),
+                        json.dumps(paper.get("subtopics", []), ensure_ascii=False),
+                        classifier.quality(paper),
+                        paper["id"],
+                    )
+                )
+            db.executemany(
+                "UPDATE papers SET topics_json = ?, subtopics_json = ?, quality_score = ? WHERE id = ?",
+                updates,
+            )
+            db.execute(
+                """
+                INSERT INTO app_metadata (key, value) VALUES ('taxonomy_version', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (taxonomy_version,),
+            )
+            db.execute(
+                """
+                INSERT INTO app_metadata(key, value) VALUES('quality_recalculated_on', ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """,
+                (utc_now().date().isoformat(),),
+            )
+            return True
 
     def upsert(self, paper: dict[str, Any]) -> bool:
         with self._lock, self.connect() as db:
@@ -643,9 +1392,9 @@ class PaperStore:
             """
             INSERT INTO papers (
                 id, title, abstract, authors_json, institutions_json, venue, published, updated,
-                source, source_url, pdf_url, doi, journal_ref, topics_json,
+                source, source_url, pdf_url, doi, journal_ref, topics_json, subtopics_json,
                 quality_score, citation_count, fetched_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 title=excluded.title,
                 abstract=CASE WHEN length(excluded.abstract) > length(papers.abstract) THEN excluded.abstract ELSE papers.abstract END,
@@ -663,6 +1412,7 @@ class PaperStore:
                 doi=CASE WHEN excluded.doi != '' THEN excluded.doi ELSE papers.doi END,
                 journal_ref=CASE WHEN excluded.journal_ref != '' THEN excluded.journal_ref ELSE papers.journal_ref END,
                 topics_json=excluded.topics_json,
+                subtopics_json=excluded.subtopics_json,
                 quality_score=max(papers.quality_score, excluded.quality_score),
                 citation_count=max(papers.citation_count, excluded.citation_count),
                 fetched_at=excluded.fetched_at
@@ -675,6 +1425,7 @@ class PaperStore:
                 paper.get("source", ""), paper.get("source_url", ""), paper.get("pdf_url", ""),
                 paper.get("doi", ""), paper.get("journal_ref", ""),
                 json.dumps(paper.get("topics", []), ensure_ascii=False),
+                json.dumps(paper.get("subtopics", []), ensure_ascii=False),
                 paper.get("quality_score", 0), paper.get("citation_count", 0), utc_now().isoformat(),
             ),
         )
@@ -740,7 +1491,7 @@ class PaperStore:
             ).fetchall()
         return [self._serialize_project(row) for row in rows]
 
-    def get_project(self, full_name: str) -> dict[str, Any] | None:
+    def get_project(self, full_name: str, owner_id: str = "local") -> dict[str, Any] | None:
         with self.connect() as db:
             row = db.execute(
                 """
@@ -755,22 +1506,35 @@ class PaperStore:
         if not row:
             return None
         project = self._serialize_project(row)
-        project["papers"] = self.papers_for_project(full_name)
+        project["papers"] = self.papers_for_project(full_name, owner_id)
         return project
 
-    def get_project_asset(self, full_name: str) -> dict[str, Any] | None:
+    def get_project_asset(self, full_name: str, owner_id: str = "local") -> dict[str, Any] | None:
+        owner = self._owner_id(owner_id)
         with self.connect() as db:
-            row = db.execute("SELECT * FROM project_assets WHERE project_full_name = ?", (full_name,)).fetchone()
+            row = db.execute(
+                """
+                SELECT a.*, r.explanation_json AS private_explanation_json
+                FROM project_assets a
+                LEFT JOIN project_reading_state r
+                  ON r.owner_id=? AND r.project_full_name=a.project_full_name
+                WHERE a.owner_id='local' AND a.project_full_name=?
+                """,
+                (owner, full_name),
+            ).fetchone()
         if not row:
             return None
         result = dict(row)
-        raw = result.pop("explanation_json", "")
+        result.pop("explanation_json", None)
+        raw = result.pop("private_explanation_json", "")
         result["explanation"] = json.loads(raw) if raw else None
         return result
 
-    def save_project_asset(self, full_name: str, payload: dict[str, Any]) -> dict[str, Any]:
-        current = self.get_project_asset(full_name) or {}
-        explanation = payload.get("explanation", current.get("explanation"))
+    def save_project_asset(self, full_name: str, payload: dict[str, Any], owner_id: str = "local") -> dict[str, Any]:
+        owner = self._owner_id(owner_id)
+        current = self.get_project_asset(full_name, owner) or {}
+        has_explanation = "explanation" in payload
+        explanation = payload.get("explanation") if has_explanation else None
         values = {
             "local_repo_path": payload.get("local_repo_path", current.get("local_repo_path", "")),
             "readme_path": payload.get("readme_path", current.get("readme_path", "")),
@@ -778,75 +1542,91 @@ class PaperStore:
             "source_chars": int(payload.get("source_chars", current.get("source_chars", 0)) or 0),
             "checked_at": payload.get("checked_at", utc_now().isoformat()),
             "error_text": str(payload.get("error_text", current.get("error_text", "")))[:2000],
-            "explanation_json": json.dumps(explanation, ensure_ascii=False) if explanation else "",
+            "explanation_json": "",
         }
         with self.connect() as db:
             db.execute(
                 """
                 INSERT INTO project_assets (
-                    project_full_name, local_repo_path, readme_path, file_count,
+                    owner_id, project_full_name, local_repo_path, readme_path, file_count,
                     source_chars, checked_at, error_text, explanation_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(project_full_name) DO UPDATE SET
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(owner_id, project_full_name) DO UPDATE SET
                     local_repo_path=excluded.local_repo_path,
                     readme_path=excluded.readme_path,
                     file_count=excluded.file_count,
                     source_chars=excluded.source_chars,
                     checked_at=excluded.checked_at,
                     error_text=excluded.error_text,
-                    explanation_json=excluded.explanation_json
+                    explanation_json=''
                 """,
                 (
-                    full_name, values["local_repo_path"], values["readme_path"], values["file_count"],
+                    "local", full_name, values["local_repo_path"], values["readme_path"], values["file_count"],
                     values["source_chars"], values["checked_at"], values["error_text"], values["explanation_json"],
                 ),
             )
-        return self.get_project_asset(full_name) or {"project_full_name": full_name, **values}
+            if has_explanation:
+                db.execute(
+                    """
+                    INSERT INTO project_reading_state(owner_id, project_full_name, explanation_json, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(owner_id, project_full_name) DO UPDATE SET
+                        explanation_json=excluded.explanation_json,
+                        updated_at=excluded.updated_at
+                    """,
+                    (owner, full_name, json.dumps(explanation, ensure_ascii=False), utc_now().isoformat()),
+                )
+        return self.get_project_asset(full_name, owner) or {"project_full_name": full_name, **values, "explanation": explanation}
 
-    def save_project_explanation(self, full_name: str, explanation: dict[str, Any]) -> dict[str, Any]:
-        return self.save_project_asset(full_name, {"explanation": explanation})
+    def save_project_explanation(self, full_name: str, explanation: dict[str, Any], owner_id: str = "local") -> dict[str, Any]:
+        return self.save_project_asset(full_name, {"explanation": explanation}, owner_id)
 
-    def add_project_chat_message(self, full_name: str, role: str, content: str) -> None:
+    def add_project_chat_message(self, full_name: str, role: str, content: str, owner_id: str = "local") -> None:
+        owner = self._owner_id(owner_id)
         with self.connect() as db:
             db.execute(
-                "INSERT INTO project_chat_messages (project_full_name, role, content, created_at) VALUES (?, ?, ?, ?)",
-                (full_name, role, content[:30000], utc_now().isoformat()),
+                "INSERT INTO project_chat_messages (owner_id, project_full_name, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
+                (owner, full_name, role, content[:30000], utc_now().isoformat()),
             )
 
-    def project_chat_history(self, full_name: str, limit: int = 12) -> list[dict[str, Any]]:
+    def project_chat_history(self, full_name: str, limit: int = 12, owner_id: str = "local") -> list[dict[str, Any]]:
+        owner = self._owner_id(owner_id)
         limit_clause = " LIMIT ?" if limit > 0 else ""
-        parameters: tuple[Any, ...] = (full_name, limit) if limit > 0 else (full_name,)
+        parameters: tuple[Any, ...] = (owner, full_name, limit) if limit > 0 else (owner, full_name)
         with self.connect() as db:
             rows = db.execute(
                 f"""
                 SELECT role, content, created_at FROM project_chat_messages
-                WHERE project_full_name = ? ORDER BY id DESC{limit_clause}
+                WHERE owner_id = ? AND project_full_name = ? ORDER BY id DESC{limit_clause}
                 """,
                 parameters,
             ).fetchall()
         return [dict(row) for row in reversed(rows)]
 
-    def has_local_project_reading(self, full_name: str) -> bool:
+    def has_local_project_reading(self, full_name: str, owner_id: str = "local") -> bool:
+        owner = self._owner_id(owner_id)
         with self.connect() as db:
             asset = db.execute(
-                "SELECT explanation_json FROM project_assets WHERE project_full_name = ?", (full_name,),
+                "SELECT explanation_json FROM project_reading_state WHERE owner_id=? AND project_full_name = ?", (owner, full_name),
             ).fetchone()
             chat = db.execute(
-                "SELECT 1 FROM project_chat_messages WHERE project_full_name = ? LIMIT 1", (full_name,),
+                "SELECT 1 FROM project_chat_messages WHERE owner_id=? AND project_full_name = ? LIMIT 1", (owner, full_name),
             ).fetchone()
         return bool((asset and asset["explanation_json"]) or chat)
 
-    def restore_project_reading(self, full_name: str, payload: dict[str, Any]) -> None:
+    def restore_project_reading(self, full_name: str, payload: dict[str, Any], owner_id: str = "local") -> None:
+        owner = self._owner_id(owner_id)
         explanation = payload.get("explanation") if isinstance(payload.get("explanation"), dict) else None
         messages = payload.get("chat") if isinstance(payload.get("chat"), list) else []
         if explanation:
-            self.save_project_explanation(full_name, explanation)
+            self.save_project_explanation(full_name, explanation, owner)
         with self.connect() as db:
-            db.execute("DELETE FROM project_chat_messages WHERE project_full_name = ?", (full_name,))
+            db.execute("DELETE FROM project_chat_messages WHERE owner_id=? AND project_full_name = ?", (owner, full_name))
             db.executemany(
-                "INSERT INTO project_chat_messages (project_full_name, role, content, created_at) VALUES (?, ?, ?, ?)",
+                "INSERT INTO project_chat_messages (owner_id, project_full_name, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
                 [
                     (
+                        owner,
                         full_name,
                         str(item.get("role", "")),
                         str(item.get("content", ""))[:30000],
@@ -857,13 +1637,15 @@ class PaperStore:
                 ],
             )
 
-    def project_ids_with_reading(self) -> list[str]:
+    def project_ids_with_reading(self, owner_id: str = "local") -> list[str]:
+        owner = self._owner_id(owner_id)
         with self.connect() as db:
             rows = db.execute(
                 """
-                SELECT project_full_name FROM project_assets WHERE explanation_json != ''
-                UNION SELECT DISTINCT project_full_name FROM project_chat_messages
+                SELECT project_full_name FROM project_reading_state WHERE owner_id=? AND explanation_json != ''
+                UNION SELECT DISTINCT project_full_name FROM project_chat_messages WHERE owner_id=?
                 """
+                , (owner, owner)
             ).fetchall()
         return [str(row[0]) for row in rows]
 
@@ -898,7 +1680,8 @@ class PaperStore:
             ).fetchall()
         return [self._serialize_project(row) for row in rows]
 
-    def papers_for_project(self, full_name: str) -> list[dict[str, Any]]:
+    def papers_for_project(self, full_name: str, owner_id: str = "local") -> list[dict[str, Any]]:
+        owner = self._owner_id(owner_id)
         with self.connect() as db:
             rows = db.execute(
                 """
@@ -911,16 +1694,17 @@ class PaperStore:
                        l.reason AS project_reason
                 FROM paper_project_links l
                 JOIN papers p ON p.id = l.paper_id
-                LEFT JOIN user_state s ON s.paper_id = p.id
+                LEFT JOIN user_state s ON s.owner_id=? AND s.paper_id = p.id
                 WHERE l.project_full_name = ?
                 ORDER BY l.score DESC, p.quality_score DESC
                 LIMIT 12
                 """,
-                (full_name,),
+                (owner, full_name),
             ).fetchall()
         return [self._serialize(row) for row in rows]
 
-    def list_papers(self) -> list[dict[str, Any]]:
+    def list_papers(self, owner_id: str = "local") -> list[dict[str, Any]]:
+        owner = self._owner_id(owner_id)
         with self.connect() as db:
             rows = db.execute(
                 """
@@ -929,12 +1713,13 @@ class PaperStore:
                        COALESCE(s.notes, '') AS notes,
                        CASE WHEN COALESCE(s.explanation_json, '') != '' THEN 1 ELSE 0 END AS has_explanation
                 FROM papers p
-                LEFT JOIN user_state s ON s.paper_id = p.id
+                LEFT JOIN user_state s ON s.owner_id=? AND s.paper_id = p.id
                 """
-            ).fetchall()
+                , (owner,)).fetchall()
         return [self._serialize(row) for row in rows]
 
-    def papers_by_ids(self, paper_ids: list[str]) -> dict[str, dict[str, Any]]:
+    def papers_by_ids(self, paper_ids: list[str], owner_id: str = "local") -> dict[str, dict[str, Any]]:
+        owner = self._owner_id(owner_id)
         ids = list(dict.fromkeys(compact_text(item) for item in paper_ids if compact_text(item)))
         if not ids:
             return {}
@@ -950,10 +1735,10 @@ class PaperStore:
                            COALESCE(s.notes, '') AS notes,
                            CASE WHEN COALESCE(s.explanation_json, '') != '' THEN 1 ELSE 0 END AS has_explanation
                     FROM papers p
-                    LEFT JOIN user_state s ON s.paper_id = p.id
+                    LEFT JOIN user_state s ON s.owner_id=? AND s.paper_id = p.id
                     WHERE p.id IN ({placeholders})
                     """,
-                    batch,
+                    [owner, *batch],
                 ).fetchall()
                 for row in rows:
                     paper = self._serialize(row)
@@ -981,7 +1766,8 @@ class PaperStore:
                     matches.add(value)
         return sorted(matches, key=lambda value: (not value.casefold().startswith(needle), value.casefold()))[:limit]
 
-    def get_paper(self, paper_id: str) -> dict[str, Any] | None:
+    def get_paper(self, paper_id: str, owner_id: str = "local") -> dict[str, Any] | None:
+        owner = self._owner_id(owner_id)
         with self.connect() as db:
             row = db.execute(
                 """
@@ -991,10 +1777,10 @@ class PaperStore:
                        COALESCE(s.explanation_json, '') AS explanation_json,
                        CASE WHEN COALESCE(s.explanation_json, '') != '' THEN 1 ELSE 0 END AS has_explanation
                 FROM papers p
-                LEFT JOIN user_state s ON s.paper_id = p.id
+                LEFT JOIN user_state s ON s.owner_id=? AND s.paper_id = p.id
                 WHERE p.id = ?
                 """,
-                (paper_id,),
+                (owner, paper_id),
             ).fetchone()
         if not row:
             return None
@@ -1002,7 +1788,19 @@ class PaperStore:
         paper["projects"] = self.projects_for_paper(paper_id)
         return paper
 
-    def find_paper(self, doi: str = "", title: str = "") -> dict[str, Any] | None:
+    def find_paper_by_reference(self, reference: str, owner_id: str = "local") -> dict[str, Any] | None:
+        value = compact_text(reference)
+        doi = PaperConnector._doi(value) if value.lower().startswith("doi:") else ""
+        if doi:
+            return self.find_paper(doi=doi, owner_id=owner_id)
+        arxiv_id = PaperConnector._arxiv_id(value)
+        if arxiv_id:
+            canonical_arxiv_id = re.sub(r"v\d+$", "", arxiv_id, flags=re.I)
+            return self.get_paper(f"arxiv:{canonical_arxiv_id}", owner_id)
+        doi = PaperConnector._doi(value)
+        return self.find_paper(doi=doi, owner_id=owner_id) if doi else None
+
+    def find_paper(self, doi: str = "", title: str = "", owner_id: str = "local") -> dict[str, Any] | None:
         normalized_doi = compact_text(doi).lower()
         normalized_title = compact_text(title).lower()
         with self.connect() as db:
@@ -1011,10 +1809,11 @@ class PaperStore:
                 row = db.execute("SELECT id FROM papers WHERE lower(doi) = ? LIMIT 1", (normalized_doi,)).fetchone()
             if not row and normalized_title:
                 row = db.execute("SELECT id FROM papers WHERE lower(trim(title)) = ? LIMIT 1", (normalized_title,)).fetchone()
-        return self.get_paper(row["id"]) if row else None
+        return self.get_paper(row["id"], owner_id) if row else None
 
-    def update_state(self, paper_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
-        current = self.get_paper(paper_id)
+    def update_state(self, paper_id: str, payload: dict[str, Any], owner_id: str = "local") -> dict[str, Any] | None:
+        owner = self._owner_id(owner_id)
+        current = self.get_paper(paper_id, owner)
         if not current:
             return None
         status = payload.get("status", current.get("status", "unread"))
@@ -1023,33 +1822,34 @@ class PaperStore:
         with self.connect() as db:
             db.execute(
                 """
-                INSERT INTO user_state (paper_id, status, favorite, notes, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(paper_id) DO UPDATE SET
+                INSERT INTO user_state (owner_id, paper_id, status, favorite, notes, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(owner_id, paper_id) DO UPDATE SET
                     status=excluded.status,
                     favorite=excluded.favorite,
                     notes=excluded.notes,
                     updated_at=excluded.updated_at
                 """,
-                (paper_id, status, favorite, notes, utc_now().isoformat()),
+                (owner, paper_id, status, favorite, notes, utc_now().isoformat()),
             )
-        return self.get_paper(paper_id)
+        return self.get_paper(paper_id, owner)
 
-    def save_explanation(self, paper_id: str, explanation: dict[str, Any]) -> None:
-        paper = self.get_paper(paper_id)
+    def save_explanation(self, paper_id: str, explanation: dict[str, Any], owner_id: str = "local") -> None:
+        owner = self._owner_id(owner_id)
+        paper = self.get_paper(paper_id, owner)
         if not paper:
             return
         with self.connect() as db:
             db.execute(
                 """
-                INSERT INTO user_state (paper_id, status, favorite, notes, explanation_json, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(paper_id) DO UPDATE SET
+                INSERT INTO user_state (owner_id, paper_id, status, favorite, notes, explanation_json, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(owner_id, paper_id) DO UPDATE SET
                     explanation_json=excluded.explanation_json,
                     updated_at=excluded.updated_at
                 """,
                 (
-                    paper_id, paper.get("status", "unread"), int(bool(paper.get("favorite"))),
+                    owner, paper_id, paper.get("status", "unread"), int(bool(paper.get("favorite"))),
                     paper.get("notes", ""), json.dumps(explanation, ensure_ascii=False), utc_now().isoformat(),
                 ),
             )
@@ -1060,12 +1860,20 @@ class PaperStore:
         return dict(row) if row else None
 
     def assets_for_papers(self, paper_ids: list[str]) -> dict[str, dict[str, Any]]:
-        if not paper_ids:
+        ids = list(dict.fromkeys(compact_text(item) for item in paper_ids if compact_text(item)))
+        if not ids:
             return {}
-        placeholders = ",".join("?" for _ in paper_ids)
+        assets: dict[str, dict[str, Any]] = {}
         with self.connect() as db:
-            rows = db.execute(f"SELECT * FROM paper_assets WHERE paper_id IN ({placeholders})", paper_ids).fetchall()
-        return {row["paper_id"]: dict(row) for row in rows}
+            for start in range(0, len(ids), 900):
+                batch = ids[start:start + 900]
+                placeholders = ",".join("?" for _ in batch)
+                rows = db.execute(
+                    f"SELECT * FROM paper_assets WHERE paper_id IN ({placeholders})",
+                    batch,
+                ).fetchall()
+                assets.update({row["paper_id"]: dict(row) for row in rows})
+        return assets
 
     def save_asset(self, paper_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         current = self.get_asset(paper_id) or {}
@@ -1243,52 +2051,61 @@ class PaperStore:
         return bool(row)
 
     def paper_ids_with_projects(self, paper_ids: list[str]) -> set[str]:
-        if not paper_ids:
+        ids = list(dict.fromkeys(compact_text(item) for item in paper_ids if compact_text(item)))
+        if not ids:
             return set()
-        placeholders = ",".join("?" for _ in paper_ids)
+        linked: set[str] = set()
         with self.connect() as db:
-            rows = db.execute(
-                f"SELECT DISTINCT paper_id FROM paper_project_links WHERE paper_id IN ({placeholders})",
-                paper_ids,
-            ).fetchall()
-        return {row["paper_id"] for row in rows}
+            for start in range(0, len(ids), 900):
+                batch = ids[start:start + 900]
+                placeholders = ",".join("?" for _ in batch)
+                rows = db.execute(
+                    f"SELECT DISTINCT paper_id FROM paper_project_links WHERE paper_id IN ({placeholders})",
+                    batch,
+                ).fetchall()
+                linked.update(row["paper_id"] for row in rows)
+        return linked
 
-    def add_chat_message(self, paper_id: str, role: str, content: str) -> None:
+    def add_chat_message(self, paper_id: str, role: str, content: str, owner_id: str = "local") -> None:
+        owner = self._owner_id(owner_id)
         with self.connect() as db:
             db.execute(
-                "INSERT INTO paper_chat_messages (paper_id, role, content, created_at) VALUES (?, ?, ?, ?)",
-                (paper_id, role, content[:20000], utc_now().isoformat()),
+                "INSERT INTO paper_chat_messages (owner_id, paper_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
+                (owner, paper_id, role, content[:20000], utc_now().isoformat()),
             )
 
-    def chat_history(self, paper_id: str, limit: int = 12) -> list[dict[str, Any]]:
+    def chat_history(self, paper_id: str, limit: int = 12, owner_id: str = "local") -> list[dict[str, Any]]:
+        owner = self._owner_id(owner_id)
         limit_clause = " LIMIT ?" if limit > 0 else ""
-        parameters: tuple[Any, ...] = (paper_id, limit) if limit > 0 else (paper_id,)
+        parameters: tuple[Any, ...] = (owner, paper_id, limit) if limit > 0 else (owner, paper_id)
         with self.connect() as db:
             rows = db.execute(
                 f"""
                 SELECT role, content, created_at FROM paper_chat_messages
-                WHERE paper_id = ? ORDER BY id DESC{limit_clause}
+                WHERE owner_id = ? AND paper_id = ? ORDER BY id DESC{limit_clause}
                 """,
                 parameters,
             ).fetchall()
         return [dict(row) for row in reversed(rows)]
 
-    def has_local_paper_reading(self, paper_id: str) -> bool:
+    def has_local_paper_reading(self, paper_id: str, owner_id: str = "local") -> bool:
+        owner = self._owner_id(owner_id)
         with self.connect() as db:
-            state = db.execute("SELECT 1 FROM user_state WHERE paper_id = ? LIMIT 1", (paper_id,)).fetchone()
-            chat = db.execute("SELECT 1 FROM paper_chat_messages WHERE paper_id = ? LIMIT 1", (paper_id,)).fetchone()
+            state = db.execute("SELECT 1 FROM user_state WHERE owner_id=? AND paper_id = ? LIMIT 1", (owner, paper_id)).fetchone()
+            chat = db.execute("SELECT 1 FROM paper_chat_messages WHERE owner_id=? AND paper_id = ? LIMIT 1", (owner, paper_id)).fetchone()
         return bool(state or chat)
 
-    def restore_paper_reading(self, paper_id: str, payload: dict[str, Any]) -> None:
+    def restore_paper_reading(self, paper_id: str, payload: dict[str, Any], owner_id: str = "local") -> None:
+        owner = self._owner_id(owner_id)
         state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
         explanation = state.get("explanation") if isinstance(state.get("explanation"), dict) else None
         messages = payload.get("chat") if isinstance(payload.get("chat"), list) else []
         with self.connect() as db:
             db.execute(
                 """
-                INSERT INTO user_state (paper_id, status, favorite, notes, explanation_json, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(paper_id) DO UPDATE SET
+                INSERT INTO user_state (owner_id, paper_id, status, favorite, notes, explanation_json, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(owner_id, paper_id) DO UPDATE SET
                     status=excluded.status,
                     favorite=excluded.favorite,
                     notes=excluded.notes,
@@ -1296,7 +2113,7 @@ class PaperStore:
                     updated_at=excluded.updated_at
                 """,
                 (
-                    paper_id,
+                    owner, paper_id,
                     str(state.get("status", "unread")),
                     int(bool(state.get("favorite"))),
                     str(state.get("notes", ""))[:5000],
@@ -1304,12 +2121,12 @@ class PaperStore:
                     str(payload.get("updated_at", "")) or utc_now().isoformat(),
                 ),
             )
-            db.execute("DELETE FROM paper_chat_messages WHERE paper_id = ?", (paper_id,))
+            db.execute("DELETE FROM paper_chat_messages WHERE owner_id=? AND paper_id = ?", (owner, paper_id))
             db.executemany(
-                "INSERT INTO paper_chat_messages (paper_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+                "INSERT INTO paper_chat_messages (owner_id, paper_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
                 [
                     (
-                        paper_id,
+                        owner, paper_id,
                         str(item.get("role", "")),
                         str(item.get("content", ""))[:20000],
                         str(item.get("created_at", "")) or utc_now().isoformat(),
@@ -1319,15 +2136,16 @@ class PaperStore:
                 ],
             )
 
-    def paper_ids_with_reading(self) -> list[str]:
+    def paper_ids_with_reading(self, owner_id: str = "local") -> list[str]:
+        owner = self._owner_id(owner_id)
         with self.connect() as db:
             rows = db.execute(
                 """
                 SELECT paper_id FROM user_state
-                WHERE explanation_json != '' OR status != 'unread' OR favorite != 0 OR notes != ''
-                UNION SELECT DISTINCT paper_id FROM paper_chat_messages
+                WHERE owner_id=? AND (explanation_json != '' OR status != 'unread' OR favorite != 0 OR notes != '')
+                UNION SELECT DISTINCT paper_id FROM paper_chat_messages WHERE owner_id=?
                 """
-            ).fetchall()
+                , (owner, owner)).fetchall()
         return [str(row[0]) for row in rows]
 
     def begin_sync(self) -> int:
@@ -1337,6 +2155,24 @@ class PaperStore:
                 (utc_now().isoformat(),),
             )
             return int(cursor.lastrowid)
+
+    def fail_stale_syncs(self, max_age_hours: int = 2) -> int:
+        cutoff = (utc_now() - timedelta(hours=max(1, max_age_hours))).isoformat()
+        with self.connect() as db:
+            cursor = db.execute(
+                """
+                UPDATE sync_runs
+                SET finished_at=COALESCE(finished_at, started_at),
+                    status='error',
+                    error_text=CASE
+                        WHEN error_text = '' THEN 'Sync was interrupted before the previous process exited.'
+                        ELSE error_text
+                    END
+                WHERE status='running' AND started_at < ?
+                """,
+                (cutoff,),
+            )
+            return max(0, int(cursor.rowcount))
 
     def finish_sync(self, run_id: int, status: str, inserted: int, error: str = "") -> None:
         with self.connect() as db:
@@ -1379,6 +2215,7 @@ class PaperStore:
         result["institutions"] = json.loads(result.pop("institutions_json", "[]") or "[]")
         result["notable_institutions"] = INSTITUTION_CATALOG.match(result["institutions"])
         result["topics"] = json.loads(result.pop("topics_json") or "[]")
+        result["subtopics"] = json.loads(result.pop("subtopics_json", "[]") or "[]")
         venue_metadata = VENUE_CATALOG.describe(result.get("venue", ""), result.get("journal_ref", ""), result.get("source", ""))
         result["venue"] = venue_metadata.pop("canonical_venue")
         result.update(venue_metadata)
@@ -1404,6 +2241,7 @@ class PaperClassifier:
     def __init__(self, config: dict[str, Any], venue_catalog: VenueCatalog) -> None:
         self.config = config
         self.topics: dict[str, list[str]] = config["topics"]
+        self.topic_taxonomy: dict[str, dict[str, list[str]]] = config.get("topic_taxonomy", {})
         self.top_venues = [item.lower() for item in config["top_venues"]]
         self.venue_catalog = venue_catalog
 
@@ -1419,22 +2257,46 @@ class PaperClassifier:
             return normalized_keyword in text
         return re.search(rf"(?<![a-z0-9]){re.escape(normalized_keyword)}(?![a-z0-9])", text) is not None
 
-    def classify(self, paper: dict[str, Any]) -> list[str]:
+    def _classify_topics(self, paper: dict[str, Any]) -> list[str]:
         title = paper.get("title", "").lower()
         haystack = " ".join(
             [paper.get("title", ""), paper.get("abstract", ""), paper.get("venue", ""), paper.get("journal_ref", "")]
         ).lower()
-        scores: list[tuple[int, str]] = []
-        for topic, keywords in self.topics.items():
+        scores: list[tuple[int, int, str]] = []
+        for index, (topic, keywords) in enumerate(self.topics.items()):
             score = sum(
                 2 if self.contains_keyword(title, keyword) else 1
                 for keyword in keywords
                 if self.contains_keyword(haystack, keyword)
             )
             if score:
-                scores.append((score, topic))
-        scores.sort(reverse=True)
-        return [topic for _, topic in scores[:3]] or ["其他相关"]
+                scores.append((score, index, topic))
+        scores.sort(key=lambda item: (-item[0], item[1]))
+        return [topic for _, _, topic in scores[:3]] or ["其他相关"]
+
+    def classify_subtopics(self, paper: dict[str, Any], topics: list[str] | None = None) -> list[str]:
+        matched_topics = topics or self._classify_topics(paper)
+        title = paper.get("title", "").lower()
+        haystack = " ".join(
+            [paper.get("title", ""), paper.get("abstract", ""), paper.get("venue", ""), paper.get("journal_ref", "")]
+        ).lower()
+        scores: list[tuple[int, int, int, str]] = []
+        for topic_index, topic in enumerate(matched_topics):
+            for subtopic_index, (subtopic, keywords) in enumerate(self.topic_taxonomy.get(topic, {}).items()):
+                score = sum(
+                    3 if self.contains_keyword(title, keyword) else 1
+                    for keyword in keywords
+                    if self.contains_keyword(haystack, keyword)
+                )
+                if score:
+                    scores.append((score, topic_index, subtopic_index, subtopic))
+        scores.sort(key=lambda item: (-item[0], item[1], item[2]))
+        return [subtopic for _, _, _, subtopic in scores[:4]]
+
+    def classify(self, paper: dict[str, Any]) -> list[str]:
+        topics = self._classify_topics(paper)
+        paper["subtopics"] = self.classify_subtopics(paper, topics)
+        return topics
 
     def quality(self, paper: dict[str, Any]) -> float:
         venue_text = f"{paper.get('venue', '')} {paper.get('journal_ref', '')}".lower()
@@ -2024,6 +2886,7 @@ class PaperSources:
         max_pages = max(1, int(self.config.get("dblp_archive_pages", 8)))
         papers_by_id: dict[str, dict[str, Any]] = {}
         robotics_focused = entry["name"] in self.ROBOTICS_FOCUSED_VENUES
+        retain_unmatched = entry["name"] in set(self.config.get("retain_unmatched_archive_venues") or [])
         for page_path in page_paths[:max_pages]:
             page_text = self.request_text(f"https://dblp.org/{page_path.removesuffix('.html')}.xml")
             page_root = ET.fromstring(page_text)
@@ -2066,7 +2929,7 @@ class PaperSources:
                     if paper["topics"] == ["其他相关"]:
                         if robotics_focused:
                             paper["topics"] = ["具身智能"]
-                        else:
+                        elif not retain_unmatched:
                             continue
                     paper["quality_score"] = self.classifier.quality(paper)
                     papers_by_id[paper["id"]] = paper
@@ -3275,17 +4138,18 @@ class ProjectExplainer:
             result["notice"] = notice
         return result
 
-    def explain(self, project: dict[str, Any]) -> dict[str, Any]:
+    def explain(self, project: dict[str, Any], owner_id: str = "local") -> dict[str, Any]:
+        owner = self.store._owner_id(owner_id)
         workspace = self.assets.prepare(project)
         if not workspace.get("ready"):
             notice = workspace.get("preparation", {}).get("message") if workspace.get("preparing") else ""
             result = self._fallback(project, workspace, f"源码尚不可用：{notice or workspace.get('error') or '未找到文本源码'}")
-            self.store.save_project_explanation(project["full_name"], result)
+            self.store.save_project_explanation(project["full_name"], result, owner)
             return result
         connection = self.ai.connection()
         if not connection:
             result = self._fallback(project, workspace, "当前未配置大模型，已返回仓库元数据导读。")
-            self.store.save_project_explanation(project["full_name"], result)
+            self.store.save_project_explanation(project["full_name"], result, owner)
             return result
         context = self.assets.source_context(project["full_name"])
         prompt = f"""你是一名严谨的中文代码导师。请只依据仓库元数据和源码摘录讲解项目，不得声称运行过代码。
@@ -3306,7 +4170,7 @@ architecture 说明模块职责；code_flow 按输入、预处理、核心逻辑
             result = self._parse_json(self.ai._request_text(f"{self.ai.LATEX_GUIDANCE}\n\n{prompt}", connection, timeout=180))
         except Exception as error:
             result = self._fallback(project, workspace, f"AI 服务暂时不可用：{error}")
-            self.store.save_project_explanation(project["full_name"], result)
+            self.store.save_project_explanation(project["full_name"], result, owner)
             return result
         result.update(
             {
@@ -3316,17 +4180,18 @@ architecture 说明模块职责；code_flow 按输入、预处理、核心逻辑
                 "generated_at": utc_now().isoformat(),
             }
         )
-        self.store.save_project_explanation(project["full_name"], result)
+        self.store.save_project_explanation(project["full_name"], result, owner)
         return result
 
-    def ask(self, project: dict[str, Any], question: str, selected_path: str = "") -> dict[str, Any]:
+    def ask(self, project: dict[str, Any], question: str, selected_path: str = "", owner_id: str = "local") -> dict[str, Any]:
+        owner = self.store._owner_id(owner_id)
         connection = self.ai.connection()
         if not connection:
             raise RuntimeError("当前没有可用的大模型配置")
         context = self.assets.source_context(project["full_name"], selected_path, limit=60000)
         if not context:
             raise RuntimeError("项目源码尚未缓存，无法进行基于代码的问答")
-        history = self.store.project_chat_history(project["full_name"])
+        history = self.store.project_chat_history(project["full_name"], owner_id=owner)
         history_text = "\n".join(
             f"{('用户' if item['role'] == 'user' else '代码导师')}：{item['content']}" for item in history[-8:]
         )
@@ -3344,8 +4209,8 @@ architecture 说明模块职责；code_flow 按输入、预处理、核心逻辑
 {context}
 """
         answer = self.ai._request_text(f"{self.ai.LATEX_GUIDANCE}\n\n{prompt}", connection, timeout=180).strip()
-        self.store.add_project_chat_message(project["full_name"], "user", question)
-        self.store.add_project_chat_message(project["full_name"], "assistant", answer)
+        self.store.add_project_chat_message(project["full_name"], "user", question, owner)
+        self.store.add_project_chat_message(project["full_name"], "assistant", answer, owner)
         return {
             "answer": answer,
             "provider": connection["provider"],
@@ -3956,20 +4821,25 @@ class ReadingArchiveService:
         self._lock = threading.Lock()
 
     @staticmethod
-    def _key(kind: str, identifier: str) -> str:
-        digest = hashlib.sha256(identifier.encode("utf-8")).hexdigest()[:24]
+    def _key(kind: str, identifier: str, owner_id: str = "local") -> str:
+        owner = PaperStore._owner_id(owner_id)
+        # Keep the original local key for existing single-user archives while
+        # giving authenticated accounts disjoint cloud objects.
+        material = identifier if owner == "local" else f"{owner}\x00{identifier}"
+        digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
         return f"{kind}/{digest}/reading-state.json"
 
     def _item_lock(self, key: str) -> threading.Lock:
         with self._lock:
             return self._locks.setdefault(key, threading.Lock())
 
-    def backup_paper(self, paper_id: str) -> bool:
+    def backup_paper(self, paper_id: str, owner_id: str = "local") -> bool:
         if not self.cloud.configured:
             return False
-        key = self._key("papers", paper_id)
+        owner = PaperStore._owner_id(owner_id)
+        key = self._key("papers", paper_id, owner)
         with self._item_lock(key):
-            paper = self.store.get_paper(paper_id)
+            paper = self.store.get_paper(paper_id, owner)
             if not paper:
                 return False
             payload = {
@@ -3983,87 +4853,93 @@ class ReadingArchiveService:
                     "notes": paper.get("notes", ""),
                     "explanation": paper.get("explanation"),
                 },
-                "chat": self.store.chat_history(paper_id, 0),
+                "owner_id": owner,
+                "chat": self.store.chat_history(paper_id, 0, owner),
             }
             content = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             self.cloud.upload_bytes(content, key)
             return True
 
-    def paper_backup_available(self, paper_id: str) -> bool:
-        return self.cloud.configured and self.store.has_cloud_object(self._key("papers", paper_id))
+    def paper_backup_available(self, paper_id: str, owner_id: str = "local") -> bool:
+        return self.cloud.configured and self.store.has_cloud_object(self._key("papers", paper_id, owner_id))
 
-    def paper_backup_pending(self, paper_id: str) -> bool:
+    def paper_backup_pending(self, paper_id: str, owner_id: str = "local") -> bool:
         with self._lock:
-            return self._pending.get(self._key("papers", paper_id), 0) > 0
+            return self._pending.get(self._key("papers", paper_id, owner_id), 0) > 0
 
-    def restore_paper_if_needed(self, paper_id: str) -> bool:
-        if not self.cloud.configured or self.store.has_local_paper_reading(paper_id):
+    def restore_paper_if_needed(self, paper_id: str, owner_id: str = "local") -> bool:
+        owner = PaperStore._owner_id(owner_id)
+        if not self.cloud.configured or self.store.has_local_paper_reading(paper_id, owner):
             return False
-        key = self._key("papers", paper_id)
+        key = self._key("papers", paper_id, owner)
         if not self.store.has_cloud_object(key):
             return False
         payload = json.loads(self.cloud.download_bytes(key).decode("utf-8"))
         if payload.get("paper_id") != paper_id:
             raise ValueError("云端论文阅读档案标识不匹配")
-        self.store.restore_paper_reading(paper_id, payload)
+        self.store.restore_paper_reading(paper_id, payload, owner)
         return True
 
-    def backup_project(self, full_name: str) -> bool:
+    def backup_project(self, full_name: str, owner_id: str = "local") -> bool:
         if not self.cloud.configured:
             return False
-        key = self._key("projects", full_name)
+        owner = PaperStore._owner_id(owner_id)
+        key = self._key("projects", full_name, owner)
         with self._item_lock(key):
-            asset = self.store.get_project_asset(full_name) or {}
+            asset = self.store.get_project_asset(full_name, owner) or {}
             payload = {
                 "schema_version": 1,
                 "kind": "project-reading",
                 "project_full_name": full_name,
+                "owner_id": owner,
                 "updated_at": utc_now().isoformat(),
                 "explanation": asset.get("explanation"),
-                "chat": self.store.project_chat_history(full_name, 0),
+                "chat": self.store.project_chat_history(full_name, 0, owner),
             }
             content = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             self.cloud.upload_bytes(content, key)
             return True
 
-    def project_backup_available(self, full_name: str) -> bool:
-        return self.cloud.configured and self.store.has_cloud_object(self._key("projects", full_name))
+    def project_backup_available(self, full_name: str, owner_id: str = "local") -> bool:
+        return self.cloud.configured and self.store.has_cloud_object(self._key("projects", full_name, owner_id))
 
-    def project_backup_pending(self, full_name: str) -> bool:
+    def project_backup_pending(self, full_name: str, owner_id: str = "local") -> bool:
         with self._lock:
-            return self._pending.get(self._key("projects", full_name), 0) > 0
+            return self._pending.get(self._key("projects", full_name, owner_id), 0) > 0
 
-    def restore_project_if_needed(self, full_name: str) -> bool:
-        if not self.cloud.configured or self.store.has_local_project_reading(full_name):
+    def restore_project_if_needed(self, full_name: str, owner_id: str = "local") -> bool:
+        owner = PaperStore._owner_id(owner_id)
+        if not self.cloud.configured or self.store.has_local_project_reading(full_name, owner):
             return False
-        key = self._key("projects", full_name)
+        key = self._key("projects", full_name, owner)
         if not self.store.has_cloud_object(key):
             return False
         payload = json.loads(self.cloud.download_bytes(key).decode("utf-8"))
         if payload.get("project_full_name") != full_name:
             raise ValueError("云端项目阅读档案标识不匹配")
-        self.store.restore_project_reading(full_name, payload)
+        self.store.restore_project_reading(full_name, payload, owner)
         return True
 
-    def backup_paper_async(self, paper_id: str) -> None:
-        self._backup_async("paper", paper_id)
+    def backup_paper_async(self, paper_id: str, owner_id: str = "local") -> None:
+        self._backup_async("paper", paper_id, owner_id)
 
-    def backup_project_async(self, full_name: str) -> None:
-        self._backup_async("project", full_name)
+    def backup_project_async(self, full_name: str, owner_id: str = "local") -> None:
+        self._backup_async("project", full_name, owner_id)
 
-    def _backup_async(self, kind: str, identifier: str) -> None:
+    def _backup_async(self, kind: str, identifier: str, owner_id: str = "local") -> None:
         if not self.cloud.configured:
             return
-        key = self._key("papers" if kind == "paper" else "projects", identifier)
+        owner = PaperStore._owner_id(owner_id)
+        key = self._key("papers" if kind == "paper" else "projects", identifier, owner)
         with self._lock:
             self._pending[key] = self._pending.get(key, 0) + 1
 
         def run() -> None:
             try:
                 if kind == "paper":
-                    self.backup_paper(identifier)
+                    self.backup_paper(identifier, owner)
                 else:
-                    self.backup_project(identifier)
+                    self.backup_project(identifier, owner)
             except Exception as error:
                 print(f"Cloud reading backup failed for {kind} {identifier}: {error}")
             finally:
@@ -4598,8 +5474,85 @@ class PaperAssetService:
             return None
         return {"page": page_number, "page_count": len(pages), "text": pages[page_number - 1].get("text", "")}
 
-    def reading_notes(self, paper_id: str, fulltext: str) -> list[dict[str, Any]] | None:
-        path = FULLTEXT_DIR / f"{self._cache_key(paper_id)}.notes.json"
+    @staticmethod
+    def _normalized_locator_text(value: Any) -> str:
+        text = unicodedata.normalize("NFKC", str(value or ""))
+        text = re.sub(r"-\s+(?=[A-Za-z])", "", text)
+        return re.sub(r"\s+", " ", text).strip().casefold()
+
+    def locate(self, paper_id: str, locator: dict[str, Any]) -> dict[str, Any]:
+        asset = self.store.get_asset(paper_id) or {}
+        path = self._text_path(paper_id, asset)
+        requested_page = max(0, int(locator.get("page") or 0))
+        base = {
+            "matched": False,
+            "page": requested_page,
+            "requested_page": requested_page,
+            "field": "",
+            "query": "",
+            "searched_pages": 0,
+        }
+        if not path or not path.exists():
+            return {**base, "reason": "fulltext_unavailable"}
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        pages = [page for page in payload.get("pages", []) if isinstance(page, dict)]
+        if not pages:
+            return {**base, "reason": "fulltext_unavailable"}
+        page_by_number = {
+            int(page.get("page") or index): page
+            for index, page in enumerate(pages, start=1)
+        }
+        ordered_pages = list(pages)
+        if requested_page in page_by_number:
+            requested = page_by_number[requested_page]
+            ordered_pages = [requested, *[page for page in pages if page is not requested]]
+        limits = {"quote": 1000, "equation": 200, "figure": 200, "table": 200, "section": 500}
+        terms = []
+        for field in ("quote", "equation", "figure", "table", "section"):
+            raw = str(locator.get(field) or "").strip()[: limits[field]]
+            normalized = self._normalized_locator_text(raw)
+            if normalized:
+                terms.append((field, raw, normalized))
+        for field, raw, needle in terms:
+            for page in ordered_pages:
+                haystack = self._normalized_locator_text(page.get("text"))
+                if needle in haystack:
+                    return {
+                        **base,
+                        "matched": True,
+                        "page": int(page.get("page") or 0),
+                        "field": field,
+                        "query": raw,
+                        "searched_pages": len(pages),
+                        "reason": "exact_text_match",
+                    }
+        fallback_page = requested_page if requested_page in page_by_number else int(pages[0].get("page") or 1)
+        return {
+            **base,
+            "matched": bool(not terms and requested_page in page_by_number),
+            "page": fallback_page,
+            "field": "page" if not terms and requested_page in page_by_number else "",
+            "query": str(requested_page) if not terms and requested_page in page_by_number else "",
+            "searched_pages": len(pages),
+            "reason": "locator_text_not_found" if terms else "page_match",
+        }
+
+    def _reading_notes_path(self, paper_id: str, owner_id: str = "local") -> Path:
+        """Keep shared full-text assets separate from private model context."""
+        owner = PaperStore._owner_id(owner_id)
+        suffix = ""
+        if owner != "local":
+            owner_digest = hashlib.sha256(owner.encode("utf-8")).hexdigest()[:24]
+            suffix = f".{owner_digest}"
+        return FULLTEXT_DIR / f"{self._cache_key(paper_id)}{suffix}.notes.json"
+
+    def reading_notes(
+        self,
+        paper_id: str,
+        fulltext: str,
+        owner_id: str = "local",
+    ) -> list[dict[str, Any]] | None:
+        path = self._reading_notes_path(paper_id, owner_id)
         if not path.exists():
             return None
         try:
@@ -4609,8 +5562,14 @@ class PaperAssetService:
         except (OSError, ValueError, json.JSONDecodeError):
             return None
 
-    def save_reading_notes(self, paper_id: str, fulltext: str, notes: list[dict[str, Any]]) -> None:
-        path = FULLTEXT_DIR / f"{self._cache_key(paper_id)}.notes.json"
+    def save_reading_notes(
+        self,
+        paper_id: str,
+        fulltext: str,
+        notes: list[dict[str, Any]],
+        owner_id: str = "local",
+    ) -> None:
+        path = self._reading_notes_path(paper_id, owner_id)
         path.write_text(
             json.dumps(
                 {"fingerprint": hashlib.sha256(fulltext.encode("utf-8")).hexdigest(), "notes": notes},
@@ -5326,6 +6285,9 @@ def load_config() -> dict[str, Any]:
 
 
 CONFIG = load_config()
+weekly_preparation_override = os.environ.get("PAPERFIELD_WEEKLY_PREPARATION_ENABLED", "").strip().lower()
+if weekly_preparation_override:
+    CONFIG["weekly_preparation_enabled"] = weekly_preparation_override not in {"0", "false", "no", "off"}
 VENUE_CATALOG = VenueCatalog(json.loads(VENUES_PATH.read_text(encoding="utf-8")))
 INSTITUTION_CATALOG = InstitutionCatalog(json.loads(INSTITUTIONS_PATH.read_text(encoding="utf-8")))
 STORE = PaperStore(DB_PATH)
@@ -5608,7 +6570,6 @@ def scheduler_loop() -> None:
                 due = True
         if due:
             refresh_in_background()
-        WEEKLY_PREPARATION.start()
         time.sleep(300)
 
 
@@ -5808,7 +6769,12 @@ class WeeklySelectionService:
         self._write(state)
         return state
 
-    def get(self, topic: str = "", per_topic: int | None = None) -> dict[str, Any]:
+    def get(
+        self,
+        topic: str = "",
+        per_topic: int | None = None,
+        owner_id: str = "local",
+    ) -> dict[str, Any]:
         configured_limit = max(1, min(10, int(self.config.get("daily_recommendations_per_topic", 5))))
         requested_limit = max(1, min(configured_limit, per_topic or configured_limit))
         today = utc_now().date()
@@ -5829,11 +6795,30 @@ class WeeklySelectionService:
             for item in group.get(key, [])
         ]
         lookup = getattr(self.store, "papers_by_ids", None)
-        papers = lookup(ids) if callable(lookup) else {
-            paper["id"]: paper
-            for paper in self.store.list_papers()
-            if paper["id"] in ids
-        }
+
+        def call_owner_scoped(method: Any, *args: Any) -> Any:
+            """Call current stores with owner scope while keeping small test adapters compatible."""
+            try:
+                parameters = list(inspect.signature(method).parameters.values())
+            except (TypeError, ValueError):
+                parameters = []
+            owner_parameter = next((parameter for parameter in parameters if parameter.name == "owner_id"), None)
+            if owner_parameter and owner_parameter.kind != inspect.Parameter.POSITIONAL_ONLY:
+                return method(*args, owner_id=owner_id)
+            if owner_parameter or any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters):
+                return method(*args, owner_id)
+            if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters):
+                return method(*args, owner_id=owner_id)
+            return method(*args)
+
+        if callable(lookup):
+            papers = call_owner_scoped(lookup, ids)
+        else:
+            papers = {
+                paper["id"]: paper
+                for paper in call_owner_scoped(self.store.list_papers)
+                if paper["id"] in ids
+            }
         assets = self.store.assets_for_papers(ids)
         groups = []
         items = []
@@ -5915,7 +6900,27 @@ class WeeklyPreparationService:
         self.path = path
         self.recommendation_loader = recommendation_loader
         self._lock = threading.RLock()
-        self._running = False
+        self._running: set[str] = set()
+
+    @staticmethod
+    def _owner(owner_id: Any = "local") -> str:
+        return PaperStore._owner_id(owner_id)
+
+    @classmethod
+    def _call_owner_scoped(cls, method: Any, *args: Any, owner_id: str = "local") -> Any:
+        """Pass account scope to production services while supporting small test fakes."""
+        try:
+            parameters = list(inspect.signature(method).parameters.values())
+        except (TypeError, ValueError):
+            parameters = []
+        owner_parameter = next((parameter for parameter in parameters if parameter.name == "owner_id"), None)
+        if owner_parameter and owner_parameter.kind != inspect.Parameter.POSITIONAL_ONLY:
+            return method(*args, owner_id=owner_id)
+        if owner_parameter or any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters):
+            return method(*args, owner_id)
+        if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters):
+            return method(*args, owner_id=owner_id)
+        return method(*args)
 
     @staticmethod
     def candidates(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -5933,22 +6938,32 @@ class WeeklyPreparationService:
                     seen.add(paper["id"])
         return ordered
 
-    def _read(self) -> dict[str, Any]:
+    def _state_path(self, owner_id: str = "local") -> Path:
+        owner = self._owner(owner_id)
+        if owner == "local":
+            return self.path
+        digest = hashlib.sha256(owner.encode("utf-8")).hexdigest()[:24]
+        return self.path.with_name(f"{self.path.stem}.{digest}{self.path.suffix}")
+
+    def _read(self, owner_id: str = "local") -> dict[str, Any]:
+        path = self._state_path(owner_id)
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            payload = json.loads(path.read_text(encoding="utf-8"))
             return payload if isinstance(payload, dict) else {}
         except (OSError, ValueError, json.JSONDecodeError):
             return {}
 
-    def _write(self, payload: dict[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(".tmp")
+    def _write(self, payload: dict[str, Any], owner_id: str = "local") -> None:
+        path = self._state_path(owner_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(path.suffix + ".tmp")
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(self.path)
+        temporary.replace(path)
 
-    def _week_payload(self, recommendations: dict[str, Any]) -> dict[str, Any]:
+    def _week_payload(self, recommendations: dict[str, Any], owner_id: str = "local") -> dict[str, Any]:
         return {
             "schema_version": self.SCHEMA_VERSION,
+            "owner_id": self._owner(owner_id),
             "week_start": recommendations["rotation_week_start"],
             "week_end": recommendations["rotation_week_end"],
             "selection_token": recommendations.get("selection_token", ""),
@@ -5962,7 +6977,7 @@ class WeeklyPreparationService:
             "items": {},
         }
 
-    def _summary(self, state: dict[str, Any], recommendations: dict[str, Any]) -> dict[str, Any]:
+    def _summary(self, state: dict[str, Any], recommendations: dict[str, Any], owner_id: str = "local") -> dict[str, Any]:
         candidates = self.candidates(recommendations)
         pdf_limit = min(len(candidates), max(0, int(self.config.get("weekly_pdf_preparation_max_papers", 35))))
         items = (
@@ -5991,7 +7006,7 @@ class WeeklyPreparationService:
         )
         return {
             "enabled": bool(self.config.get("weekly_preparation_enabled", True)),
-            "running": self._running,
+            "running": self._owner(owner_id) in self._running,
             "status": state.get("status", "scheduled") if items else "scheduled",
             "week_start": recommendations.get("rotation_week_start", ""),
             "week_end": recommendations.get("rotation_week_end", ""),
@@ -6007,15 +7022,17 @@ class WeeklyPreparationService:
             "items": items,
         }
 
-    def status(self, recommendations: dict[str, Any] | None = None) -> dict[str, Any]:
-        payload = recommendations or self.recommendation_loader()
+    def status(self, recommendations: dict[str, Any] | None = None, owner_id: str = "local") -> dict[str, Any]:
+        owner = self._owner(owner_id)
+        payload = recommendations or self._call_owner_scoped(self.recommendation_loader, owner_id=owner)
         with self._lock:
-            return self._summary(self._read(), payload)
+            return self._summary(self._read(owner), payload, owner)
 
-    def _due(self, recommendations: dict[str, Any]) -> bool:
+    def _due(self, recommendations: dict[str, Any], owner_id: str = "local") -> bool:
+        owner = self._owner(owner_id)
         if not self.config.get("weekly_preparation_enabled", True):
             return False
-        state = self._read()
+        state = self._read(owner)
         if int(state.get("schema_version", 0) or 0) != self.SCHEMA_VERSION:
             return True
         if state.get("week_start") != recommendations.get("rotation_week_start"):
@@ -6035,43 +7052,50 @@ class WeeklyPreparationService:
         except ValueError:
             return True
 
-    def start(self, recommendations: dict[str, Any] | None = None, force: bool = False) -> bool:
-        payload = recommendations or self.recommendation_loader()
+    def start(
+        self,
+        recommendations: dict[str, Any] | None = None,
+        force: bool = False,
+        owner_id: str = "local",
+    ) -> bool:
+        owner = self._owner(owner_id)
+        payload = recommendations or self._call_owner_scoped(self.recommendation_loader, owner_id=owner)
         with self._lock:
-            if self._running or (not force and not self._due(payload)):
+            if owner in self._running or (not force and not self._due(payload, owner)):
                 return False
-            self._running = True
+            self._running.add(owner)
 
         def run() -> None:
             try:
-                self.run(payload)
+                self.run(payload, owner)
             except Exception as error:
                 with self._lock:
-                    state = self._read() or self._week_payload(payload)
+                    state = self._read(owner) or self._week_payload(payload, owner)
                     state.update({"status": "partial", "error": str(error)[:1200], "updated_at": utc_now().isoformat()})
-                    self._write(state)
+                    self._write(state, owner)
             finally:
                 with self._lock:
-                    self._running = False
+                    self._running.discard(owner)
 
-        threading.Thread(target=run, daemon=True, name="weekly-paper-preparation").start()
+        threading.Thread(target=run, daemon=True, name=f"weekly-paper-preparation-{owner}").start()
         return True
 
-    def run(self, recommendations: dict[str, Any] | None = None) -> dict[str, Any]:
-        payload = recommendations or self.recommendation_loader()
+    def run(self, recommendations: dict[str, Any] | None = None, owner_id: str = "local") -> dict[str, Any]:
+        owner = self._owner(owner_id)
+        payload = recommendations or self._call_owner_scoped(self.recommendation_loader, owner_id=owner)
         candidates = self.candidates(payload)
         pdf_limit = min(len(candidates), max(0, int(self.config.get("weekly_pdf_preparation_max_papers", 35))))
         delay = max(0, int(self.config.get("weekly_preparation_delay_seconds", 3)))
         with self._lock:
-            state = self._read()
+            state = self._read(owner)
             if (
                 state.get("week_start") != payload.get("rotation_week_start")
                 or state.get("selection_token", "") != payload.get("selection_token", "")
             ):
-                state = self._week_payload(payload)
+                state = self._week_payload(payload, owner)
             now = utc_now().isoformat()
             state.update({"schema_version": self.SCHEMA_VERSION, "status": "running", "started_at": state.get("started_at") or now, "last_attempt_at": now, "updated_at": now, "error": ""})
-            self._write(state)
+            self._write(state, owner)
 
         for paper in candidates[:pdf_limit]:
             paper_id = paper["id"]
@@ -6079,7 +7103,7 @@ class WeeklyPreparationService:
             if item.get("pdf_status") in self.TERMINAL_PDF:
                 continue
             state.update({"current_paper_id": paper_id, "current_title": paper.get("title", ""), "updated_at": utc_now().isoformat()})
-            self._write(state)
+            self._write(state, owner)
             try:
                 asset = self.assets.prepare(paper)
                 item.update(
@@ -6094,7 +7118,7 @@ class WeeklyPreparationService:
                 )
             except Exception as error:
                 item.update({"pdf_status": "failed", "error": str(error)[:1200], "updated_at": utc_now().isoformat()})
-            self._write(state)
+            self._write(state, owner)
             if delay:
                 time.sleep(delay)
 
@@ -6109,35 +7133,43 @@ class WeeklyPreparationService:
         for paper in explanation_candidates[:explanation_limit]:
             paper_id = paper["id"]
             item = state.setdefault("items", {}).setdefault(paper_id, {"title": paper.get("title", "")})
-            current = self.store.get_paper(paper_id) or paper
+            current = self._call_owner_scoped(self.store.get_paper, paper_id, owner_id=owner) or paper
             existing = current.get("explanation") or {}
             if existing.get("reading_basis") == "fulltext":
                 item.update({"explanation_status": "ready", "explanation_provider": existing.get("provider", ""), "updated_at": utc_now().isoformat()})
-                self._write(state)
+                self._write(state, owner)
                 continue
             fulltext = self.assets.fulltext(paper_id)
             if not fulltext:
                 item.update({"explanation_status": "skipped_no_fulltext", "updated_at": utc_now().isoformat()})
-                self._write(state)
+                self._write(state, owner)
                 continue
             if not self.explainer.connection():
                 item.update({"explanation_status": "blocked_no_provider", "error": "当前没有可用的大模型配置", "updated_at": utc_now().isoformat()})
-                self._write(state)
+                self._write(state, owner)
                 continue
             state.update({"current_paper_id": paper_id, "current_title": paper.get("title", ""), "updated_at": utc_now().isoformat()})
-            self._write(state)
+            self._write(state, owner)
             try:
-                notes = self.assets.reading_notes(paper_id, fulltext)
+                notes = self._call_owner_scoped(self.assets.reading_notes, paper_id, fulltext, owner_id=owner)
                 explanation = self.explainer.explain(
                     current,
                     fulltext,
                     notes,
-                    (lambda value, current_id=paper_id, text=fulltext: self.assets.save_reading_notes(current_id, text, value)),
+                    (
+                        lambda value, current_id=paper_id, text=fulltext: self._call_owner_scoped(
+                            self.assets.save_reading_notes,
+                            current_id,
+                            text,
+                            value,
+                            owner_id=owner,
+                        )
+                    ),
                 )
                 if explanation.get("mode") != "ai" or explanation.get("reading_basis") != "fulltext":
                     raise RuntimeError(explanation.get("notice") or "全文精读未成功生成")
-                self.store.save_explanation(paper_id, explanation)
-                self.archive.backup_paper_async(paper_id)
+                self._call_owner_scoped(self.store.save_explanation, paper_id, explanation, owner_id=owner)
+                self._call_owner_scoped(self.archive.backup_paper_async, paper_id, owner_id=owner)
                 item.update(
                     {
                         "explanation_status": "ready",
@@ -6149,11 +7181,11 @@ class WeeklyPreparationService:
                 )
             except Exception as error:
                 item.update({"explanation_status": "failed", "error": str(error)[:1200], "updated_at": utc_now().isoformat()})
-            self._write(state)
+            self._write(state, owner)
             if delay:
                 time.sleep(delay)
 
-        summary = self._summary(state, payload)
+        summary = self._summary(state, payload, owner)
         complete = summary["pdf_checked"] >= summary["pdf_target"] and summary["explanation_checked"] >= summary["explanation_target"]
         state.update(
             {
@@ -6164,8 +7196,8 @@ class WeeklyPreparationService:
                 "updated_at": utc_now().isoformat(),
             }
         )
-        self._write(state)
-        return self._summary(state, payload)
+        self._write(state, owner)
+        return self._summary(state, payload, owner)
 
 
 WEEKLY_SELECTION = WeeklySelectionService(
@@ -6360,6 +7392,7 @@ def filter_papers(papers: list[dict[str, Any]], params: dict[str, list[str]]) ->
     get = lambda name, default="": (params.get(name) or [default])[0].strip()
     query = get("q").lower()
     topic = get("topic")
+    subtopic = get("subtopic")
     venue = get("venue")
     author = get("author").lower()
     institution = get("institution").lower()
@@ -6375,10 +7408,17 @@ def filter_papers(papers: list[dict[str, Any]], params: dict[str, list[str]]) ->
     latest_visible_date = (utc_now() + timedelta(days=1)).date().isoformat()
     result = []
     for paper in papers:
-        text = " ".join([paper["title"], paper["abstract"], " ".join(paper["authors"]), paper["venue"]]).lower()
+        text = " ".join(
+            [
+                paper["title"], paper["abstract"], " ".join(paper["authors"]), paper["venue"],
+                " ".join(paper.get("topics", [])), " ".join(paper.get("subtopics", [])),
+            ]
+        ).lower()
         if query and query not in text:
             continue
         if topic and topic not in paper["topics"]:
+            continue
+        if subtopic and subtopic not in paper.get("subtopics", []):
             continue
         if venue and venue != paper["venue"]:
             continue
@@ -6524,8 +7564,190 @@ class AppHandler(SimpleHTTPRequestHandler):
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             pass
 
-    def redirect(self, location: str, headers: dict[str, str] | None = None) -> None:
-        self.send_response(HTTPStatus.SEE_OTHER)
+    def send_mounted_file(self, path: Path, no_store: bool = False) -> None:
+        try:
+            body = path.read_bytes()
+        except OSError:
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        if content_type.startswith("text/") or content_type in {
+            "application/javascript",
+            "application/json",
+            "application/manifest+json",
+            "image/svg+xml",
+        }:
+            content_type += "; charset=utf-8"
+        try:
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header(
+                "Cache-Control",
+                "no-store" if no_store else "private, max-age=3600",
+            )
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            pass
+
+    def serve_mounted_app(
+        self,
+        parsed: urllib.parse.ParseResult,
+        prefix: str,
+        root: Path,
+        *,
+        spa_fallback: bool,
+    ) -> None:
+        if parsed.path == prefix.rstrip("/"):
+            suffix = f"?{parsed.query}" if parsed.query else ""
+            self.redirect(f"{prefix}{suffix}")
+            return
+        if not root.is_dir():
+            self.send_json(
+                {
+                    "error": f"{prefix.strip('/')} 尚未构建",
+                    "build_required": True,
+                    "expected_directory": str(root),
+                },
+                HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+            return
+        relative = urllib.parse.unquote(parsed.path[len(prefix):]).lstrip("/")
+        candidate = (root / relative).resolve()
+        if candidate != root and root not in candidate.parents:
+            self.send_error(HTTPStatus.FORBIDDEN)
+            return
+        if candidate.is_dir():
+            candidate = candidate / "index.html"
+        if not candidate.is_file() and spa_fallback:
+            candidate = root / "index.html"
+        if not candidate.is_file():
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        self.send_mounted_file(candidate, no_store=candidate.name == "index.html")
+
+    @staticmethod
+    def atlas_requires_private_access(path: str, method: str) -> bool:
+        if method != "GET":
+            return True
+        return (
+            path.startswith("/api/private/")
+            or path.startswith("/api/editor/")
+            or path.startswith("/api/analysis-requests")
+            or bool(re.fullmatch(r"/api/papers/\d+/dossier(?:/export)?", path))
+        )
+
+    @staticmethod
+    def atlas_standard_access_allowed(path: str, method: str) -> bool:
+        """Allow account-scoped, model-free learning state for all users."""
+        return path == "/api/private/learning-progress" and method in {"GET", "POST"}
+
+    @staticmethod
+    def atlas_platform_backup_route(path: str) -> bool:
+        return bool(re.fullmatch(r"/api/(?:private|editor)/backups(?:/.*)?", path))
+
+    def trusted_forwarded_proto(self) -> str:
+        forwarded = compact_text(self.headers.get("X-Forwarded-Proto"))[:40].split(",", 1)[0].strip().lower()
+        if forwarded in {"http", "https"}:
+            return forwarded
+        return "https" if "https" in self.headers.get("CF-Visitor", "").lower() else "http"
+
+    def proxy_atlas(self, parsed: urllib.parse.ParseResult) -> None:
+        target = urllib.parse.urlparse(ATLAS_INTERNAL_URL)
+        if target.scheme != "http" or not target.hostname:
+            self.send_json({"error": "Atlas 内部地址配置无效"}, HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        target_path = parsed.path.removeprefix("/atlas") or "/"
+        if parsed.query:
+            target_path += f"?{parsed.query}"
+        atlas_path = urllib.parse.urlparse(target_path).path
+        if self.atlas_platform_backup_route(atlas_path):
+            self.send_json({"error": "Atlas platform backups remain local-only"}, HTTPStatus.FORBIDDEN)
+            return
+        if atlas_path.startswith("/api/editor/") and not self.host_editor_allowed():
+            self.send_json({"error": "当前账户没有 Atlas 编辑权限"}, HTTPStatus.FORBIDDEN)
+            return
+        if (
+            AUTH.enabled
+            and not self.host_ai_allowed()
+            and self.atlas_requires_private_access(atlas_path, self.command)
+            and not self.atlas_standard_access_allowed(atlas_path, self.command)
+            and not (atlas_path.startswith("/api/editor/") and self.host_editor_allowed())
+        ):
+            self.send_json({"error": "当前账户不能访问 Atlas 私有研究数据或写入接口"}, HTTPStatus.FORBIDDEN)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            self.send_json({"error": "Content-Length 无效"}, HTTPStatus.BAD_REQUEST)
+            return
+        if length < 0 or length > PLATFORM_MAX_PROXY_BYTES:
+            self.send_json({"error": "Atlas 请求内容超过 96 MB 限制"}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+            return
+        body = self.rfile.read(length) if length else None
+        forwarded_proto = self.trusted_forwarded_proto()
+        forwarded_headers: dict[str, str] = {
+            "Accept": self.headers.get("Accept", "*/*"),
+            "Host": urllib.parse.urlparse(ATLAS_INTERNAL_URL).netloc or "127.0.0.1:8795",
+            "X-Forwarded-Prefix": "/atlas",
+            "X-Forwarded-Proto": forwarded_proto,
+            "X-Atlas-Trusted-Host": self.headers.get("Host", "127.0.0.1:8765"),
+            "X-Atlas-Trusted-Proto": forwarded_proto,
+        }
+        # Atlas stores private learning state by the authenticated Paperfield
+        # account.  The value is injected server-side; clients cannot choose
+        # another owner through the browser bridge.
+        current_user = getattr(self, "auth_user", None) or self.current_user()
+        if current_user and current_user.get("username"):
+            forwarded_headers["X-Paperfield-User"] = compact_text(str(current_user["username"]))
+            forwarded_headers["X-Paperfield-Role"] = compact_text(str(current_user.get("role", "standard"))).lower()
+        if PAPERFIELD_ATLAS_PROXY_TOKEN:
+            forwarded_headers["X-Atlas-Proxy-Token"] = PAPERFIELD_ATLAS_PROXY_TOKEN
+        for name in (
+            "Content-Type",
+            "Origin",
+            "Referer",
+            "Idempotency-Key",
+            "X-Idempotency-Key",
+            "X-Atlas-Worker-Token",
+        ):
+            value = self.headers.get(name)
+            if value:
+                forwarded_headers[name] = value
+        connection = http.client.HTTPConnection(target.hostname, target.port or 80, timeout=90)
+        try:
+            connection.request(self.command, target_path, body=body, headers=forwarded_headers)
+            response = connection.getresponse()
+            response_body = response.read(PLATFORM_MAX_PROXY_BYTES + 1)
+            if len(response_body) > PLATFORM_MAX_PROXY_BYTES:
+                self.send_json({"error": "Atlas 响应超过 96 MB 限制"}, HTTPStatus.BAD_GATEWAY)
+                return
+            self.send_response(response.status, response.reason)
+            for name in ("Content-Type", "Content-Disposition", "ETag", "Last-Modified"):
+                value = response.getheader(name)
+                if value:
+                    self.send_header(name, value)
+            upstream_cache = response.getheader("Cache-Control")
+            self.send_header("Cache-Control", upstream_cache or "no-store")
+            self.send_header("Content-Length", str(len(response_body)))
+            self.end_headers()
+            self.wfile.write(response_body)
+        except (OSError, TimeoutError, http.client.HTTPException) as error:
+            self.send_json(
+                {"error": f"Atlas 内部服务不可用：{compact_text(str(error))}"},
+                HTTPStatus.BAD_GATEWAY,
+            )
+        finally:
+            connection.close()
+
+    def redirect(
+        self,
+        location: str,
+        headers: dict[str, str] | None = None,
+        status: HTTPStatus = HTTPStatus.SEE_OTHER,
+    ) -> None:
+        self.send_response(status)
         self.send_header("Location", location)
         self.send_header("Cache-Control", "no-store")
         for name, value in (headers or {}).items():
@@ -6541,6 +7763,22 @@ class AppHandler(SimpleHTTPRequestHandler):
 
     def current_user(self) -> dict[str, Any] | None:
         return AUTH.session_user(self.session_token()) if AUTH.enabled else None
+
+    def owner_id(self) -> str:
+        user = getattr(self, "auth_user", None) or self.current_user()
+        return PaperStore._owner_id((user or {}).get("username", "local"))
+
+    def require_atlas_catalog_access(self) -> None:
+        try:
+            client = ipaddress.ip_address(str(self.client_address[0]).split("%", 1)[0])
+        except ValueError as error:
+            raise PermissionError("Atlas catalog 只允许本机访问") from error
+        if not client.is_loopback:
+            raise PermissionError("Atlas catalog 只允许本机访问")
+        if PAPERFIELD_ATLAS_SYNC_TOKEN:
+            provided = self.headers.get("X-Paperfield-Atlas-Token", "")
+            if not provided or not hmac.compare_digest(provided, PAPERFIELD_ATLAS_SYNC_TOKEN):
+                raise PermissionError("Atlas catalog 凭据无效")
 
     def require_auth(self, parsed: urllib.parse.ParseResult) -> dict[str, Any] | None:
         if not AUTH.enabled:
@@ -6561,6 +7799,10 @@ class AppHandler(SimpleHTTPRequestHandler):
         user = getattr(self, "auth_user", None)
         return not AUTH.enabled or bool(user and user.get("role") == "beta")
 
+    def host_editor_allowed(self) -> bool:
+        user = getattr(self, "auth_user", None)
+        return not AUTH.enabled or bool(user and user.get("role") in ATLAS_EDITOR_ROLES)
+
     def require_host_ai(self) -> bool:
         if self.host_ai_allowed():
             return True
@@ -6574,7 +7816,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         return False
 
     def secure_cookie(self, token: str, clear: bool = False) -> str:
-        secure = self.headers.get("X-Forwarded-Proto", "").lower() == "https" or "https" in self.headers.get("CF-Visitor", "").lower()
+        secure = self.trusted_forwarded_proto() == "https"
         value = f"paperfield_session={'deleted' if clear else token}; Path=/; HttpOnly; SameSite=Lax"
         value += "; Max-Age=0" if clear else f"; Max-Age={int(AuthService.SESSION_TTL.total_seconds())}"
         return value + ("; Secure" if secure else "")
@@ -6613,11 +7855,26 @@ class AppHandler(SimpleHTTPRequestHandler):
             raise ValueError("上传文件超过大小限制")
         return self.rfile.read(length)
 
+    def flowloom_cors_origin(self) -> str:
+        origin = normalize_http_origin(self.headers.get("Origin", ""))
+        return origin if origin in FLOWLOOM_CORS_ORIGINS else ""
+
+    def add_flowloom_cors_headers(self, origin: str | None = None) -> bool:
+        allowed_origin = origin or self.flowloom_cors_origin()
+        if not allowed_origin:
+            return False
+        self.send_header("Access-Control-Allow-Origin", allowed_origin)
+        self.send_header("Access-Control-Allow-Credentials", "true")
+        self.send_header("Access-Control-Expose-Headers", "Accept-Ranges, Content-Length, Content-Range, Content-Disposition")
+        self.send_header("Vary", "Origin")
+        return True
+
     def send_pdf_file(self, path: Path) -> None:
         size = path.stat().st_size
         start = 0
         end = size - 1
         status = HTTPStatus.OK
+        cors_origin = self.flowloom_cors_origin()
         range_header = self.headers.get("Range", "")
         match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip()) if range_header else None
         if match:
@@ -6628,6 +7885,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             if start > end or start >= size:
                 self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
                 self.send_header("Content-Range", f"bytes */{size}")
+                self.add_flowloom_cors_headers(cors_origin)
                 self.end_headers()
                 return
             status = HTTPStatus.PARTIAL_CONTENT
@@ -6641,6 +7899,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             if status == HTTPStatus.PARTIAL_CONTENT:
                 self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
             self.send_header("Cache-Control", "private, max-age=3600")
+            self.add_flowloom_cors_headers(cors_origin)
             self.end_headers()
             with path.open("rb") as handle:
                 handle.seek(start)
@@ -6654,6 +7913,34 @@ class AppHandler(SimpleHTTPRequestHandler):
         except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
             pass
 
+    def do_OPTIONS(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        if not re.fullmatch(r"/api/papers/.+/pdf", parsed.path):
+            self.send_error(HTTPStatus.METHOD_NOT_ALLOWED)
+            return
+        origin = self.flowloom_cors_origin()
+        if not origin:
+            self.send_error(HTTPStatus.FORBIDDEN, "CORS origin is not allowed")
+            return
+        requested_method = self.headers.get("Access-Control-Request-Method", "GET").upper()
+        if requested_method != "GET":
+            self.send_error(HTTPStatus.METHOD_NOT_ALLOWED)
+            return
+        requested_headers = {
+            item.strip().casefold()
+            for item in self.headers.get("Access-Control-Request-Headers", "").split(",")
+            if item.strip()
+        }
+        if not requested_headers.issubset({"ngrok-skip-browser-warning", "range"}):
+            self.send_error(HTTPStatus.FORBIDDEN, "CORS request header is not allowed")
+            return
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self.add_flowloom_cors_headers(origin)
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "ngrok-skip-browser-warning, Range")
+        self.send_header("Access-Control-Max-Age", "600")
+        self.end_headers()
+
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/api/health":
@@ -6661,6 +7948,21 @@ class AppHandler(SimpleHTTPRequestHandler):
             if not AUTH.enabled:
                 payload.update({"papers": STORE.count(), "projects": STORE.count_projects()})
             self.send_json(payload)
+            return
+        if parsed.path == "/api/atlas/catalog":
+            try:
+                self.require_atlas_catalog_access()
+                params = urllib.parse.parse_qs(parsed.query)
+                cursor = int((params.get("cursor") or ["0"])[0])
+                limit = int((params.get("limit") or ["250"])[0])
+                compact = (params.get("compact") or [""])[0].casefold() in {"1", "true", "yes"}
+                if cursor < 0:
+                    raise ValueError("cursor must be non-negative")
+                self.send_json(STORE.atlas_catalog_page(cursor, limit, compact=compact))
+            except PermissionError as error:
+                self.send_json({"error": str(error)}, HTTPStatus.FORBIDDEN)
+            except (TypeError, ValueError):
+                self.send_json({"error": "cursor 和 limit 必须是有效整数"}, HTTPStatus.BAD_REQUEST)
             return
         if parsed.path == "/login":
             if not AUTH.enabled or self.current_user():
@@ -6672,15 +7974,81 @@ class AppHandler(SimpleHTTPRequestHandler):
             return super().do_GET()
         if parsed.path == "/api/auth/me":
             if not AUTH.enabled:
-                self.send_json({"enabled": False, "user": None, "host_ai_allowed": True})
+                self.send_json({"enabled": False, "user": None, "host_ai_allowed": True, "atlas_editor_allowed": True})
                 return
             user = self.current_user()
             self.send_json(
-                {"enabled": True, "user": user, "host_ai_allowed": bool(user and user.get("role") == "beta")},
+                {
+                    "enabled": True,
+                    "user": user,
+                    "host_ai_allowed": bool(user and user.get("role") == "beta"),
+                    "atlas_editor_allowed": bool(user and user.get("role") in ATLAS_EDITOR_ROLES),
+                },
                 200 if user else 401,
             )
             return
         if not self.require_auth(parsed):
+            return
+        owner = self.owner_id()
+        if parsed.path == "/api/platform":
+            self.send_json(
+                {
+                    "schema_version": 1,
+                    "product": "Paperfield unified research workspace",
+                    "workspaces": [
+                        {"id": "paperfield", "route": "/", "ready": True},
+                        {"id": "atlas", "route": "/atlas/", "ready": True, "internal_url": ATLAS_INTERNAL_URL},
+                        {"id": "flowloom", "route": "/flowloom/", "ready": FLOWLOOM_DIST_DIR.is_dir()},
+                    ],
+                    "data_ownership": {
+                        "paperfield": str(DATA_DIR),
+                        "atlas": "isolated in the Research Atlas service",
+                        "flowloom": "browser-local drafts and explicit exports",
+                        "curriculum": "versioned course content rendered inside Atlas",
+                    },
+                }
+            )
+            return
+        if parsed.path == "/benchmarks" or parsed.path.startswith("/benchmarks/"):
+            target = (
+                "/flowloom/benchmarks/compiled/"
+                if parsed.path in {"/benchmarks", "/benchmarks/"}
+                else f"/flowloom{parsed.path}"
+            )
+            if parsed.query:
+                target += f"?{parsed.query}"
+            self.redirect(target, status=HTTPStatus.MOVED_PERMANENTLY)
+            return
+        if parsed.path == "/atlas":
+            target = "/atlas/"
+            if parsed.query:
+                target += f"?{parsed.query}"
+            self.redirect(target, status=HTTPStatus.MOVED_PERMANENTLY)
+            return
+        if parsed.path.startswith("/atlas/"):
+            self.proxy_atlas(parsed)
+            return
+        if parsed.path == "/flowloom" or parsed.path.startswith("/flowloom/"):
+            self.serve_mounted_app(parsed, "/flowloom/", FLOWLOOM_DIST_DIR, spa_fallback=True)
+            return
+        if parsed.path == "/courses" or parsed.path.startswith("/courses/"):
+            legacy_path = urllib.parse.unquote(parsed.path[len("/courses") :]).strip("/")
+            if legacy_path.endswith("/index.html"):
+                legacy_path = legacy_path[: -len("/index.html")]
+            elif legacy_path.endswith(".html"):
+                legacy_path = legacy_path[:-5]
+            query = {"view": "curriculum"}
+            if legacy_path:
+                if legacy_path in {"llm", "embodied"}:
+                    legacy_path = f"{legacy_path}/README"
+                track_id = legacy_path.split("/", 1)[0]
+                if track_id in {"llm", "embodied"}:
+                    query["track"] = track_id
+                query["lesson"] = legacy_path
+            self.redirect(
+                f"/atlas/?{urllib.parse.urlencode(query)}",
+                status=HTTPStatus.MOVED_PERMANENTLY,
+            )
             return
         if not parsed.path.startswith("/api/"):
             if parsed.path not in {"/", "/index.html"} and not (STATIC_DIR / parsed.path.lstrip("/")).exists():
@@ -6690,7 +8058,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/papers":
             ranking_topic = (params.get("topic") or [""])[0].strip()
             filter_params = {**params, "sort": ["quality"], "sort_secondary": ["date"]}
-            matching = filter_papers(STORE.list_papers(), filter_params)
+            matching = filter_papers(STORE.list_papers(owner), filter_params)
             ranked = (
                 score_papers_for_ranking(matching, ranking_topic)
                 if paper_sort_requires_recommendation_score(params)
@@ -6715,17 +8083,17 @@ class AppHandler(SimpleHTTPRequestHandler):
                 per_topic = int((params.get("per_topic") or [str(CONFIG.get("daily_recommendations_per_topic", 5))])[0])
             except ValueError:
                 per_topic = int(CONFIG.get("daily_recommendations_per_topic", 5))
-            recommendations = WEEKLY_SELECTION.get(topic, per_topic)
-            WEEKLY_PREPARATION.start()
-            preparation = WEEKLY_PREPARATION.status()
+            recommendations = WEEKLY_SELECTION.get(topic, per_topic, owner)
+            WEEKLY_PREPARATION.start(owner_id=owner)
+            preparation = WEEKLY_PREPARATION.status(owner_id=owner)
             for paper in recommendations["items"]:
                 paper["weekly_preparation"] = preparation["items"].get(paper["id"], {})
             recommendations["preparation"] = preparation
             self.send_json(recommendations)
             return
         if parsed.path == "/api/weekly-preparation":
-            WEEKLY_PREPARATION.start()
-            self.send_json(WEEKLY_PREPARATION.status())
+            WEEKLY_PREPARATION.start(owner_id=owner)
+            self.send_json(WEEKLY_PREPARATION.status(owner_id=owner))
             return
         if parsed.path == "/api/project-recommendations":
             configured_limit = CONFIG.get("weekly_project_recommendations", CONFIG.get("daily_project_recommendations", 4))
@@ -6753,18 +8121,19 @@ class AppHandler(SimpleHTTPRequestHandler):
         if project_action:
             full_name = urllib.parse.unquote(project_action.group(1))
             action = project_action.group(2)
-            project = STORE.get_project(full_name)
+            project = STORE.get_project(full_name, owner)
             if not project:
                 self.send_json({"error": "项目不存在"}, 404)
                 return
             try:
-                READING_ARCHIVE.restore_project_if_needed(full_name)
+                READING_ARCHIVE.restore_project_if_needed(full_name, owner)
             except Exception as error:
                 print(f"Cloud project reading restore failed for {full_name}: {error}")
             if action == "workspace":
                 workspace = PROJECT_ASSETS.workspace(project)
-                workspace["reading_backup_available"] = READING_ARCHIVE.project_backup_available(full_name)
-                workspace["reading_backup_pending"] = READING_ARCHIVE.project_backup_pending(full_name)
+                workspace["explanation"] = (STORE.get_project_asset(full_name, owner) or {}).get("explanation")
+                workspace["reading_backup_available"] = READING_ARCHIVE.project_backup_available(full_name, owner)
+                workspace["reading_backup_pending"] = READING_ARCHIVE.project_backup_pending(full_name, owner)
                 self.send_json(workspace)
                 return
             if action == "source":
@@ -6772,25 +8141,25 @@ class AppHandler(SimpleHTTPRequestHandler):
                 source_file = PROJECT_ASSETS.file(full_name, relative_path)
                 self.send_json(source_file or {"error": "源码文件不存在"}, 200 if source_file else 404)
                 return
-            self.send_json({"items": STORE.project_chat_history(full_name, 0), "project_full_name": full_name})
+            self.send_json({"items": STORE.project_chat_history(full_name, 0, owner), "project_full_name": full_name})
             return
         if parsed.path.startswith("/api/projects/"):
             full_name = urllib.parse.unquote(parsed.path.removeprefix("/api/projects/"))
-            project = STORE.get_project(full_name)
+            project = STORE.get_project(full_name, owner)
             self.send_json(project or {"error": "项目不存在"}, 200 if project else 404)
             return
-        paper_action = re.fullmatch(r"/api/papers/(.+)/(asset|pdf|text|chat|page-image)", parsed.path)
+        paper_action = re.fullmatch(r"/api/papers/(.+)/(asset|pdf|text|locate|chat|page-image)", parsed.path)
         if paper_action:
             paper_id = urllib.parse.unquote(paper_action.group(1))
             action = paper_action.group(2)
-            paper = STORE.get_paper(paper_id)
+            paper = STORE.get_paper(paper_id, owner)
             if not paper:
                 self.send_json({"error": "论文不存在"}, 404)
                 return
             if action == "chat":
                 try:
-                    if READING_ARCHIVE.restore_paper_if_needed(paper_id):
-                        paper = STORE.get_paper(paper_id) or paper
+                    if READING_ARCHIVE.restore_paper_if_needed(paper_id, owner):
+                        paper = STORE.get_paper(paper_id, owner) or paper
                 except Exception as error:
                     print(f"Cloud paper reading restore failed for {paper_id}: {error}")
             if action == "asset":
@@ -6840,29 +8209,68 @@ class AppHandler(SimpleHTTPRequestHandler):
                     return
                 self.send_json(page or {"error": "该页全文尚不可用"}, 200 if page else 404)
                 return
-            self.send_json({"items": STORE.chat_history(paper_id, 0), "paper_id": paper_id})
+            if action == "locate":
+                try:
+                    locator = {
+                        "page": max(0, int((params.get("page") or ["0"])[0])),
+                        **{
+                            field: (params.get(field) or [""])[0]
+                            for field in ("section", "figure", "table", "equation", "quote")
+                        },
+                    }
+                    self.send_json(ASSETS.locate(paper_id, locator))
+                except (TypeError, ValueError, json.JSONDecodeError) as error:
+                    self.send_json({"error": f"来源定位参数无效：{error}"}, 400)
+                except Exception as error:
+                    self.send_json({"error": f"来源定位失败：{error}"}, 503)
+                return
+            self.send_json({"items": STORE.chat_history(paper_id, 0, owner), "paper_id": paper_id})
             return
         if parsed.path.startswith("/api/papers/"):
             paper_id = urllib.parse.unquote(parsed.path.removeprefix("/api/papers/"))
-            paper = STORE.get_paper(paper_id)
+            paper = STORE.get_paper(paper_id, owner)
             if paper:
                 try:
-                    if READING_ARCHIVE.restore_paper_if_needed(paper_id):
-                        paper = STORE.get_paper(paper_id) or paper
+                    if READING_ARCHIVE.restore_paper_if_needed(paper_id, owner):
+                        paper = STORE.get_paper(paper_id, owner) or paper
                 except Exception as error:
                     print(f"Cloud paper reading restore failed for {paper_id}: {error}")
                 paper["asset"] = ASSETS.public_asset(paper_id)
-                paper["reading_backup_available"] = READING_ARCHIVE.paper_backup_available(paper_id)
-                paper["reading_backup_pending"] = READING_ARCHIVE.paper_backup_pending(paper_id)
+                paper["reading_backup_available"] = READING_ARCHIVE.paper_backup_available(paper_id, owner)
+                paper["reading_backup_pending"] = READING_ARCHIVE.paper_backup_pending(paper_id, owner)
             self.send_json(paper or {"error": "论文不存在"}, 200 if paper else 404)
             return
         if parsed.path == "/api/options":
-            papers = filter_papers(STORE.list_papers(), {})
+            papers = filter_papers(STORE.list_papers(owner), {})
             projects = STORE.list_projects()
             coverage = build_catalog_coverage(VENUE_CATALOG.entries, papers, STORE.venue_sync_states())
+            topic_counts = {
+                topic: sum(topic in paper.get("topics", []) for paper in papers)
+                for topic in CLASSIFIER.topics
+            }
+            subtopic_counts = {
+                subtopic: sum(subtopic in paper.get("subtopics", []) for paper in papers)
+                for children in CLASSIFIER.topic_taxonomy.values()
+                for subtopic in children
+            }
+            extra_topics = sorted(
+                {topic for paper in papers for topic in paper["topics"]}
+                - set(CLASSIFIER.topics)
+            )
             self.send_json(
                 {
-                    "topics": sorted({topic for paper in papers for topic in paper["topics"]}),
+                    "topics": [*CLASSIFIER.topics, *extra_topics],
+                    "topic_taxonomy": [
+                        {
+                            "name": topic,
+                            "count": topic_counts.get(topic, 0),
+                            "subtopics": [
+                                {"name": subtopic, "count": subtopic_counts.get(subtopic, 0)}
+                                for subtopic in children
+                            ],
+                        }
+                        for topic, children in CLASSIFIER.topic_taxonomy.items()
+                    ],
                     "venues": sorted({paper["venue"] for paper in papers if paper["venue"]} | set(VENUE_CATALOG.venues())),
                     "venue_counts": {item["venue"]: item["count"] for item in coverage["items"]},
                     "venue_coverage": coverage,
@@ -6912,7 +8320,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json({"error": f"论文连接器查询失败：{error}"}, 503)
             return
         if parsed.path == "/api/stats":
-            papers = filter_papers(STORE.list_papers(), {})
+            papers = filter_papers(STORE.list_papers(owner), {})
             projects = STORE.list_projects()
             today = utc_now().date().isoformat()
             topic_counts: dict[str, int] = {}
@@ -6922,7 +8330,8 @@ class AppHandler(SimpleHTTPRequestHandler):
             ai_connection = EXPLAINER.connection() if self.host_ai_allowed() else None
             self.send_json(
                 {
-                    "total": len(papers),
+                    "total": STORE.count(),
+                    "visible_total": len(papers),
                     "today": sum(1 for paper in papers if paper["published"] == today),
                     "unread": sum(1 for paper in papers if paper["status"] == "unread"),
                     "favorites": sum(1 for paper in papers if paper["favorite"]),
@@ -6980,6 +8389,35 @@ class AppHandler(SimpleHTTPRequestHandler):
             return
         if not self.require_auth(parsed):
             return
+        owner = self.owner_id()
+        if parsed.path.startswith("/atlas/"):
+            self.proxy_atlas(parsed)
+            return
+        if parsed.path == "/api/papers/resolve-reference":
+            reference = compact_text(str(self.read_json().get("ref", "")))
+            if not reference or not (PaperConnector._arxiv_id(reference) or PaperConnector._doi(reference)):
+                self.send_json({"error": "paper reference must be an arXiv ID or DOI"}, HTTPStatus.BAD_REQUEST)
+                return
+            paper = STORE.find_paper_by_reference(reference, owner)
+            imported = False
+            if not paper:
+                try:
+                    matches = CONNECTOR.search(reference, limit=1)
+                    if not matches:
+                        self.send_json({"error": "paper reference was not found"}, HTTPStatus.NOT_FOUND)
+                        return
+                    match = matches[0]
+                    paper = (
+                        STORE.get_paper(match.get("existing_id", ""), owner)
+                        if match.get("already_saved")
+                        else CONNECTOR.import_paper(match)
+                    )
+                    imported = not bool(match.get("already_saved"))
+                except Exception as error:
+                    self.send_json({"error": f"paper reference resolution failed: {error}"}, HTTPStatus.BAD_GATEWAY)
+                    return
+            self.send_json({"paper": paper, "paper_id": paper["id"], "imported": imported})
+            return
         if parsed.path == "/api/translate":
             payload = self.read_json()
             text = str(payload.get("text", "")).strip()
@@ -7034,7 +8472,7 @@ class AppHandler(SimpleHTTPRequestHandler):
                 CONFIG["recommendation_weights"] = weights
                 clear_recommendation_score_cache()
                 recommendations = WEEKLY_SELECTION.rebuild()
-                WEEKLY_PREPARATION.start(recommendations, force=True)
+                WEEKLY_PREPARATION.start(recommendations, force=True, owner_id=owner)
                 self.send_json(
                     {
                         "weights": weights,
@@ -7057,19 +8495,20 @@ class AppHandler(SimpleHTTPRequestHandler):
             action = project_action.group(2)
             if action in {"explain", "chat"} and not self.require_host_ai():
                 return
-            project = STORE.get_project(full_name)
+            project = STORE.get_project(full_name, owner)
             if not project:
                 self.send_json({"error": "项目不存在"}, 404)
                 return
             try:
-                READING_ARCHIVE.restore_project_if_needed(full_name)
+                READING_ARCHIVE.restore_project_if_needed(full_name, owner)
             except Exception as error:
                 print(f"Cloud project reading restore failed for {full_name}: {error}")
             if action == "workspace":
                 payload = self.read_json()
                 workspace = PROJECT_ASSETS.prepare(project, bool(payload.get("force")))
-                workspace["reading_backup_available"] = READING_ARCHIVE.project_backup_available(full_name)
-                workspace["reading_backup_pending"] = READING_ARCHIVE.project_backup_pending(full_name)
+                workspace["explanation"] = (STORE.get_project_asset(full_name, owner) or {}).get("explanation")
+                workspace["reading_backup_available"] = READING_ARCHIVE.project_backup_available(full_name, owner)
+                workspace["reading_backup_pending"] = READING_ARCHIVE.project_backup_pending(full_name, owner)
                 self.send_json(workspace)
                 return
             if action == "document":
@@ -7087,9 +8526,9 @@ class AppHandler(SimpleHTTPRequestHandler):
                 return
             if action == "explain":
                 try:
-                    explanation = PROJECT_EXPLAINER.explain(project)
-                    STORE.save_project_explanation(full_name, explanation)
-                    READING_ARCHIVE.backup_project_async(full_name)
+                    explanation = PROJECT_EXPLAINER.explain(project, owner)
+                    STORE.save_project_explanation(full_name, explanation, owner)
+                    READING_ARCHIVE.backup_project_async(full_name, owner)
                     self.send_json(explanation)
                 except Exception as error:
                     self.send_json({"error": str(error)}, 503)
@@ -7100,8 +8539,13 @@ class AppHandler(SimpleHTTPRequestHandler):
                 self.send_json({"error": "请输入关于项目代码的问题"}, 400)
                 return
             try:
-                answer = PROJECT_EXPLAINER.ask(project, question, compact_text(str(payload.get("selected_path", ""))))
-                READING_ARCHIVE.backup_project_async(full_name)
+                answer = PROJECT_EXPLAINER.ask(
+                    project,
+                    question,
+                    compact_text(str(payload.get("selected_path", ""))),
+                    owner,
+                )
+                READING_ARCHIVE.backup_project_async(full_name, owner)
                 self.send_json(answer)
             except Exception as error:
                 self.send_json({"error": str(error)}, 503)
@@ -7112,18 +8556,18 @@ class AppHandler(SimpleHTTPRequestHandler):
             action = match.group(2)
             if action in {"explain", "chat"} and not self.require_host_ai():
                 return
-            paper = STORE.get_paper(paper_id)
+            paper = STORE.get_paper(paper_id, owner)
             if not paper:
                 self.send_json({"error": "论文不存在"}, 404)
                 return
             try:
-                if READING_ARCHIVE.restore_paper_if_needed(paper_id):
-                    paper = STORE.get_paper(paper_id) or paper
+                if READING_ARCHIVE.restore_paper_if_needed(paper_id, owner):
+                    paper = STORE.get_paper(paper_id, owner) or paper
             except Exception as error:
                 print(f"Cloud paper reading restore failed for {paper_id}: {error}")
             if action == "state":
-                updated = STORE.update_state(paper_id, self.read_json())
-                READING_ARCHIVE.backup_paper_async(paper_id)
+                updated = STORE.update_state(paper_id, self.read_json(), owner)
+                READING_ARCHIVE.backup_paper_async(paper_id, owner)
                 self.send_json(updated)
                 return
             if action == "import":
@@ -7175,10 +8619,10 @@ class AppHandler(SimpleHTTPRequestHandler):
                     notes = None
                     try:
                         fulltext = ASSETS.fulltext(paper_id)
-                        notes = ASSETS.reading_notes(paper_id, fulltext) if fulltext else None
+                        notes = ASSETS.reading_notes(paper_id, fulltext, owner) if fulltext else None
                     except Exception as error:
                         print(f"Paper chat full-text access failed for {paper_id}; using abstract: {error}")
-                    history = STORE.chat_history(paper_id)
+                    history = STORE.chat_history(paper_id, owner_id=owner)
                     answer = EXPLAINER.ask(
                         paper,
                         question,
@@ -7190,29 +8634,64 @@ class AppHandler(SimpleHTTPRequestHandler):
                 except Exception as error:
                     self.send_json({"error": str(error)}, 503)
                     return
-                STORE.add_chat_message(paper_id, "user", question)
-                STORE.add_chat_message(paper_id, "assistant", answer["answer"])
-                READING_ARCHIVE.backup_paper_async(paper_id)
+                STORE.add_chat_message(paper_id, "user", question, owner)
+                STORE.add_chat_message(paper_id, "assistant", answer["answer"], owner)
+                READING_ARCHIVE.backup_paper_async(paper_id, owner)
                 self.send_json(answer)
                 return
             try:
                 ASSETS.prepare(paper)
                 fulltext = ASSETS.fulltext(paper_id)
-                notes = ASSETS.reading_notes(paper_id, fulltext) if fulltext else None
+                notes = ASSETS.reading_notes(paper_id, fulltext, owner) if fulltext else None
                 explanation = EXPLAINER.explain(
                     paper,
                     fulltext,
                     notes,
-                    (lambda value: ASSETS.save_reading_notes(paper_id, fulltext, value)) if fulltext else None,
+                    (lambda value: ASSETS.save_reading_notes(paper_id, fulltext, value, owner)) if fulltext else None,
                 )
             except Exception as error:
                 self.send_json({"error": str(error)}, 503)
                 return
-            STORE.save_explanation(paper_id, explanation)
-            READING_ARCHIVE.backup_paper_async(paper_id)
+            STORE.save_explanation(paper_id, explanation, owner)
+            READING_ARCHIVE.backup_paper_async(paper_id, owner)
             self.send_json(explanation)
             return
         self.send_json({"error": "接口不存在"}, 404)
+
+    def do_DELETE(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        if not self.require_auth(parsed):
+            return
+        if parsed.path.startswith("/atlas/"):
+            self.proxy_atlas(parsed)
+            return
+        self.send_json({"error": "接口不存在"}, 404)
+
+
+def prepare_store_for_runtime() -> None:
+    STORE.fail_stale_syncs()
+    seed_if_empty()
+    taxonomy_changed = STORE.reclassify_papers(CLASSIFIER)
+    if taxonomy_changed:
+        WEEKLY_SELECTION.rebuild()
+    else:
+        STORE.recalculate_quality_if_due(CLASSIFIER)
+
+
+def start_background_services(auto_refresh: bool = True) -> threading.Thread:
+    def run() -> None:
+        try:
+            prepare_store_for_runtime()
+            READING_ARCHIVE.backup_existing_async()
+        except Exception as error:
+            print(f"Paperfield startup maintenance failed: {error}", flush=True)
+        finally:
+            if auto_refresh:
+                threading.Thread(target=scheduler_loop, daemon=True, name="refresh-scheduler").start()
+
+    thread = threading.Thread(target=run, daemon=True, name="startup-maintenance")
+    thread.start()
+    return thread
 
 
 def main() -> None:
@@ -7222,17 +8701,13 @@ def main() -> None:
     parser.add_argument("--refresh", action="store_true", help="refresh data and exit")
     args = parser.parse_args()
     AUTH.validate_startup()
-    seed_if_empty()
-    STORE.recalculate_quality(CLASSIFIER)
     if args.refresh:
+        prepare_store_for_runtime()
         print(json.dumps(refresh_all(), ensure_ascii=False, indent=2))
         return
-    if os.environ.get("PAPERFIELD_AUTO_REFRESH", "1").strip() != "0":
-        threading.Thread(target=scheduler_loop, daemon=True, name="refresh-scheduler").start()
-    WEEKLY_PREPARATION.start()
-    READING_ARCHIVE.backup_existing_async()
     server = ThreadingHTTPServer((args.host, args.port), AppHandler)
-    print(f"Paperfield is running at http://{args.host}:{args.port}")
+    print(f"Paperfield is running at http://{args.host}:{args.port}", flush=True)
+    start_background_services(os.environ.get("PAPERFIELD_AUTO_REFRESH", "1").strip() != "0")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -1,0 +1,48 @@
+{
+  "name": "flowloom",
+  "private": true,
+  "version": "0.5.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc -b --pretty false",
+    "evidence:publication": "node scripts/generate-publication-evidence.mjs"
+  },
+  "dependencies": {
+    "@dagrejs/dagre": "^1.1.5",
+    "@xyflow/react": "^12.8.2",
+    "html-to-image": "^1.11.13",
+    "jspdf": "^4.2.1",
+    "jszip": "^3.10.1",
+    "lucide-react": "^0.468.0",
+    "pako": "^2.1.0",
+    "pdfjs-dist": "^6.1.200",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "svg-path-bbox": "^2.1.0",
+    "svg2pdf.js": "^2.7.0",
+    "vega": "^6.3.1",
+    "vega-lite": "^6.4.3",
+    "yaml": "^2.7.0",
+    "zustand": "^5.0.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.2.0",
+    "@types/dagre": "^0.7.52",
+    "@types/node": "^22.10.7",
+    "@types/pako": "^2.0.3",
+    "@types/react": "^19.0.7",
+    "@types/react-dom": "^19.0.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^26.0.0",
+    "typescript": "~5.7.2",
+    "vite": "^6.0.7",
+    "vitest": "^4.1.10"
+  }
+}

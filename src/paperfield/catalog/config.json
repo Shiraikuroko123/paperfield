@@ -1,4 +1,5 @@
 {
+  "taxonomy_version": 3,
   "refresh_hours": 24,
   "days_back": 90,
   "max_results_per_source": 100,
@@ -8,6 +9,7 @@
   "targeted_venue_rows": 160,
   "targeted_venues_per_refresh": 8,
   "dblp_archive_pages": 8,
+  "retain_unmatched_archive_venues": ["NeurIPS", "ICLR"],
   "dblp_venue_paths": {
     "NeurIPS": "conf/nips",
     "ICLR": "conf/iclr",
@@ -77,13 +79,73 @@
     {"category": "模型效率", "query": "topic:llm-inference"}
   ],
   "topics": {
-    "具身智能": ["embodied", "robot learning", "robot manipulation", "vision-language-action", "vla", "world model", "humanoid"],
+    "具身智能": ["embodied", "robot", "robotics", "robot learning", "robot manipulation", "vision-language-action", "vla", "robot policy", "sim-to-real", "sim2real", "world model", "humanoid", "locomotion"],
     "触觉与灵巧操作": ["tactile", "haptic", "dexterous", "grasping", "visuotactile", "force sensing"],
     "多模态大模型": ["multimodal large language model", "mllm", "vision-language model", "vlm", "video-language"],
     "大语言模型": ["large language model", "llm", "language model", "reasoning model", "foundation model"],
     "智能体": ["agent", "multi-agent", "tool use", "computer use", "planning"],
-    "检索与知识增强": ["retrieval augmented", "rag", "knowledge graph", "long context", "memory"],
+    "检索与知识增强": ["retrieval", "retrieval augmented", "rag", "knowledge graph", "dense retrieval", "information retrieval"],
     "模型效率": ["quantization", "distillation", "pruning", "inference acceleration", "edge ai", "efficient fine-tuning", "lora"]
+  },
+  "topic_taxonomy": {
+    "具身智能": {
+      "VLA 与机器人基础模型": ["vision-language-action", "vision language action", "vla", "robot foundation model", "robotic foundation model", "generalist robot", "general-purpose robot policy"],
+      "强化学习与策略优化": ["reinforcement learning", "offline reinforcement learning", "offline rl", "online rl", "policy optimization", "actor-critic", "proximal policy optimization", "ppo", "soft actor-critic", "sac", "reward learning"],
+      "模仿学习与示范数据": ["imitation learning", "behavior cloning", "behaviour cloning", "learning from demonstration", "demonstration data", "teleoperation", "inverse reinforcement learning"],
+      "生成式策略与扩散控制": ["diffusion policy", "diffusion-based policy", "generative policy", "flow matching policy", "action diffusion", "trajectory diffusion"],
+      "Sim2Real 与域适应": ["sim-to-real", "sim2real", "simulation-to-reality", "domain randomization", "domain adaptation", "reality gap", "system identification"],
+      "世界模型与具身规划": ["world model", "model-based planning", "model predictive control", "predictive control", "latent dynamics", "action planning", "task planning"],
+      "机器人操作与抓取": ["robot manipulation", "robotic manipulation", "mobile manipulation", "object manipulation", "grasping", "pick-and-place", "pick and place", "bimanual", "dexterous manipulation"],
+      "导航与空间智能": ["robot navigation", "visual navigation", "vision-language navigation", "vln", "embodied navigation", "spatial reasoning", "slam", "path planning", "exploration"],
+      "人形与全身控制": ["humanoid", "whole-body control", "whole body control", "locomotion", "legged robot", "bipedal", "quadruped", "motion retargeting"],
+      "仿真与合成数据": ["robot simulator", "robotics simulator", "simulation platform", "digital twin", "synthetic data", "physics simulator", "isaac sim", "mujoco", "habitat"],
+      "具身数据集与评测": ["robot dataset", "robotics dataset", "embodied benchmark", "robot benchmark", "policy benchmark", "trajectory dataset", "robot data", "evaluation suite"]
+    },
+    "触觉与灵巧操作": {
+      "触觉感知与表征": ["tactile perception", "tactile sensing", "visuotactile", "vision-tactile", "tactile representation", "tactile sensor"],
+      "灵巧手与多指操作": ["dexterous hand", "dexterous manipulation", "multi-finger", "multifinger", "in-hand manipulation", "robot hand"],
+      "接触建模与抓取": ["contact modeling", "contact-rich", "contact dynamics", "grasp synthesis", "grasp planning", "grasping"],
+      "力控与顺应控制": ["force control", "force sensing", "torque control", "compliant control", "impedance control", "admittance control"],
+      "触觉数据与仿真": ["tactile dataset", "tactile benchmark", "tactile simulation", "simulated tactile", "haptic dataset"]
+    },
+    "大语言模型": {
+      "架构与预训练": ["pretraining", "pre-training", "language model architecture", "transformer architecture", "mixture of experts", "moe", "scaling law", "tokenization"],
+      "推理与测试时计算": ["chain-of-thought", "chain of thought", "reasoning", "test-time compute", "test time scaling", "inference-time scaling", "self-consistency", "verifier", "reasoning model"],
+      "对齐与偏好优化": ["alignment", "preference optimization", "rlhf", "dpo", "direct preference optimization", "reward model", "constitutional ai"],
+      "后训练与指令微调": ["post-training", "post training", "instruction tuning", "instruction fine-tuning", "supervised fine-tuning", "sft", "fine-tuning"],
+      "长上下文与记忆": ["long context", "context window", "context length", "kv cache", "memory mechanism", "context compression"],
+      "安全、可信与评测": ["language model safety", "llm safety", "hallucination", "jailbreak", "red teaming", "benchmark", "evaluation", "factuality", "uncertainty"]
+    },
+    "多模态大模型": {
+      "视觉语言理解": ["vision-language model", "vision language model", "vlm", "visual question answering", "image-text", "visual grounding"],
+      "视频理解与时序推理": ["video-language", "video language", "video understanding", "temporal reasoning", "long video", "video question answering"],
+      "多模态生成": ["multimodal generation", "text-to-image", "text to image", "image generation", "video generation", "unified generation", "any-to-any"],
+      "语音、音频与跨模态": ["audio-language", "audio language", "speech-language", "speech language", "audio understanding", "audio-visual", "speech model"],
+      "多模态对齐与融合": ["multimodal alignment", "cross-modal alignment", "modality fusion", "multimodal fusion", "contrastive language-image", "vision-language pretraining"]
+    },
+    "智能体": {
+      "工具使用与函数调用": ["tool use", "tool-use", "function calling", "api calling", "tool learning", "external tools"],
+      "规划、反思与任务分解": ["agent planning", "task decomposition", "self-reflection", "reflection", "reasoning and acting", "react agent", "tree search"],
+      "多智能体协作": ["multi-agent", "multiagent", "agent collaboration", "agent debate", "agent society", "cooperative agents"],
+      "计算机与浏览器操作": ["computer use", "computer-use", "web agent", "browser agent", "gui agent", "desktop agent"],
+      "Agent 记忆与持续学习": ["agent memory", "long-term memory", "episodic memory", "continual learning", "lifelong agent", "memory-augmented agent"],
+      "Agent 评测与安全": ["agent benchmark", "agent evaluation", "agent safety", "prompt injection", "tool-use benchmark", "agentic benchmark"]
+    },
+    "检索与知识增强": {
+      "检索增强生成 RAG": ["retrieval augmented generation", "retrieval-augmented generation", "rag", "retrieve-then-generate", "grounded generation"],
+      "稠密与混合检索": ["dense retrieval", "hybrid retrieval", "neural retrieval", "embedding retrieval", "reranker", "re-ranking"],
+      "知识图谱与结构化知识": ["knowledge graph", "graph rag", "graph retrieval", "structured knowledge", "knowledge base question answering"],
+      "长期记忆与上下文管理": ["long-term memory", "memory retrieval", "context management", "context compression", "memory-augmented"],
+      "检索评测与事实性": ["retrieval benchmark", "rag evaluation", "retrieval evaluation", "groundedness", "citation correctness", "factuality"]
+    },
+    "模型效率": {
+      "量化与低比特推理": ["quantization", "low-bit", "low bit", "int8", "int4", "fp8", "weight-only quantization", "post-training quantization"],
+      "蒸馏、剪枝与稀疏化": ["distillation", "knowledge distillation", "pruning", "sparsity", "sparse model", "model compression"],
+      "推理服务与系统优化": ["inference serving", "llm serving", "inference acceleration", "speculative decoding", "continuous batching", "paged attention", "throughput", "serving system"],
+      "参数高效微调": ["parameter-efficient fine-tuning", "parameter efficient fine tuning", "peft", "lora", "qlora", "adapter tuning", "prompt tuning"],
+      "边缘与端侧部署": ["edge ai", "on-device", "on device", "mobile inference", "embedded deployment", "edge deployment"],
+      "高效注意力与长序列": ["efficient attention", "linear attention", "flashattention", "flash attention", "kv cache compression", "sequence parallelism"]
+    }
   },
   "top_venues": [
     "NeurIPS", "ICML", "ICLR", "CVPR", "ICCV", "ECCV", "ACL", "EMNLP", "NAACL",
