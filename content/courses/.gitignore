@@ -2,7 +2,8 @@
 .venv-docs/
 site/
 .playwright-cli/
-output/
+/.build/
+/output/
 __pycache__/
 .pytest_cache/
 *.pyc
