@@ -4,10 +4,14 @@ Atlas News is an internal workspace for high-signal updates in embodied AI,
 robotics, VLA, large language models, multimodal models and agents.
 
 The feed layer stores RSS/Atom metadata and keeps a provenance record for each
-source. Article pages are fetched only from the source's HTTPS host allowlist,
-sanitised into a small safe HTML vocabulary, and cached in `news_items`. A
-failed article fetch never becomes invented text: the reader falls back to the
-feed summary and labels the content as unavailable.
+source. Long `content:encoded`/description fields are cached as safe in-app
+HTML when available. Article pages are fetched only from the source's HTTPS
+host allowlist, sanitised into a small safe HTML vocabulary, and cached in
+`news_items`. GitHub release and commit pages use the allowlisted GitHub API so
+the reader receives release notes, commit metadata and changed files instead
+of repository navigation. A failed article fetch never becomes invented text:
+the reader keeps the feed summary, labels the limitation, and leaves a retry
+action plus the external source link.
 
 The public read API is:
 
@@ -27,6 +31,10 @@ post. Two secondary newsroom feeds are included for company and funding
 signals and are visibly labelled as secondary; broad secondary entries without
 an embodied/LLM match are discarded. Source metadata is seeded during schema
 migration v17 and reconciled at every startup without deleting cached articles.
+The synchronizer keeps up to 30 entries per source by default; an explicit
+refresh accepts up to 50. The UI requests up to 200 matching items from the
+API but initially renders 24, with a load-more control and a bounded desktop
+list so a growing archive does not force a long page scroll.
 
 When Atlas runs through the unified launcher, an in-process monitor polls the
 allowlisted feeds using ETag/Last-Modified conditional requests. GitHub

@@ -7,6 +7,7 @@ import contextlib
 import functools
 import hashlib
 import hmac
+import html
 import ipaddress
 import json
 import mimetypes
@@ -272,7 +273,7 @@ PAPERFIELD_SYNC_PAGE_LIMIT = 500
 # quickly without polling every publisher at that cadence.
 NEWS_SYNC_DEFAULT_INTERVAL_SECONDS = 300
 NEWS_SYNC_DEFAULT_PRIORITY_INTERVAL_SECONDS = 60
-NEWS_SYNC_DEFAULT_LIMIT_PER_SOURCE = 20
+NEWS_SYNC_DEFAULT_LIMIT_PER_SOURCE = 30
 
 
 @functools.lru_cache(maxsize=2)
@@ -6393,7 +6394,7 @@ class AtlasStore:
                 counts["accepted"] += 1
         return counts
 
-    def list_news_items(self, owner_id: str = "local", filters: dict[str, Any] | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    def _news_filter_parts(self, owner_id: str = "local", filters: dict[str, Any] | None = None) -> tuple[list[str], list[Any]]:
         filters = filters or {}
         owner = self._learning_owner(owner_id)
         conditions = ["1=1"]
@@ -6432,6 +6433,10 @@ class AtlasStore:
             conditions.append("rs.read_at IS NULL")
         if filters.get("saved"):
             conditions.append("COALESCE(rs.saved, 0)=1")
+        return conditions, params
+
+    def list_news_items(self, owner_id: str = "local", filters: dict[str, Any] | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        conditions, params = self._news_filter_parts(owner_id, filters)
         params.append(max(1, min(200, int(limit))))
         with self.connect() as db:
             rows = db.execute(
@@ -6452,6 +6457,20 @@ class AtlasStore:
             ).fetchall()
             return [self._news_item_from_row(row) for row in rows]
 
+    def count_news_items(self, owner_id: str = "local", filters: dict[str, Any] | None = None) -> int:
+        conditions, params = self._news_filter_parts(owner_id, filters)
+        with self.connect() as db:
+            row = db.execute(
+                f"""
+                SELECT COUNT(*) AS total
+                FROM news_items n JOIN news_sources s ON s.key=n.source_key
+                LEFT JOIN news_read_state rs ON rs.news_item_id=n.id AND rs.owner_id=?
+                WHERE {' AND '.join(conditions)}
+                """,
+                params,
+            ).fetchone()
+            return int(row["total"] if row else 0)
+
     def get_news_item(self, item_id: int, owner_id: str = "local", *, include_body: bool = True, hydrate: bool = False) -> dict[str, Any]:
         try:
             normalized_id = int(item_id)
@@ -6462,16 +6481,24 @@ class AtlasStore:
                 row = db.execute("SELECT n.*, s.label AS source_label, s.source_kind AS source_kind, s.trust_tier AS trust_tier, s.article_hosts_json, s.feed_url, s.domains_json AS source_domains_json, rs.read_at, COALESCE(rs.saved, 0) AS saved, COALESCE(rs.note, '') AS note FROM news_items n JOIN news_sources s ON s.key=n.source_key LEFT JOIN news_read_state rs ON rs.news_item_id=n.id AND rs.owner_id=? WHERE n.id=?", (self._learning_owner(owner_id), normalized_id)).fetchone()
             if row is None:
                 raise NotFoundError("新闻不存在")
-            if row["content_status"] not in {"cached"}:
+            github_api_cached = row["source_kind"] in {"github_release", "github_commit"} and str(row["license_note"] or "").startswith("github_api:")
+            if row["content_status"] not in {"cached"} or (row["source_kind"] in {"github_release", "github_commit"} and not github_api_cached):
                 source = {"key": row["source_key"], "label": row["source_label"], "source_kind": row["source_kind"], "feed_url": row["feed_url"], "article_hosts": self._news_json(row["article_hosts_json"]), "domains": self._news_json(row["source_domains_json"]), "trust_tier": row["trust_tier"]}
                 try:
                     body_html, body_text = fetch_article(source, row["source_url"])
                 except Exception as error:
+                    summary = compact_text(row["summary"], 20_000).strip()
+                    fallback_status = "cached" if len(summary) >= 120 else ("feed_only" if summary else "unavailable")
                     with self._lock, self.connect() as db:
-                        db.execute("UPDATE news_items SET content_status='unavailable', license_note=?, fetched_at=? WHERE id=?", (compact_text(str(error), 500), utc_now(), normalized_id))
+                        if fallback_status == "cached":
+                            fallback_html = f"<p>{html.escape(summary, quote=False)}</p>"
+                            db.execute("UPDATE news_items SET body_html=?, body_text=?, content_status='cached', content_sha256=?, license_note=?, fetched_at=? WHERE id=?", (fallback_html, summary, hashlib.sha256(fallback_html.encode('utf-8')).hexdigest(), compact_text(str(error), 500), utc_now(), normalized_id))
+                        else:
+                            db.execute("UPDATE news_items SET content_status=?, license_note=?, fetched_at=? WHERE id=?", (fallback_status, compact_text(str(error), 500), utc_now(), normalized_id))
                 else:
                     with self._lock, self.connect() as db:
-                        db.execute("UPDATE news_items SET body_html=?, body_text=?, content_status='cached', content_sha256=?, fetched_at=?, license_note='' WHERE id=?", (body_html, body_text, hashlib.sha256(body_html.encode('utf-8')).hexdigest(), utc_now(), normalized_id))
+                        cache_note = "github_api:v1" if row["source_kind"] in {"github_release", "github_commit"} else ""
+                        db.execute("UPDATE news_items SET body_html=?, body_text=?, content_status='cached', content_sha256=?, fetched_at=?, license_note=? WHERE id=?", (body_html, body_text, hashlib.sha256(body_html.encode('utf-8')).hexdigest(), utc_now(), cache_note, normalized_id))
         with self.connect() as db:
             row = db.execute("SELECT n.*, s.label AS source_label, s.source_kind AS source_kind, s.trust_tier AS trust_tier, rs.read_at, COALESCE(rs.saved, 0) AS saved, COALESCE(rs.note, '') AS note FROM news_items n JOIN news_sources s ON s.key=n.source_key LEFT JOIN news_read_state rs ON rs.news_item_id=n.id AND rs.owner_id=? WHERE n.id=?", (self._learning_owner(owner_id), normalized_id)).fetchone()
             if row is None:
@@ -17637,7 +17664,7 @@ class AtlasHandler(SimpleHTTPRequestHandler):
                 }
                 owner = self.request_owner_id()
                 items = self.store.list_news_items(owner, filters, self._limit(params, 50))
-                self.send_json({"items": items, "total": len(items), "stats": self.store.news_stats(owner)})
+                self.send_json({"items": items, "total": self.store.count_news_items(owner, filters), "stats": self.store.news_stats(owner)})
                 return
             if parsed.path == "/api/news/sources":
                 self.require_private_origin()

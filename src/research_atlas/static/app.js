@@ -39,6 +39,8 @@ const state = {
   },
   news: {
     items: [],
+    total: 0,
+    visibleCount: 24,
     sources: [],
     runs: [],
     monitor: null,
@@ -1968,7 +1970,7 @@ function newsContentStatusLabel(value) {
 
 function newsFilterQuery() {
   const filters = state.news.filters;
-  const params = new URLSearchParams({ limit: "80" });
+  const params = new URLSearchParams({ limit: "200" });
   Object.entries({ domain: filters.domain, topic: filters.topic, articleType: filters.articleType, source: filters.source, importance: filters.importance, from: filters.from, to: filters.to, q: filters.q }).forEach(([key, value]) => { if (value) params.set(key, value); });
   if (filters.unread) params.set("unread", "1");
   if (filters.saved) params.set("saved", "1");
@@ -2018,17 +2020,34 @@ function renderNewsReader() {
     ? `<div class="news-reader-body">${item.body_html}</div>`
     : `<div class="news-reader-fallback"><span class="state-label is-warning">${escapeHtml(newsContentStatusLabel(item.content_status))}</span><p>${escapeHtml(item.summary || item.dek || "来源未提供可阅读摘要。")}</p>${item.content_status !== "unavailable" ? `<button class="button button-secondary" type="button" data-news-hydrate="${escapeHtml(item.id)}">重新加载正文</button>` : ""}</div>`;
   const papers = (item.related_paper_refs || []).map((ref) => `<a class="button button-secondary" href="${escapeHtml(paperfieldReferenceUrl(ref))}">精读 ${escapeHtml(ref)}</a>`).join("");
-  target.innerHTML = `<header class="news-reader-header"><div><div class="row-topline"><span class="state-label ${item.importance === "major" || item.importance === "critical" ? "is-warning" : "is-primary"}">${escapeHtml(newsImportanceLabel(item.importance))}</span><span>${escapeHtml(newsTypeLabel(item.article_type))}</span><span>${escapeHtml((item.domains || []).map(newsDomainLabel).join(" / "))}</span></div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.source_label || item.source_key)} · ${escapeHtml(newsSourceKindLabel(item.source_kind))} · ${item.trust_tier === "first_party" ? "第一方" : "二手来源"}${item.author ? ` · ${escapeHtml(item.author)}` : ""} · ${escapeHtml(displayDate(item.published_at || item.updated_at))}</p></div><div class="news-reader-actions"><button class="button button-secondary" type="button" data-news-save="${escapeHtml(item.id)}">${item.saved ? "取消保存" : "保存"}</button><button class="button button-secondary" type="button" data-news-read="${escapeHtml(item.id)}">${item.read_at ? "标为未读" : "标为已读"}</button></div></header>${body}<footer class="news-provenance"><div><strong>来源与缓存</strong><span>${escapeHtml(item.source_url)}</span><span>${escapeHtml(newsContentStatusLabel(item.content_status))} · 抓取于 ${escapeHtml(displayDate(item.fetched_at))}</span>${item.content_sha256 ? `<span>内容 SHA-256 ${escapeHtml(String(item.content_sha256).slice(0, 20))}</span>` : ""}${item.license_note ? `<span>${escapeHtml(item.license_note)}</span>` : ""}</div>${papers ? `<div class="news-related-links"><strong>相关论文</strong>${papers}</div>` : ""}<a class="text-action" href="${escapeHtml(item.source_url)}" target="_blank" rel="noreferrer">查看原文来源</a></footer>`;
+  const cacheNote = item.license_note && !String(item.license_note).startsWith("github_api:") ? `<span>${escapeHtml(item.license_note)}</span>` : "";
+  target.innerHTML = `<header class="news-reader-header"><div><div class="row-topline"><span class="state-label ${item.importance === "major" || item.importance === "critical" ? "is-warning" : "is-primary"}">${escapeHtml(newsImportanceLabel(item.importance))}</span><span>${escapeHtml(newsTypeLabel(item.article_type))}</span><span>${escapeHtml((item.domains || []).map(newsDomainLabel).join(" / "))}</span></div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.source_label || item.source_key)} · ${escapeHtml(newsSourceKindLabel(item.source_kind))} · ${item.trust_tier === "first_party" ? "第一方" : "二手来源"}${item.author ? ` · ${escapeHtml(item.author)}` : ""} · ${escapeHtml(displayDate(item.published_at || item.updated_at))}</p></div><div class="news-reader-actions"><button class="button button-secondary" type="button" data-news-save="${escapeHtml(item.id)}">${item.saved ? "取消保存" : "保存"}</button><button class="button button-secondary" type="button" data-news-read="${escapeHtml(item.id)}">${item.read_at ? "标为未读" : "标为已读"}</button></div></header>${body}<footer class="news-provenance"><div><strong>来源与缓存</strong><span>${escapeHtml(item.source_url)}</span><span>${escapeHtml(newsContentStatusLabel(item.content_status))} · 抓取于 ${escapeHtml(displayDate(item.fetched_at))}</span>${item.content_sha256 ? `<span>内容 SHA-256 ${escapeHtml(String(item.content_sha256).slice(0, 20))}</span>` : ""}${cacheNote}</div>${papers ? `<div class="news-related-links"><strong>相关论文</strong>${papers}</div>` : ""}<a class="button button-secondary news-source-link" href="${escapeHtml(item.source_url)}" target="_blank" rel="noreferrer">打开原文 ↗</a></footer>`;
+}
+
+function loadMoreNews() {
+  state.news.visibleCount += 24;
+  renderNews();
 }
 
 function renderNews() {
   const target = el("newsList");
   if (!target) return;
-  target.innerHTML = state.news.items.map(newsItemMarkup).join("");
+  const total = Number(state.news.total || state.news.items.length);
+  const visibleItems = state.news.items.slice(0, state.news.visibleCount);
+  target.innerHTML = visibleItems.map(newsItemMarkup).join("");
   el("newsEmpty").hidden = state.news.items.length > 0;
   el("newsEmptyMessage").textContent = state.news.error || "点击“刷新新闻”读取启用的来源，或调整筛选。";
-  el("newsResultCount").textContent = `${state.news.items.length} 条`;
-  el("newsListSummary").textContent = state.news.stats ? `${state.news.stats.cached || 0} 条已有站内正文，来源状态见下方。` : "正在读取新闻源。";
+  el("newsResultCount").textContent = `显示 ${visibleItems.length} / ${total} 条`;
+  el("newsListSummary").textContent = state.news.stats
+    ? `${state.news.stats.cached || 0} 条已有站内正文；先展示 ${visibleItems.length} 条，按需加载更多。`
+    : "正在读取新闻源。";
+  const loadMore = el("newsLoadMore");
+  if (loadMore) {
+    const canLoadMore = visibleItems.length < state.news.items.length;
+    loadMore.hidden = !canLoadMore;
+    loadMore.disabled = !canLoadMore;
+    loadMore.textContent = canLoadMore ? `加载更多（还剩 ${state.news.items.length - visibleItems.length} 条）` : "已显示全部";
+  }
   if (state.news.stats) {
     el("newsTotalCount").textContent = state.news.stats.total || 0;
     el("newsCachedCount").textContent = state.news.stats.cached || 0;
@@ -2042,7 +2061,9 @@ function renderNews() {
     if (!monitor || !monitor.enabled) {
       monitorTarget.textContent = "官方源监控未启动；点击“刷新新闻”可立即读取。";
     } else if (monitor.running) {
-      monitorTarget.textContent = `官方源监控正在读取；轮询间隔 ${Math.round(monitor.interval_seconds / 60)} 分钟。`;
+      const priorityMinutes = Math.max(1, Math.round((monitor.priority_interval_seconds || monitor.interval_seconds) / 60));
+      const fullMinutes = Math.max(priorityMinutes, Math.round(monitor.interval_seconds / 60));
+      monitorTarget.textContent = `官方源监控正在读取；GitHub release/commit 每 ${priorityMinutes} 分钟检查，其余官方源每 ${fullMinutes} 分钟检查。`;
     } else if (monitor.last_error) {
       monitorTarget.textContent = `官方源监控上次失败：${monitor.last_error}；仍会继续重试。`;
     } else {
@@ -2063,6 +2084,8 @@ async function loadNews({ keepSelection = true } = {}) {
   try {
     const [result, sources, monitor] = await Promise.all([api(`/api/news?${newsFilterQuery()}`), api("/api/news/sources"), api("/api/news/monitor")]);
     state.news.items = Array.isArray(result.items) ? result.items : [];
+    state.news.total = Number(result.total || state.news.items.length);
+    if (!keepSelection) state.news.visibleCount = 24;
     state.news.stats = result.stats || null;
     state.news.sources = Array.isArray(sources.items) ? sources.items : [];
     state.news.monitor = monitor || null;
@@ -2132,7 +2155,7 @@ async function refreshNews() {
   el("newsStatus").className = "state-label is-primary";
   el("newsStatus").textContent = "刷新中";
   try {
-    await api("/api/news/refresh", { method: "POST", body: JSON.stringify({ limitPerSource: 20 }) });
+    await api("/api/news/refresh", { method: "POST", body: JSON.stringify({ limitPerSource: 50 }) });
     await loadNews({ keepSelection: false });
     toast("新闻源刷新完成");
   } catch (error) {
@@ -4699,6 +4722,7 @@ function bindEvents() {
     void loadNews({ keepSelection: false });
   });
   el("newsRefresh").addEventListener("click", () => void refreshNews());
+  el("newsLoadMore")?.addEventListener("click", loadMoreNews);
 
   ["focusEditButton", "focusEditButtonMain"].forEach((id) => el(id).addEventListener("click", (event) => openFocusDialog(event.currentTarget)));
   ["focusDialog", "researchViewDialog", "termDetailDialog", "knowledgeDialog", "signalDialog", "analysisDialog"].forEach((id) => bindDialogFocusRestore(el(id)));

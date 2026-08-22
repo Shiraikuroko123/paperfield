@@ -267,7 +267,7 @@
           <div>
             <p class="view-context" id="newsAsOf">最近一次读取 --</p>
             <h1 id="newsTitle">AI 前沿新闻</h1>
-            <p>官方实验室、GitHub release/commit 与研究机构动态优先；二手新闻只作为标注清晰的补充。正文优先在 Atlas 内阅读，并保留来源与抓取状态。</p>
+            <p>官方实验室、GitHub release/commit 与研究机构动态优先；二手新闻只作为标注清晰的补充。正文优先在 Atlas 内阅读，并保留来源与抓取状态。GitHub 代码动态每分钟检查，其余官方源每 5 分钟检查。</p>
           </div>
           <div class="news-header-actions">
             <span class="state-label" id="newsStatus" role="status">尚未刷新</span>
@@ -310,6 +310,7 @@
           <section class="news-list-pane" aria-labelledby="newsListTitle">
             <div class="section-heading is-tight"><div><h2 id="newsListTitle">最新动态</h2><p id="newsListSummary">正在读取新闻源。</p></div><span class="section-count" id="newsResultCount">0 条</span></div>
             <div class="news-list" id="newsList" aria-live="polite"></div>
+            <div class="news-list-footer"><span class="term-action-note">按需展开列表，阅读位置不会被大量旧消息打断。</span><button class="button button-secondary" id="newsLoadMore" type="button" hidden>加载更多</button></div>
             <div class="empty-state is-compact" id="newsEmpty" hidden><strong>当前没有匹配新闻</strong><p id="newsEmptyMessage">点击“刷新新闻”读取启用的来源，或调整筛选。</p></div>
           </section>
           <article class="news-reader" id="newsReader" aria-live="polite">

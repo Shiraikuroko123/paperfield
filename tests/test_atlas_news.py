@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.research_atlas import app as atlas
 from src.research_atlas import news
@@ -46,6 +47,19 @@ class AtlasNewsTests(unittest.TestCase):
         self.assertIn("cross", candidates[0]["domains"])
         self.assertEqual(candidates[0]["related_paper_refs"], ["arxiv:2608.12345"])
 
+    def test_feed_parser_keeps_long_first_party_feed_content(self):
+        source = self.store.get_news_source("deepmind")
+        payload = ("<?xml version=\"1.0\"?><rss version=\"2.0\"><channel>"
+                   "<item><guid>long-1</guid><title>Robot model update</title>"
+                   "<link>https://deepmind.google/blog/long-robot</link>"
+                   "<content:encoded xmlns:content=\"http://purl.org/rss/1.0/modules/content/\"><![CDATA["
+                   "<p>" + ("This is a long first-party update about robot learning. " * 8) + "</p>"
+                   "]]></content:encoded></item></channel></rss>").encode()
+        candidate = news.parse_feed(payload, type("Feed", (), source)())[0]
+        self.assertEqual(candidate["content_status"], "cached")
+        self.assertIn("long first-party update", candidate["body_text"])
+        self.assertIn("<p>", candidate["body_html"])
+
     def test_secondary_feeds_drop_items_without_focus_terms(self):
         source = news.DEFAULT_NEWS_SOURCES[-2]
         candidates = news.parse_feed(secondary_demo_feed(), source)
@@ -61,6 +75,45 @@ class AtlasNewsTests(unittest.TestCase):
         self.assertEqual(article_type, "code_change")
         self.assertIn("architecture", topics)
         self.assertIn("llm", domains)
+
+    def test_github_release_api_reader_keeps_release_notes_and_assets(self):
+        source = next(item for item in news.DEFAULT_NEWS_SOURCES if item.key == "codex_releases")
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit):
+                return b'{"tag_name":"v1.2.3","name":"Harness update","published_at":"2026-08-22T10:00:00Z","body":"## Changes\\n\\nAdds a durable harness runtime and MCP handoff. This release includes enough context to be useful in the in-app reader.","assets":[{"name":"atlas-win.zip"}]}'
+
+        with patch.object(news, "_open_github_api", return_value=Response()) as opener:
+            body_html, body_text = news.fetch_article(source, "https://github.com/openai/codex/releases/tag/v1.2.3")
+        self.assertIn("Harness update", body_text)
+        self.assertIn("atlas-win.zip", body_text)
+        self.assertIn("<h2>", body_html)
+        self.assertIn("api.github.com", opener.call_args.args[0].full_url)
+
+    def test_github_commit_api_reader_keeps_message_and_changed_files(self):
+        source = next(item for item in news.DEFAULT_NEWS_SOURCES if item.key == "codex_commits")
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit):
+                return b'{"sha":"abcdef1234567890","author":{"login":"atlas-bot"},"commit":{"message":"Improve harness runtime\\n\\nAdd explicit handoff state for tool sessions and document recovery behavior."},"files":[{"filename":"src/runtime.rs","status":"modified","additions":12,"deletions":3}]}'
+
+        with patch.object(news, "_open_github_api", return_value=Response()):
+            _body_html, body_text = news.fetch_article(source, "https://github.com/openai/codex/commit/abcdef1234567890")
+        self.assertIn("Improve harness runtime", body_text)
+        self.assertIn("src/runtime.rs", body_text)
+        self.assertIn("+12 / -3", body_text)
 
     def test_news_monitor_can_refresh_only_first_party_code_sources(self):
         class FakeStore:
@@ -80,7 +133,7 @@ class AtlasNewsTests(unittest.TestCase):
         fake = FakeStore()
         monitor = atlas.NewsSynchronizer(fake, interval_seconds=300, priority_interval_seconds=60)
         monitor.refresh_once(["codex_commits"])
-        self.assertEqual(fake.calls, [(["codex_commits"], 20)])
+        self.assertEqual(fake.calls, [(["codex_commits"], 30)])
         self.assertEqual(monitor.status()["last_scope"], "priority")
         self.assertEqual(monitor.status()["priority_interval_seconds"], 60.0)
 

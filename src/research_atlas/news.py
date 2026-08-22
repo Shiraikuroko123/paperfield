@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import html
 import ipaddress
+import json
 import re
 import urllib.error
 import urllib.parse
@@ -16,11 +17,17 @@ from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from typing import Any
 
+try:
+    import markdown as _markdown
+except ImportError:  # pragma: no cover - deploy requirements include Markdown
+    _markdown = None
+
 
 MAX_FEED_BYTES = 4 * 1024 * 1024
 MAX_ARTICLE_BYTES = 8 * 1024 * 1024
 MAX_BODY_CHARS = 300_000
 USER_AGENT = "ResearchAtlasNews/1.0 (local research client)"
+GITHUB_API_HOSTS = ("api.github.com",)
 
 
 @dataclass(frozen=True)
@@ -237,7 +244,8 @@ def parse_feed(payload: bytes, source: NewsSource) -> list[dict[str, Any]]:
         source_url = _entry_link(entry, source)
         if not title or not source_url:
             continue
-        summary = _plain_text(_child_text(entry, {"summary", "description", "content", "encoded"}), 20_000)
+        raw_summary = _child_text(entry, {"summary", "description", "content", "encoded"})
+        summary = _plain_text(raw_summary, 20_000)
         published = normalize_time(_child_text(entry, {"published", "pubdate", "date", "created"}))
         updated = normalize_time(_child_text(entry, {"updated", "modified"})) or published
         author = _plain_text(_child_text(entry, {"author", "creator", "name"}), 240)
@@ -249,6 +257,18 @@ def parse_feed(payload: bytes, source: NewsSource) -> list[dict[str, Any]]:
         # embodied/LLM match in the title or summary.
         if source.trust_tier == "secondary" and not domains:
             continue
+        # Some first-party feeds put the full article in content:encoded. Keep
+        # that content locally so opening a news item does not collapse into a
+        # one-line feed excerpt. Plain long descriptions still become a safe
+        # paragraph, while short descriptions remain feed-only metadata.
+        body_html = ""
+        body_text = ""
+        if raw_summary and re.search(r"<\s*[a-z][^>]*>", raw_summary, flags=re.IGNORECASE):
+            body_html, body_text = sanitize_article_html(raw_summary, source)
+        if len(body_text.strip()) < 120 and len(summary.strip()) >= 120:
+            body_text = summary
+            body_html = f"<p>{html.escape(summary, quote=False)}</p>"
+        content_status = "cached" if len(body_text.strip()) >= 120 else "feed_only"
         normalized = {"title": title, "summary": summary, "source_url": source_url, "published": published, "updated": updated}
         candidates.append({
             "source_key": source.key,
@@ -269,9 +289,9 @@ def parse_feed(payload: bytes, source: NewsSource) -> list[dict[str, Any]]:
             "importance": importance,
             "related_paper_refs": extract_related_refs(f"{source_url} {summary}"),
             "payload_sha256": hashlib.sha256(repr(normalized).encode("utf-8")).hexdigest(),
-            "content_status": "feed_only",
-            "body_html": "",
-            "body_text": "",
+            "content_status": content_status,
+            "body_html": body_html,
+            "body_text": body_text,
         })
     return candidates
 
@@ -365,6 +385,124 @@ def _open_allowlisted(source: NewsSource, request: urllib.request.Request, timeo
     _validate_public_host(final_url)
     return response
 
+
+def _open_github_api(request: urllib.request.Request, timeout: int) -> Any:
+    """Open a GitHub API request with a separate, strict host allowlist."""
+    opener = urllib.request.build_opener(_AllowlistedRedirectHandler(GITHUB_API_HOSTS))
+    response = opener.open(request, timeout=timeout)
+    final_url = _safe_url(response.geturl(), GITHUB_API_HOSTS)
+    if not final_url:
+        response.close()
+        raise ValueError("GitHub API response URL is not allowlisted")
+    _validate_public_host(final_url)
+    return response
+
+
+def _github_reference(url: str) -> tuple[str, str, str, str] | None:
+    parsed = urllib.parse.urlparse(url)
+    if (parsed.hostname or "").lower().rstrip(".") != "github.com":
+        return None
+    parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
+    if len(parts) < 4 or parts[0] in {"orgs", "topics", "features"}:
+        return None
+    owner, repo, kind = parts[0], parts[1], parts[2]
+    if kind == "releases" and len(parts) >= 5 and parts[3] == "tag":
+        return "release", owner, repo, "/".join(parts[4:])
+    if kind in {"commit", "commits"} and len(parts) >= 4:
+        return "commit", owner, repo, parts[3]
+    return None
+
+
+def _github_markdown_html(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if _markdown is None:
+        return f"<pre>{html.escape(text, quote=False)}</pre>"
+    rendered = _markdown.markdown(text, extensions=["fenced_code", "tables", "sane_lists"])
+    return rendered[:MAX_BODY_CHARS]
+
+
+def _fetch_github_article(source: NewsSource, url: str, *, timeout: int) -> tuple[str, str]:
+    reference = _github_reference(url)
+    if reference is None:
+        raise ValueError("GitHub article reference is not supported")
+    kind, owner, repo, ref = reference
+    if kind == "release":
+        endpoint = f"https://api.github.com/repos/{urllib.parse.quote(owner)}/{urllib.parse.quote(repo)}/releases/tags/{urllib.parse.quote(ref, safe='')}"
+    else:
+        endpoint = f"https://api.github.com/repos/{urllib.parse.quote(owner)}/{urllib.parse.quote(repo)}/commits/{urllib.parse.quote(ref, safe='')}"
+    request = urllib.request.Request(
+        endpoint,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with _open_github_api(request, max(5, min(60, int(timeout)))) as response:
+            payload = response.read(MAX_ARTICLE_BYTES + 1)
+            if len(payload) > MAX_ARTICLE_BYTES:
+                raise ValueError("GitHub API response exceeds size limit")
+    except urllib.error.HTTPError as error:
+        raise ValueError(f"GitHub API HTTP {error.code}") from error
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        raise ValueError("GitHub API request failed") from error
+    try:
+        data = json.loads(payload.decode("utf-8", errors="replace"))
+    except json.JSONDecodeError as error:
+        raise ValueError("GitHub API response is invalid") from error
+    if not isinstance(data, dict):
+        raise ValueError("GitHub API response is not an object")
+
+    if kind == "release":
+        tag = html.escape(str(data.get("tag_name") or ref), quote=False)
+        name = html.escape(str(data.get("name") or ""), quote=False)
+        published = html.escape(str(data.get("published_at") or data.get("created_at") or ""), quote=False)
+        body = _github_markdown_html(data.get("body"))
+        parts = [f"<p><strong>版本</strong> {tag}</p>"]
+        if name and name != tag:
+            parts.append(f"<p><strong>发布标题</strong> {name}</p>")
+        if published:
+            parts.append(f"<p><strong>发布时间</strong> {published}</p>")
+        if body:
+            parts.append(body)
+        assets = data.get("assets") if isinstance(data.get("assets"), list) else []
+        asset_names = [str(item.get("name")) for item in assets if isinstance(item, dict) and item.get("name")]
+        if asset_names:
+            parts.append("<h3>发布资产</h3><ul>" + "".join(f"<li>{html.escape(name, quote=False)}</li>" for name in asset_names[:30]) + "</ul>")
+    else:
+        commit = data.get("commit") if isinstance(data.get("commit"), dict) else {}
+        message = str(commit.get("message") or data.get("message") or "").strip()
+        author = commit.get("author") if isinstance(commit.get("author"), dict) else {}
+        author_name = html.escape(str(author.get("name") or data.get("author", {}).get("login") if isinstance(data.get("author"), dict) else ""), quote=False)
+        sha = html.escape(str(data.get("sha") or ref)[:12], quote=False)
+        parts = [f"<p><strong>提交</strong> <code>{sha}</code></p>"]
+        if author_name:
+            parts.append(f"<p><strong>作者</strong> {author_name}</p>")
+        if message:
+            parts.append(_github_markdown_html(message))
+        files = data.get("files") if isinstance(data.get("files"), list) else []
+        file_rows = []
+        additions = deletions = 0
+        for item in files[:50]:
+            if not isinstance(item, dict):
+                continue
+            filename = html.escape(str(item.get("filename") or ""), quote=False)
+            status = html.escape(str(item.get("status") or "modified"), quote=False)
+            additions += int(item.get("additions") or 0)
+            deletions += int(item.get("deletions") or 0)
+            if filename:
+                file_rows.append(f"<li><code>{filename}</code> · {status}</li>")
+        parts.append(f"<p><strong>变更统计</strong> +{additions} / -{deletions}，涉及 {len(files)} 个文件</p>")
+        if file_rows:
+            parts.append("<h3>变更文件</h3><ul>" + "".join(file_rows) + "</ul>")
+    body_html, body_text = sanitize_article_html("".join(parts), source)
+    if len(body_text.strip()) < 120:
+        raise ValueError("GitHub API article body is unavailable")
+    return body_html, body_text
+
 def _source_object(source: NewsSource | dict[str, Any]) -> NewsSource:
     if isinstance(source, NewsSource):
         return source
@@ -404,6 +542,8 @@ def fetch_article(source: NewsSource | dict[str, Any], url: str, *, timeout: int
     if not safe_url:
         raise ValueError("article URL is not allowlisted")
     _validate_public_host(safe_url)
+    if source_obj.source_kind in {"github_release", "github_commit"}:
+        return _fetch_github_article(source_obj, safe_url, timeout=timeout)
     request = urllib.request.Request(safe_url, headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml;q=0.9"})
     try:
         with _open_allowlisted(source_obj, request, max(5, min(60, int(timeout)))) as response:
