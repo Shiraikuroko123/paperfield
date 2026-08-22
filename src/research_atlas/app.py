@@ -50,7 +50,7 @@ DEFAULT_DB_PATH = DEFAULT_LOCAL_DIR / "atlas.db"
 ANALYSIS_STAGE_SCHEMA = json.loads(
     (PACKAGE_DIR / "schemas" / "analysis-stage-complete.schema.json").read_text(encoding="utf-8")
 )
-APP_VERSION = "0.18.0"
+APP_VERSION = "0.18.2"
 SCHEMA_VERSION = 17
 SCHEMA_MIGRATION_SPECS = {
     8: ("phase5_private_research_loop", "phase5-v8-20260812"),
@@ -269,8 +269,10 @@ PAPERFIELD_SYNC_DEFAULT_MAX_PAGES = 12
 PAPERFIELD_SYNC_PAGE_LIMIT = 500
 # Official RSS/Atom and GitHub feeds are cheap conditional requests. General
 # sources run every five minutes; the small set of first-party code feeds is
-# checked every minute so a new release or harness commit becomes visible
-# quickly without polling every publisher at that cadence.
+# checked every minute so a new release becomes visible quickly without
+# polling every publisher at that cadence. Commit streams are intentionally
+# excluded from the default monitor because they are too noisy for the news
+# workspace.
 NEWS_SYNC_DEFAULT_INTERVAL_SECONDS = 300
 NEWS_SYNC_DEFAULT_PRIORITY_INTERVAL_SECONDS = 60
 NEWS_SYNC_DEFAULT_LIMIT_PER_SOURCE = 30
@@ -2499,6 +2501,12 @@ class AtlasStore:
                     json.dumps(item["domains"], ensure_ascii=False), item["trust_tier"], now, now,
                 ),
             )
+        # Keep the legacy commit source readable for old cached items, but do
+        # not fetch, count, or expose it as an active news source anymore.
+        db.execute(
+            "UPDATE news_sources SET enabled=0, last_error='', updated_at=? WHERE key='codex_commits'",
+            (now,),
+        )
 
     @staticmethod
     def _validate_thread_public_array(
@@ -6398,7 +6406,9 @@ class AtlasStore:
     def _news_filter_parts(self, owner_id: str = "local", filters: dict[str, Any] | None = None) -> tuple[list[str], list[Any]]:
         filters = filters or {}
         owner = self._learning_owner(owner_id)
-        conditions = ["1=1"]
+        # Disabled sources remain in the database for referential integrity,
+        # but their cached items are no longer part of the active workspace.
+        conditions = ["s.enabled=1"]
         params: list[Any] = [owner]
         domain = compact_text(filters.get("domain"), 30).casefold()
         topic = compact_text(filters.get("topic"), 80).casefold()
@@ -6521,17 +6531,25 @@ class AtlasStore:
     def news_stats(self, owner_id: str = "local") -> dict[str, Any]:
         owner = self._learning_owner(owner_id)
         with self.connect() as db:
-            total = db.execute("SELECT COUNT(*) FROM news_items").fetchone()[0]
-            cached = db.execute("SELECT COUNT(*) FROM news_items WHERE content_status='cached'").fetchone()[0]
-            unread = db.execute("SELECT COUNT(*) FROM news_items n LEFT JOIN news_read_state rs ON rs.news_item_id=n.id AND rs.owner_id=? WHERE rs.read_at IS NULL", (owner,)).fetchone()[0]
-            saved = db.execute("SELECT COUNT(*) FROM news_read_state WHERE owner_id=? AND saved=1", (owner,)).fetchone()[0]
+            total = db.execute("SELECT COUNT(*) FROM news_items n JOIN news_sources s ON s.key=n.source_key WHERE s.enabled=1").fetchone()[0]
+            cached = db.execute("SELECT COUNT(*) FROM news_items n JOIN news_sources s ON s.key=n.source_key WHERE s.enabled=1 AND n.content_status='cached'").fetchone()[0]
+            unread = db.execute("SELECT COUNT(*) FROM news_items n JOIN news_sources s ON s.key=n.source_key LEFT JOIN news_read_state rs ON rs.news_item_id=n.id AND rs.owner_id=? WHERE s.enabled=1 AND rs.read_at IS NULL", (owner,)).fetchone()[0]
+            saved = db.execute("SELECT COUNT(*) FROM news_read_state rs JOIN news_items n ON n.id=rs.news_item_id JOIN news_sources s ON s.key=n.source_key WHERE rs.owner_id=? AND rs.saved=1 AND s.enabled=1", (owner,)).fetchone()[0]
             sources = db.execute("SELECT COUNT(*) FROM news_sources WHERE enabled=1").fetchone()[0]
-            runs = db.execute("SELECT COUNT(*) FROM news_fetch_runs WHERE started_at >= ?", ((datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),)).fetchone()[0]
+            runs = db.execute(
+                "SELECT COUNT(*) FROM news_fetch_runs r JOIN news_sources s ON s.key=r.source_key "
+                "WHERE s.enabled=1 AND r.started_at >= ?",
+                ((datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),),
+            ).fetchone()[0]
             return {"total": total, "cached": cached, "unread": unread, "saved": saved, "enabled_sources": sources, "runs_last_24h": runs}
 
     def list_news_fetch_runs(self, limit: int = 30) -> list[dict[str, Any]]:
         with self.connect() as db:
-            rows = db.execute("SELECT * FROM news_fetch_runs ORDER BY started_at DESC LIMIT ?", (max(1, min(100, int(limit))),)).fetchall()
+            rows = db.execute(
+                "SELECT r.* FROM news_fetch_runs r JOIN news_sources s ON s.key=r.source_key "
+                "WHERE s.enabled=1 ORDER BY r.started_at DESC LIMIT ?",
+                (max(1, min(100, int(limit))),),
+            ).fetchall()
             return [dict(row) for row in rows]
 
     def refresh_news(self, source_keys: list[str] | None = None, limit_per_source: int = 20) -> dict[str, Any]:
@@ -6564,7 +6582,7 @@ class AtlasStore:
                 with self._lock, self.connect() as db:
                     db.execute("UPDATE news_sources SET last_checked_at=?, last_error=?, updated_at=? WHERE key=?", (utc_now(), message, utc_now(), source["key"]))
                 results.append(self.finish_news_fetch_run(run["id"], "failed", {"failed": 1}, message))
-        return {"runs": results, "sources": self.list_news_sources(), "stats": self.news_stats()}
+        return {"runs": results, "sources": self.list_news_sources(True), "stats": self.news_stats()}
 
     def list_frontier_terms(self, limit: int = 80) -> list[dict[str, Any]]:
         safe_limit = max(1, min(200, int(limit)))
@@ -16917,7 +16935,7 @@ class NewsSynchronizer:
                 priority_keys = [
                     source["key"]
                     for source in self.store.list_news_sources(True)
-                    if source.get("source_kind") in {"github_release", "github_commit"}
+                    if source.get("source_kind") == "github_release"
                 ]
                 source_keys = priority_keys or None
             try:
@@ -17669,7 +17687,8 @@ class AtlasHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/news/sources":
                 self.require_private_origin()
-                self.send_json({"items": self.store.list_news_sources(), "total": len(self.store.list_news_sources())})
+                items = self.store.list_news_sources(True)
+                self.send_json({"items": items, "total": len(items)})
                 return
             if parsed.path == "/api/news/runs":
                 self.require_private_origin()

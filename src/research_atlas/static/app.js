@@ -2082,14 +2082,14 @@ function renderNews() {
     } else if (monitor.running) {
       const priorityMinutes = Math.max(1, Math.round((monitor.priority_interval_seconds || monitor.interval_seconds) / 60));
       const fullMinutes = Math.max(priorityMinutes, Math.round(monitor.interval_seconds / 60));
-      monitorTarget.textContent = `官方源监控正在读取；GitHub release/commit 每 ${priorityMinutes} 分钟检查，其余官方源每 ${fullMinutes} 分钟检查。`;
+      monitorTarget.textContent = `官方源监控正在读取；GitHub release 每 ${priorityMinutes} 分钟检查，其余官方源每 ${fullMinutes} 分钟检查。`;
     } else if (monitor.last_error) {
       monitorTarget.textContent = `官方源监控上次失败：${monitor.last_error}；仍会继续重试。`;
     } else {
       const count = (monitor.last_runs || []).filter((run) => run.status === "completed" || run.status === "not_modified").length;
       const priorityMinutes = Math.max(1, Math.round((monitor.priority_interval_seconds || monitor.interval_seconds) / 60));
       const fullMinutes = Math.max(priorityMinutes, Math.round(monitor.interval_seconds / 60));
-      monitorTarget.textContent = `GitHub release/commit 每 ${priorityMinutes} 分钟检查；其余官方源每 ${fullMinutes} 分钟检查，最近完成 ${count} 个来源。`;
+      monitorTarget.textContent = `GitHub release 每 ${priorityMinutes} 分钟检查；其余官方源每 ${fullMinutes} 分钟检查，最近完成 ${count} 个来源。`;
     }
   }
   renderNewsSourceOptions();

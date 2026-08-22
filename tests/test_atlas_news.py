@@ -38,6 +38,15 @@ class AtlasNewsTests(unittest.TestCase):
         with self.store.connect() as db:
             self.assertEqual(db.execute("SELECT value FROM app_metadata WHERE key='schema_version'").fetchone()[0], "17")
             self.assertEqual(db.execute("SELECT COUNT(*) FROM news_sources").fetchone()[0], len(news.DEFAULT_NEWS_SOURCES))
+            commit_source = db.execute("SELECT enabled FROM news_sources WHERE key='codex_commits'").fetchone()
+            self.assertIsNotNone(commit_source)
+            self.assertEqual(commit_source["enabled"], 0)
+        active_keys = {source["key"] for source in self.store.list_news_sources(True)}
+        self.assertNotIn("codex_commits", active_keys)
+
+    def test_ieee_robotics_uses_current_official_rss_endpoint(self):
+        source = self.store.get_news_source("ieee_robotics")
+        self.assertEqual(source["feed_url"], "https://spectrum.ieee.org/feeds/topic/robotics.rss")
 
     def test_feed_parser_rejects_untrusted_links_and_extracts_refs(self):
         source = self.store.get_news_source("deepmind")
@@ -115,14 +124,14 @@ class AtlasNewsTests(unittest.TestCase):
         self.assertIn("src/runtime.rs", body_text)
         self.assertIn("+12 / -3", body_text)
 
-    def test_news_monitor_can_refresh_only_first_party_code_sources(self):
+    def test_news_monitor_can_refresh_priority_release_sources(self):
         class FakeStore:
             def __init__(self):
                 self.calls = []
 
             def list_news_sources(self, enabled_only=True):
                 return [
-                    {"key": "codex_commits", "source_kind": "github_commit"},
+                    {"key": "codex_releases", "source_kind": "github_release"},
                     {"key": "openai", "source_kind": "official_lab"},
                 ]
 
@@ -132,8 +141,8 @@ class AtlasNewsTests(unittest.TestCase):
 
         fake = FakeStore()
         monitor = atlas.NewsSynchronizer(fake, interval_seconds=300, priority_interval_seconds=60)
-        monitor.refresh_once(["codex_commits"])
-        self.assertEqual(fake.calls, [(["codex_commits"], 30)])
+        monitor.refresh_once(["codex_releases"])
+        self.assertEqual(fake.calls, [(["codex_releases"], 30)])
         self.assertEqual(monitor.status()["last_scope"], "priority")
         self.assertEqual(monitor.status()["priority_interval_seconds"], 60.0)
 

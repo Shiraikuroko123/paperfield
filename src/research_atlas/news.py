@@ -54,7 +54,9 @@ DEFAULT_NEWS_SOURCES = (
     NewsSource("groot_releases", "NVIDIA Isaac GR00T GitHub Releases", "github_release", "https://github.com/NVIDIA/Isaac-GR00T/releases.atom", ("github.com",), ("embodied", "llm")),
     NewsSource("openpi_releases", "Physical Intelligence openpi GitHub Releases", "github_release", "https://github.com/Physical-Intelligence/openpi/releases.atom", ("github.com",), ("embodied", "llm")),
     NewsSource("techcrunch_ai", "TechCrunch AI", "newsroom", "https://techcrunch.com/category/artificial-intelligence/feed/", ("techcrunch.com",), ("embodied", "llm"), "secondary"),
-    NewsSource("ieee_robotics", "IEEE Spectrum Robotics", "newsroom", "https://spectrum.ieee.org/feeds/topic/robotics", ("spectrum.ieee.org",), ("embodied",), "secondary"),
+    # IEEE Spectrum's topic feed requires the .rss suffix. The old path without
+    # a suffix now returns HTTP 404.
+    NewsSource("ieee_robotics", "IEEE Spectrum Robotics", "newsroom", "https://spectrum.ieee.org/feeds/topic/robotics.rss", ("spectrum.ieee.org",), ("embodied",), "secondary"),
 )
 
 
