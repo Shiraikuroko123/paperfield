@@ -10,7 +10,7 @@
   <meta property="og:type" content="website">
   <title>Research Atlas</title>
   <link rel="canonical" href="/atlas/">
-  <link rel="stylesheet" href="styles.css?v=0.17.4">
+  <link rel="stylesheet" href="styles.css?v=0.18.0">
 </head>
 <body>
   <a class="skip-link" href="#mainContent">跳到主要内容</a>
@@ -27,6 +27,9 @@
       <nav class="rail-nav" aria-label="研究视图">
         <button class="rail-link is-active" type="button" data-view="radar" aria-current="page">
           <span>前沿雷达</span><b id="navSignalCount">0</b>
+        </button>
+        <button class="rail-link" type="button" data-view="news">
+          <span>前沿新闻</span><b id="navNewsCount">0</b>
         </button>
         <button class="rail-link" type="button" data-view="curriculum">
           <span>知识树与课程</span><b id="navCurriculumCount">0</b>
@@ -256,6 +259,61 @@
               </div>
             </section>
           </aside>
+        </div>
+      </section>
+
+      <section class="app-view news-view" id="newsView" data-view-panel="news" aria-labelledby="newsTitle" hidden>
+        <header class="view-header news-view-header">
+          <div>
+            <p class="view-context" id="newsAsOf">最近一次读取 --</p>
+            <h1 id="newsTitle">AI 前沿新闻</h1>
+            <p>聚焦具身智能、大模型与交叉领域的发布、研究机构动态、公司与融资消息。正文优先在 Atlas 内阅读，并保留来源与抓取状态。</p>
+          </div>
+          <div class="news-header-actions">
+            <span class="state-label" id="newsStatus" role="status">尚未刷新</span>
+            <button class="button button-primary" id="newsRefresh" type="button">刷新新闻</button>
+          </div>
+        </header>
+
+        <div class="news-fact-strip" aria-label="新闻状态">
+          <div><span>新闻条目</span><strong id="newsTotalCount">0</strong></div>
+          <div><span>站内正文</span><strong id="newsCachedCount">0</strong></div>
+          <div><span>未读</span><strong id="newsUnreadCount">0</strong></div>
+          <div><span>已保存</span><strong id="newsSavedCount">0</strong></div>
+          <div><span>启用来源</span><strong id="newsSourceCount">0</strong></div>
+        </div>
+
+        <form class="news-filter-grid" id="newsFilterForm" role="search">
+          <label class="field-label" for="newsDomainFilter">领域
+            <select id="newsDomainFilter" name="domain"><option value="">全部领域</option><option value="embodied">具身智能</option><option value="llm">大模型</option><option value="cross">交叉</option></select>
+          </label>
+          <label class="field-label" for="newsTypeFilter">类型
+            <select id="newsTypeFilter" name="articleType"><option value="">全部类型</option><option value="model_release">模型发布</option><option value="dataset_release">数据集/基准</option><option value="project_release">项目发布</option><option value="company">公司/团队</option><option value="funding">融资</option><option value="acquisition">收购</option><option value="research">研究动态</option><option value="policy">政策与安全</option><option value="event">活动</option></select>
+          </label>
+          <label class="field-label" for="newsImportanceFilter">重要程度
+            <select id="newsImportanceFilter" name="importance"><option value="">全部</option><option value="critical">关键</option><option value="major">重要</option><option value="notable">值得关注</option><option value="routine">常规</option></select>
+          </label>
+          <label class="field-label" for="newsSourceFilter">来源
+            <select id="newsSourceFilter" name="source"><option value="">全部来源</option></select>
+          </label>
+          <label class="field-label news-query-field" for="newsQuery">搜索
+            <input id="newsQuery" name="q" type="search" placeholder="标题、摘要、来源或主题" autocomplete="off">
+          </label>
+          <label class="news-check" for="newsUnreadFilter"><input id="newsUnreadFilter" name="unread" type="checkbox"><span>只看未读</span></label>
+          <label class="news-check" for="newsSavedFilter"><input id="newsSavedFilter" name="saved" type="checkbox"><span>只看已保存</span></label>
+          <div class="news-filter-actions"><button class="button button-secondary" type="submit">应用筛选</button><button class="text-action" id="newsFilterReset" type="button">清除</button></div>
+        </form>
+
+        <div class="news-source-health" id="newsSourceHealth" aria-live="polite"></div>
+        <div class="news-layout">
+          <section class="news-list-pane" aria-labelledby="newsListTitle">
+            <div class="section-heading is-tight"><div><h2 id="newsListTitle">最新动态</h2><p id="newsListSummary">正在读取新闻源。</p></div><span class="section-count" id="newsResultCount">0 条</span></div>
+            <div class="news-list" id="newsList" aria-live="polite"></div>
+            <div class="empty-state is-compact" id="newsEmpty" hidden><strong>当前没有匹配新闻</strong><p id="newsEmptyMessage">点击“刷新新闻”读取启用的来源，或调整筛选。</p></div>
+          </section>
+          <article class="news-reader" id="newsReader" aria-live="polite">
+            <div class="empty-state is-compact"><strong>选择一条新闻</strong><p>新闻正文会在站内加载；如果原文无法缓存，Atlas 会保留摘要并明确标注。</p></div>
+          </article>
         </div>
       </section>
 
@@ -902,6 +960,6 @@
   </dialog>
 
   <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-  <script src="app.js?v=0.17.4" defer></script>
+  <script src="app.js?v=0.18.0" defer></script>
 </body>
 </html>

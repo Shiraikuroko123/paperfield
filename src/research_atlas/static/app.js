@@ -37,6 +37,17 @@ const state = {
     query: "",
     filters: { domain: "", source: "", maturity: "", from: "", to: "" },
   },
+  news: {
+    items: [],
+    sources: [],
+    runs: [],
+    stats: null,
+    selectedId: 0,
+    selected: null,
+    loading: false,
+    error: "",
+    filters: { domain: "", topic: "", articleType: "", source: "", importance: "", from: "", to: "", unread: false, saved: false, q: "" },
+  },
   knowledge: {
     method: [],
     problem: [],
@@ -426,6 +437,7 @@ function showView(view, { item = null, updateUrl = true } = {}) {
     else void loadCurriculum();
   }
   if (view === "loop") void loadLoopOperations();
+  if (view === "news") void loadNews();
 }
 
 function paperfieldPaperIdUrl(paperfieldId) {
@@ -1769,6 +1781,7 @@ function renderCounts() {
     const activeBatches = state.editor.batches.filter((batch) => ["queued", "previewing", "previewed", "running", "paused", "partial"].includes(batch.status)).length;
     el("navEditorCount").textContent = stats.editor_active_batches ?? activeBatches;
   }
+  if (el("navNewsCount")) el("navNewsCount").textContent = state.news.stats?.unread ?? state.news.items.filter((item) => !item.read_at).length;
   el("signalDraftCount").textContent = stats.frontier_signal_drafts || (data.signal_drafts || []).length;
   el("libraryPaperCount").textContent = Number(stats.papers || 0);
   el("libraryProjectCount").textContent = Number(stats.projects || 0);
@@ -1781,6 +1794,7 @@ function renderAll() {
   renderLibrary();
   renderTasks();
   renderFrontierRadar();
+  renderNews();
   renderKnowledgeViews();
   renderPublicThreads();
   renderLoop();
@@ -1917,6 +1931,188 @@ async function loadFrontierRadar() {
     state.frontier.loading = false;
     renderFrontierRadar();
   }
+}
+
+const newsTypeLabels = {
+  model_release: "模型发布",
+  dataset_release: "数据集/基准",
+  project_release: "项目发布",
+  company: "公司/团队",
+  funding: "融资",
+  acquisition: "收购",
+  research: "研究动态",
+  policy: "政策与安全",
+  event: "活动",
+};
+const newsImportanceLabels = { critical: "关键", major: "重要", notable: "值得关注", routine: "常规" };
+const newsDomainLabels = { embodied: "具身智能", llm: "大模型", cross: "交叉" };
+
+function newsDomainLabel(value) { return newsDomainLabels[value] || value || "未分域"; }
+function newsTypeLabel(value) { return newsTypeLabels[value] || value || "研究动态"; }
+function newsImportanceLabel(value) { return newsImportanceLabels[value] || value || "未标注"; }
+function newsContentStatusLabel(value) {
+  return { cached: "正文已缓存", feed_only: "仅有摘要", unavailable: "正文暂不可用", failed: "抓取失败" }[value] || value || "内容状态未知";
+}
+
+function newsFilterQuery() {
+  const filters = state.news.filters;
+  const params = new URLSearchParams({ limit: "80" });
+  Object.entries({ domain: filters.domain, topic: filters.topic, articleType: filters.articleType, source: filters.source, importance: filters.importance, from: filters.from, to: filters.to, q: filters.q }).forEach(([key, value]) => { if (value) params.set(key, value); });
+  if (filters.unread) params.set("unread", "1");
+  if (filters.saved) params.set("saved", "1");
+  return params.toString();
+}
+
+function newsItemMarkup(item) {
+  const selected = Number(item.id) === Number(state.news.selectedId);
+  const domains = (item.domains || []).map(newsDomainLabel).join(" / ");
+  const status = newsContentStatusLabel(item.content_status);
+  return `<button class="news-row${selected ? " is-selected" : ""}${item.read_at ? " is-read" : ""}" type="button" data-news-id="${escapeHtml(item.id)}" aria-pressed="${String(selected)}">
+    <span class="news-row-topline"><span class="state-label ${item.importance === "major" || item.importance === "critical" ? "is-warning" : "is-primary"}">${escapeHtml(newsImportanceLabel(item.importance))}</span><span>${escapeHtml(newsTypeLabel(item.article_type))}</span><span>${escapeHtml(domains)}</span><span>${escapeHtml(displayDate(item.published_at || item.updated_at))}</span></span>
+    <strong>${escapeHtml(item.title || "未命名新闻")}</strong>
+    <span class="news-row-summary">${escapeHtml(textSnippet(item.summary || item.dek || "来源未提供摘要", 220))}</span>
+    <span class="news-row-meta"><span>${escapeHtml(item.source_label || item.source_key)}</span><span>${escapeHtml(status)}</span>${item.saved ? "<span>已保存</span>" : ""}</span>
+  </button>`;
+}
+
+function renderNewsSourceOptions() {
+  const select = el("newsSourceFilter");
+  if (!select) return;
+  const current = state.news.filters.source;
+  select.innerHTML = `<option value="">全部来源</option>${state.news.sources.map((source) => `<option value="${escapeHtml(source.key)}" ${source.key === current ? "selected" : ""}>${escapeHtml(source.label)}${source.trust_tier === "secondary" ? " · 媒体" : ""}</option>`).join("")}`;
+}
+
+function renderNewsSourceHealth() {
+  const target = el("newsSourceHealth");
+  if (!target) return;
+  target.innerHTML = state.news.sources.map((source) => {
+    const connected = source.last_success_at && !source.last_error;
+    const failed = Boolean(source.last_error);
+    const cls = failed ? "is-danger" : connected ? "is-success" : "is-warning";
+    const stateLabel = failed ? "失败" : connected ? "已更新" : "未运行";
+    return `<span class="news-source-health-item"><span class="state-label ${cls}">${stateLabel}</span><strong>${escapeHtml(source.label)}</strong><small>${failed ? escapeHtml(textSnippet(source.last_error, 100)) : escapeHtml(displayDate(source.last_success_at || source.last_checked_at))}</small></span>`;
+  }).join("") || `<p class="term-action-note">尚未配置新闻来源。</p>`;
+}
+
+function renderNewsReader() {
+  const target = el("newsReader");
+  if (!target) return;
+  const item = state.news.selected;
+  if (!item) {
+    target.innerHTML = `<div class="empty-state is-compact"><strong>选择一条新闻</strong><p>${escapeHtml(state.news.error || "新闻正文会在站内加载；如果原文无法缓存，Atlas 会保留摘要并明确标注。")}</p></div>`;
+    return;
+  }
+  const body = item.content_status === "cached" && item.body_html
+    ? `<div class="news-reader-body">${item.body_html}</div>`
+    : `<div class="news-reader-fallback"><span class="state-label is-warning">${escapeHtml(newsContentStatusLabel(item.content_status))}</span><p>${escapeHtml(item.summary || item.dek || "来源未提供可阅读摘要。")}</p>${item.content_status !== "unavailable" ? `<button class="button button-secondary" type="button" data-news-hydrate="${escapeHtml(item.id)}">重新加载正文</button>` : ""}</div>`;
+  const papers = (item.related_paper_refs || []).map((ref) => `<a class="button button-secondary" href="${escapeHtml(paperfieldReferenceUrl(ref))}">精读 ${escapeHtml(ref)}</a>`).join("");
+  target.innerHTML = `<header class="news-reader-header"><div><div class="row-topline"><span class="state-label ${item.importance === "major" || item.importance === "critical" ? "is-warning" : "is-primary"}">${escapeHtml(newsImportanceLabel(item.importance))}</span><span>${escapeHtml(newsTypeLabel(item.article_type))}</span><span>${escapeHtml((item.domains || []).map(newsDomainLabel).join(" / "))}</span></div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.source_label || item.source_key)}${item.author ? ` · ${escapeHtml(item.author)}` : ""} · ${escapeHtml(displayDate(item.published_at || item.updated_at))}</p></div><div class="news-reader-actions"><button class="button button-secondary" type="button" data-news-save="${escapeHtml(item.id)}">${item.saved ? "取消保存" : "保存"}</button><button class="button button-secondary" type="button" data-news-read="${escapeHtml(item.id)}">${item.read_at ? "标为未读" : "标为已读"}</button></div></header>${body}<footer class="news-provenance"><div><strong>来源与缓存</strong><span>${escapeHtml(item.source_url)}</span><span>${escapeHtml(newsContentStatusLabel(item.content_status))} · 抓取于 ${escapeHtml(displayDate(item.fetched_at))}</span>${item.content_sha256 ? `<span>内容 SHA-256 ${escapeHtml(String(item.content_sha256).slice(0, 20))}</span>` : ""}${item.license_note ? `<span>${escapeHtml(item.license_note)}</span>` : ""}</div>${papers ? `<div class="news-related-links"><strong>相关论文</strong>${papers}</div>` : ""}<a class="text-action" href="${escapeHtml(item.source_url)}" target="_blank" rel="noreferrer">查看原文来源</a></footer>`;
+}
+
+function renderNews() {
+  const target = el("newsList");
+  if (!target) return;
+  target.innerHTML = state.news.items.map(newsItemMarkup).join("");
+  el("newsEmpty").hidden = state.news.items.length > 0;
+  el("newsEmptyMessage").textContent = state.news.error || "点击“刷新新闻”读取启用的来源，或调整筛选。";
+  el("newsResultCount").textContent = `${state.news.items.length} 条`;
+  el("newsListSummary").textContent = state.news.stats ? `${state.news.stats.cached || 0} 条已有站内正文，来源状态见下方。` : "正在读取新闻源。";
+  if (state.news.stats) {
+    el("newsTotalCount").textContent = state.news.stats.total || 0;
+    el("newsCachedCount").textContent = state.news.stats.cached || 0;
+    el("newsUnreadCount").textContent = state.news.stats.unread || 0;
+    el("newsSavedCount").textContent = state.news.stats.saved || 0;
+    el("newsSourceCount").textContent = state.news.stats.enabled_sources || state.news.sources.length || 0;
+  }
+  renderNewsSourceOptions();
+  renderNewsSourceHealth();
+  renderNewsReader();
+}
+
+async function loadNews({ keepSelection = true } = {}) {
+  if (state.news.loading) return;
+  state.news.loading = true;
+  try {
+    const [result, sources] = await Promise.all([api(`/api/news?${newsFilterQuery()}`), api("/api/news/sources")]);
+    state.news.items = Array.isArray(result.items) ? result.items : [];
+    state.news.stats = result.stats || null;
+    state.news.sources = Array.isArray(sources.items) ? sources.items : [];
+    state.news.runs = [];
+    state.news.error = "";
+    if (!keepSelection || !state.news.items.some((item) => Number(item.id) === Number(state.news.selectedId))) state.news.selectedId = state.activeView === "news" ? (state.news.items[0]?.id || 0) : 0;
+    if (state.news.selectedId && state.activeView === "news") {
+      try { state.news.selected = await api(`/api/news/${encodeURIComponent(state.news.selectedId)}?hydrate=1`); } catch (error) { state.news.selected = null; state.news.error = error.message; }
+    } else state.news.selected = null;
+    el("newsAsOf").textContent = `最近一次读取 ${new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date())}`;
+    el("newsStatus").className = "state-label is-success";
+    el("newsStatus").textContent = "已读取";
+  } catch (error) {
+    state.news.error = error.message;
+    el("newsStatus").className = "state-label is-danger";
+    el("newsStatus").textContent = "读取失败";
+  } finally {
+    state.news.loading = false;
+    renderNews();
+    renderCounts();
+  }
+}
+
+async function openNewsItem(id) {
+  state.news.selectedId = Number(id);
+  renderNews();
+  try {
+    state.news.selected = await api(`/api/news/${encodeURIComponent(id)}?hydrate=1`);
+    await api(`/api/news/${encodeURIComponent(id)}/read`, { method: "POST", body: JSON.stringify({ read: true }) });
+    const row = state.news.items.find((item) => Number(item.id) === Number(id));
+    if (row) row.read_at = new Date().toISOString();
+    state.news.stats = await api("/api/news/stats");
+  } catch (error) {
+    state.news.error = error.message;
+  }
+  renderNews();
+}
+
+async function toggleNewsSaved(id) {
+  const row = state.news.items.find((item) => Number(item.id) === Number(id));
+  const saved = !(row?.saved || state.news.selected?.saved);
+  try {
+    const result = await api(`/api/news/${encodeURIComponent(id)}/save`, { method: "POST", body: JSON.stringify({ saved }) });
+    state.news.selected = Number(state.news.selectedId) === Number(id) ? result : state.news.selected;
+    if (row) row.saved = saved;
+    state.news.stats = await api("/api/news/stats");
+    toast(saved ? "已保存新闻" : "已取消保存");
+  } catch (error) { toast(error.message, true); }
+  renderNews();
+}
+
+async function toggleNewsRead(id) {
+  const row = state.news.items.find((item) => Number(item.id) === Number(id));
+  const read = !row?.read_at;
+  try {
+    const result = await api(`/api/news/${encodeURIComponent(id)}/read`, { method: "POST", body: JSON.stringify({ read }) });
+    state.news.selected = Number(state.news.selectedId) === Number(id) ? { ...state.news.selected, ...result } : state.news.selected;
+    if (row) row.read_at = read ? new Date().toISOString() : null;
+    state.news.stats = await api("/api/news/stats");
+  } catch (error) { toast(error.message, true); }
+  renderNews();
+}
+
+async function refreshNews() {
+  const button = el("newsRefresh");
+  button.disabled = true;
+  el("newsStatus").className = "state-label is-primary";
+  el("newsStatus").textContent = "刷新中";
+  try {
+    await api("/api/news/refresh", { method: "POST", body: JSON.stringify({ limitPerSource: 20 }) });
+    await loadNews({ keepSelection: false });
+    toast("新闻源刷新完成");
+  } catch (error) {
+    state.news.error = error.message;
+    el("newsStatus").className = "state-label is-danger";
+    el("newsStatus").textContent = "刷新失败";
+    renderNews();
+    toast(error.message, true);
+  } finally { button.disabled = false; }
 }
 
 const knowledgeKindLabels = { method: "方法", problem: "问题", thread: "研究线程", term: "术语", paper: "论文", project: "项目" };
@@ -4452,6 +4648,28 @@ function bindEvents() {
     state.frontier.filters = { domain: "", source: "", maturity: "", from: "", to: "" };
     void loadFrontierRadar();
   });
+  el("newsFilterForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    state.news.filters = {
+      domain: el("newsDomainFilter").value,
+      topic: "",
+      articleType: el("newsTypeFilter").value,
+      source: el("newsSourceFilter").value,
+      importance: el("newsImportanceFilter").value,
+      from: "",
+      to: "",
+      unread: el("newsUnreadFilter").checked,
+      saved: el("newsSavedFilter").checked,
+      q: el("newsQuery").value.trim(),
+    };
+    void loadNews({ keepSelection: false });
+  });
+  el("newsFilterReset").addEventListener("click", () => {
+    el("newsFilterForm").reset();
+    state.news.filters = { domain: "", topic: "", articleType: "", source: "", importance: "", from: "", to: "", unread: false, saved: false, q: "" };
+    void loadNews({ keepSelection: false });
+  });
+  el("newsRefresh").addEventListener("click", () => void refreshNews());
 
   ["focusEditButton", "focusEditButtonMain"].forEach((id) => el(id).addEventListener("click", (event) => openFocusDialog(event.currentTarget)));
   ["focusDialog", "researchViewDialog", "termDetailDialog", "knowledgeDialog", "signalDialog", "analysisDialog"].forEach((id) => bindDialogFocusRestore(el(id)));
@@ -4530,6 +4748,26 @@ function bindEvents() {
   }));
 
   document.addEventListener("click", (event) => {
+    const newsRow = event.target.closest("button[data-news-id]");
+    if (newsRow) {
+      void openNewsItem(newsRow.dataset.newsId);
+      return;
+    }
+    const newsSave = event.target.closest("[data-news-save]");
+    if (newsSave) {
+      void toggleNewsSaved(newsSave.dataset.newsSave);
+      return;
+    }
+    const newsRead = event.target.closest("[data-news-read]");
+    if (newsRead) {
+      void toggleNewsRead(newsRead.dataset.newsRead);
+      return;
+    }
+    const newsHydrate = event.target.closest("[data-news-hydrate]");
+    if (newsHydrate) {
+      void openNewsItem(newsHydrate.dataset.newsHydrate);
+      return;
+    }
     const publicThreadButton = event.target.closest("[data-public-thread-ref]");
     if (publicThreadButton) {
       void openPublicThread(publicThreadButton.dataset.publicThreadRef);
@@ -4771,7 +5009,7 @@ async function openInitialRoute(updateUrl = false) {
     if (updateUrl) window.history.pushState({}, "", locationForView("threads", state.researchThreads.selected));
     return;
   }
-  if (["radar", "threads", "terms", "methods", "library", "analyses", "loop", "editor"].includes(requestedView)) {
+  if (["radar", "news", "threads", "terms", "methods", "library", "analyses", "loop", "editor"].includes(requestedView)) {
     showView(requestedView, { updateUrl });
     return;
   }
@@ -4832,6 +5070,7 @@ async function init() {
     const [config] = await Promise.all([api("/api/config"), loadBootstrap()]);
     applyRuntimeConfig(config);
     await Promise.all([loadFrontierRadar(), loadKnowledgeViews(), loadCurriculum()]);
+    await loadNews();
     if (state.activeView === "loop") await loadLoopOperations();
     el("loadingShell").hidden = true;
     await openInitialRoute(false);

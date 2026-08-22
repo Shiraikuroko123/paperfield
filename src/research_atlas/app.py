@@ -28,6 +28,7 @@ from typing import Any
 
 try:
     from .schema_validation import SchemaValidationError, validate_json_schema
+    from .news import DEFAULT_NEWS_SOURCES, fetch_article, fetch_feed, parse_feed, source_to_dict
     from .curriculum import (
         COURSE_VENDOR_ROOT,
         build_curriculum,
@@ -36,6 +37,7 @@ try:
     )
 except ImportError:
     from schema_validation import SchemaValidationError, validate_json_schema
+    from news import DEFAULT_NEWS_SOURCES, fetch_article, fetch_feed, parse_feed, source_to_dict
     from curriculum import COURSE_VENDOR_ROOT, build_curriculum, load_course_lesson, resolve_course_asset_path
 
 
@@ -47,8 +49,8 @@ DEFAULT_DB_PATH = DEFAULT_LOCAL_DIR / "atlas.db"
 ANALYSIS_STAGE_SCHEMA = json.loads(
     (PACKAGE_DIR / "schemas" / "analysis-stage-complete.schema.json").read_text(encoding="utf-8")
 )
-APP_VERSION = "0.17.4"
-SCHEMA_VERSION = 16
+APP_VERSION = "0.18.0"
+SCHEMA_VERSION = 17
 SCHEMA_MIGRATION_SPECS = {
     8: ("phase5_private_research_loop", "phase5-v8-20260812"),
     9: ("phase6_reproducible_workspace", "phase6-v9-20260812"),
@@ -59,6 +61,7 @@ SCHEMA_MIGRATION_SPECS = {
     14: ("phase8_owner_claim_identity_and_evaluation", "phase8-v14-20260813"),
     15: ("phase8_publication_and_evaluation_integrity", "phase8-v15-20260813"),
     16: ("phase9_owner_scoped_learning_progress", "phase9-v16-20260813"),
+    17: ("phase10_atlas_news_workspace", "phase10-v17-20260822"),
 }
 MAX_JSON_BYTES = 1024 * 1024
 RESEARCH_IMPORT_MAX_JSON_BYTES = 64 * 1024 * 1024
@@ -2371,6 +2374,123 @@ class AtlasStore:
         )
 
     @staticmethod
+    def _migrate_v16_to_v17(db: sqlite3.Connection) -> None:
+        """Install the evidence-preserving, in-app news workspace."""
+        schema_sql = (
+            """
+            CREATE TABLE IF NOT EXISTS news_sources (
+                key TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                source_kind TEXT NOT NULL DEFAULT 'official_lab',
+                feed_url TEXT NOT NULL,
+                article_hosts_json TEXT NOT NULL DEFAULT '[]',
+                domains_json TEXT NOT NULL DEFAULT '[]',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                trust_tier TEXT NOT NULL DEFAULT 'first_party',
+                etag TEXT NOT NULL DEFAULT '',
+                last_modified TEXT NOT NULL DEFAULT '',
+                last_checked_at TEXT,
+                last_success_at TEXT,
+                last_error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS news_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_key TEXT NOT NULL,
+                source_identifier TEXT NOT NULL,
+                canonical_url TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                title TEXT NOT NULL,
+                dek TEXT NOT NULL DEFAULT '',
+                summary TEXT NOT NULL DEFAULT '',
+                body_html TEXT NOT NULL DEFAULT '',
+                body_text TEXT NOT NULL DEFAULT '',
+                author TEXT NOT NULL DEFAULT '',
+                published_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                fetched_at TEXT NOT NULL,
+                content_status TEXT NOT NULL DEFAULT 'feed_only',
+                content_sha256 TEXT NOT NULL DEFAULT '',
+                domains_json TEXT NOT NULL DEFAULT '[]',
+                topics_json TEXT NOT NULL DEFAULT '[]',
+                related_paper_refs_json TEXT NOT NULL DEFAULT '[]',
+                article_type TEXT NOT NULL DEFAULT 'research',
+                importance TEXT NOT NULL DEFAULT 'routine',
+                image_url TEXT NOT NULL DEFAULT '',
+                license_note TEXT NOT NULL DEFAULT '',
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                UNIQUE(source_key, source_identifier),
+                FOREIGN KEY(source_key) REFERENCES news_sources(key)
+            );
+            CREATE TABLE IF NOT EXISTS news_read_state (
+                owner_id TEXT NOT NULL,
+                news_item_id INTEGER NOT NULL,
+                read_at TEXT,
+                saved INTEGER NOT NULL DEFAULT 0,
+                note TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(owner_id, news_item_id),
+                FOREIGN KEY(news_item_id) REFERENCES news_items(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS news_fetch_runs (
+                id TEXT PRIMARY KEY,
+                source_key TEXT NOT NULL,
+                status TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                fetched_count INTEGER NOT NULL DEFAULT 0,
+                accepted_count INTEGER NOT NULL DEFAULT 0,
+                new_count INTEGER NOT NULL DEFAULT 0,
+                updated_count INTEGER NOT NULL DEFAULT 0,
+                failed_count INTEGER NOT NULL DEFAULT 0,
+                error_text TEXT NOT NULL DEFAULT '',
+                query_json TEXT NOT NULL DEFAULT '{}',
+                FOREIGN KEY(source_key) REFERENCES news_sources(key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_news_items_recent
+                ON news_items(published_at DESC, updated_at DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_news_items_source
+                ON news_items(source_key, published_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_news_items_type
+                ON news_items(article_type, importance, published_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_news_read_owner
+                ON news_read_state(owner_id, read_at, saved, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_news_runs_recent
+                ON news_fetch_runs(source_key, started_at DESC);
+            """
+        )
+        for statement in schema_sql.split(";\n"):
+            if statement.strip():
+                db.execute(statement)
+        now = utc_now()
+        for source in DEFAULT_NEWS_SOURCES:
+            item = source_to_dict(source)
+            db.execute(
+                """
+                INSERT INTO news_sources(
+                    key, label, source_kind, feed_url, article_hosts_json, domains_json,
+                    enabled, trust_tier, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    label=excluded.label,
+                    source_kind=excluded.source_kind,
+                    feed_url=excluded.feed_url,
+                    article_hosts_json=excluded.article_hosts_json,
+                    domains_json=excluded.domains_json,
+                    trust_tier=excluded.trust_tier,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    item["key"], item["label"], item["source_kind"], item["feed_url"],
+                    json.dumps(item["article_hosts"], ensure_ascii=False),
+                    json.dumps(item["domains"], ensure_ascii=False), item["trust_tier"], now, now,
+                ),
+            )
+
+    @staticmethod
     def _validate_thread_public_array(
         revision_id: str, field: str, raw: Any, item_limit: int, item_maximum: int
     ) -> list[str]:
@@ -2546,6 +2666,7 @@ class AtlasStore:
             14: (*SCHEMA_MIGRATION_SPECS[14], self._migrate_v13_to_v14),
             15: (*SCHEMA_MIGRATION_SPECS[15], self._migrate_v14_to_v15),
             16: (*SCHEMA_MIGRATION_SPECS[16], self._migrate_v15_to_v16),
+            17: (*SCHEMA_MIGRATION_SPECS[17], self._migrate_v16_to_v17),
         }
         self._validate_migration_ledger(db, current)
         outer_savepoint = "atlas_migration_chain"
@@ -6084,6 +6205,314 @@ class AtlasStore:
                 (safe_limit,),
             ).fetchall()
             return [self._frontier_update_from_row(row) for row in rows]
+
+    @staticmethod
+    def _news_json(raw: Any, fallback: list[Any] | None = None) -> list[Any]:
+        try:
+            value = json.loads(raw or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            value = fallback or []
+        return value if isinstance(value, list) else (fallback or [])
+
+    @staticmethod
+    def _news_source_from_row(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "key": row["key"],
+            "label": row["label"],
+            "source_kind": row["source_kind"],
+            "feed_url": row["feed_url"],
+            "article_hosts": AtlasStore._news_json(row["article_hosts_json"]),
+            "domains": AtlasStore._news_json(row["domains_json"]),
+            "enabled": bool(row["enabled"]),
+            "trust_tier": row["trust_tier"],
+            "etag": row["etag"],
+            "last_modified": row["last_modified"],
+            "last_checked_at": row["last_checked_at"],
+            "last_success_at": row["last_success_at"],
+            "last_error": row["last_error"],
+            "updated_at": row["updated_at"],
+        }
+
+    @classmethod
+    def _news_item_from_row(cls, row: sqlite3.Row, include_body: bool = False) -> dict[str, Any]:
+        item = {
+            "id": row["id"],
+            "source_key": row["source_key"],
+            "source_label": row["source_label"] if "source_label" in row.keys() else row["source_key"],
+            "source_kind": row["source_kind"] if "source_kind" in row.keys() else "",
+            "trust_tier": row["trust_tier"] if "trust_tier" in row.keys() else "",
+            "source_identifier": row["source_identifier"],
+            "canonical_url": row["canonical_url"],
+            "source_url": row["source_url"],
+            "title": row["title"],
+            "dek": row["dek"],
+            "summary": row["summary"],
+            "author": row["author"],
+            "published_at": row["published_at"],
+            "updated_at": row["updated_at"],
+            "fetched_at": row["fetched_at"],
+            "content_status": row["content_status"],
+            "content_sha256": row["content_sha256"],
+            "domains": cls._news_json(row["domains_json"]),
+            "topics": cls._news_json(row["topics_json"]),
+            "related_paper_refs": cls._news_json(row["related_paper_refs_json"]),
+            "article_type": row["article_type"],
+            "importance": row["importance"],
+            "license_note": row["license_note"],
+            "first_seen_at": row["first_seen_at"],
+            "last_seen_at": row["last_seen_at"],
+            "read_at": row["read_at"] if "read_at" in row.keys() else None,
+            "saved": bool(row["saved"]) if "saved" in row.keys() else False,
+            "note": row["note"] if "note" in row.keys() else "",
+        }
+        if include_body:
+            item["body_html"] = row["body_html"]
+            item["body_text"] = row["body_text"]
+        return item
+
+    def list_news_sources(self, enabled_only: bool = False) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            where = "WHERE enabled=1" if enabled_only else ""
+            rows = db.execute(f"SELECT * FROM news_sources {where} ORDER BY trust_tier, label").fetchall()
+            return [self._news_source_from_row(row) for row in rows]
+
+    def get_news_source(self, source_key: str) -> dict[str, Any]:
+        key = compact_text(source_key, 80).casefold()
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM news_sources WHERE key=?", (key,)).fetchone()
+            if row is None:
+                raise NotFoundError("新闻来源不存在")
+            return self._news_source_from_row(row)
+
+    def start_news_fetch_run(self, source_key: str, query: dict[str, Any] | None = None) -> dict[str, Any]:
+        key = compact_text(source_key, 80).casefold()
+        run_id = str(uuid.uuid4())
+        now = utc_now()
+        with self._lock, self.connect() as db:
+            if db.execute("SELECT 1 FROM news_sources WHERE key=?", (key,)).fetchone() is None:
+                raise NotFoundError("新闻来源不存在")
+            db.execute(
+                "INSERT INTO news_fetch_runs(id, source_key, status, started_at, query_json) VALUES (?, ?, 'running', ?, ?)",
+                (run_id, key, now, json.dumps(query or {}, ensure_ascii=False)),
+            )
+        return {"id": run_id, "source_key": key, "status": "running", "started_at": now}
+
+    def finish_news_fetch_run(self, run_id: str, status: str, counts: dict[str, Any] | None = None, error_text: str = "") -> dict[str, Any]:
+        if status not in {"completed", "partial", "failed", "not_modified"}:
+            raise AtlasError("新闻抓取运行状态无效")
+        values = counts or {}
+        now = utc_now()
+        with self._lock, self.connect() as db:
+            db.execute(
+                """
+                UPDATE news_fetch_runs SET status=?, finished_at=?, fetched_count=?, accepted_count=?,
+                    new_count=?, updated_count=?, failed_count=?, error_text=? WHERE id=?
+                """,
+                (status, now, int(values.get("fetched", 0)), int(values.get("accepted", 0)), int(values.get("new", 0)), int(values.get("updated", 0)), int(values.get("failed", 0)), compact_text(error_text, 4000), run_id),
+            )
+            row = db.execute("SELECT * FROM news_fetch_runs WHERE id=?", (run_id,)).fetchone()
+            if row is None:
+                raise NotFoundError("新闻抓取运行记录不存在")
+            return dict(row)
+
+    def record_news_items(self, run_id: str, candidates: list[dict[str, Any]]) -> dict[str, int]:
+        if not isinstance(candidates, list) or len(candidates) > 500:
+            raise AtlasError("单次新闻候选数量必须不超过 500")
+        counts = {"accepted": 0, "new": 0, "updated": 0, "unchanged": 0}
+        now = utc_now()
+        with self._lock, self.connect() as db:
+            run = db.execute("SELECT * FROM news_fetch_runs WHERE id=?", (run_id,)).fetchone()
+            if run is None or run["status"] != "running":
+                raise ConflictError("新闻候选与抓取运行状态不匹配")
+            seen: set[str] = set()
+            for candidate in candidates:
+                if not isinstance(candidate, dict):
+                    raise AtlasError("新闻候选必须是对象")
+                source_key = compact_text(candidate.get("source_key"), 80).casefold()
+                identifier = compact_text(candidate.get("source_identifier"), 64).lower()
+                if source_key != run["source_key"] or not re.fullmatch(r"[a-f0-9]{64}", identifier) or identifier in seen:
+                    continue
+                seen.add(identifier)
+                title = compact_text(candidate.get("title"), 1000)
+                source_url = clean_http_url(candidate.get("source_url") or candidate.get("canonical_url"))
+                if not title or not source_url:
+                    continue
+                body_html = str(candidate.get("body_html") or "")[:300_000]
+                body_text = clean_multiline_text(candidate.get("body_text"), 300_000)
+                content_status = "cached" if len(body_text.strip()) >= 120 else "feed_only"
+                content_sha = hashlib.sha256(body_html.encode("utf-8")).hexdigest() if body_html else ""
+                existing = db.execute("SELECT id, payload_json, body_html, body_text, content_status FROM news_items WHERE source_key=? AND source_identifier=?", (source_key, identifier)).fetchone()
+                if existing is None:
+                    counts["new"] += 1
+                elif str(candidate.get("payload_sha256") or "") == str(existing["payload_json"] or "") and not body_html:
+                    counts["unchanged"] += 1
+                else:
+                    counts["updated"] += 1
+                published = compact_text(candidate.get("published_at"), 80)
+                updated = compact_text(candidate.get("updated_at") or published, 80)
+                domains = clean_string_list(candidate.get("domains"), 40, 8)
+                topics = clean_string_list(candidate.get("topics"), 120, 20)
+                related = clean_string_list(candidate.get("related_paper_refs"), 500, 30)
+                payload = json.dumps({"payload_sha256": compact_text(candidate.get("payload_sha256"), 64), "source_identifier": identifier}, ensure_ascii=False, sort_keys=True)
+                db.execute(
+                    """
+                    INSERT INTO news_items(
+                        source_key, source_identifier, canonical_url, source_url, title, dek, summary,
+                        body_html, body_text, author, published_at, updated_at, fetched_at, content_status,
+                        content_sha256, domains_json, topics_json, related_paper_refs_json, article_type,
+                        importance, image_url, license_note, payload_json, first_seen_at, last_seen_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?)
+                    ON CONFLICT(source_key, source_identifier) DO UPDATE SET
+                        canonical_url=excluded.canonical_url, source_url=excluded.source_url,
+                        title=excluded.title, dek=excluded.dek, summary=excluded.summary,
+                        body_html=CASE WHEN excluded.body_html<>'' THEN excluded.body_html ELSE news_items.body_html END,
+                        body_text=CASE WHEN excluded.body_text<>'' THEN excluded.body_text ELSE news_items.body_text END,
+                        author=excluded.author, published_at=excluded.published_at, updated_at=excluded.updated_at,
+                        fetched_at=excluded.fetched_at,
+                        content_status=CASE WHEN excluded.content_status='cached' THEN 'cached' ELSE news_items.content_status END,
+                        content_sha256=CASE WHEN excluded.content_sha256<>'' THEN excluded.content_sha256 ELSE news_items.content_sha256 END,
+                        domains_json=excluded.domains_json, topics_json=excluded.topics_json,
+                        related_paper_refs_json=excluded.related_paper_refs_json, article_type=excluded.article_type,
+                        importance=excluded.importance, license_note=excluded.license_note, payload_json=excluded.payload_json,
+                        last_seen_at=excluded.last_seen_at
+                    """,
+                    (source_key, identifier, source_url, source_url, title, clean_multiline_text(candidate.get("dek"), 1000), clean_multiline_text(candidate.get("summary"), 20_000), body_html, body_text, compact_text(candidate.get("author"), 240), published, updated, now, content_status, content_sha, json.dumps(domains, ensure_ascii=False), json.dumps(topics, ensure_ascii=False), json.dumps(related, ensure_ascii=False), compact_text(candidate.get("article_type") or "research", 40), compact_text(candidate.get("importance") or "routine", 20), compact_text(candidate.get("license_note"), 500), payload, now, now),
+                )
+                counts["accepted"] += 1
+        return counts
+
+    def list_news_items(self, owner_id: str = "local", filters: dict[str, Any] | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        filters = filters or {}
+        owner = self._learning_owner(owner_id)
+        conditions = ["1=1"]
+        params: list[Any] = [owner]
+        domain = compact_text(filters.get("domain"), 30).casefold()
+        topic = compact_text(filters.get("topic"), 80).casefold()
+        source = compact_text(filters.get("source"), 80).casefold()
+        article_type = compact_text(filters.get("article_type") or filters.get("articleType"), 40).casefold()
+        importance = compact_text(filters.get("importance"), 20).casefold()
+        query = compact_text(filters.get("q") or filters.get("query"), 240)
+        if domain:
+            conditions.append("EXISTS (SELECT 1 FROM json_each(n.domains_json) WHERE lower(value)=?)")
+            params.append(domain)
+        if topic:
+            conditions.append("EXISTS (SELECT 1 FROM json_each(n.topics_json) WHERE lower(value)=?)")
+            params.append(topic)
+        if source:
+            conditions.append("n.source_key=?")
+            params.append(source)
+        if article_type:
+            conditions.append("n.article_type=?")
+            params.append(article_type)
+        if importance:
+            conditions.append("n.importance=?")
+            params.append(importance)
+        for key, operator in (("from", ">="), ("to", "<=")):
+            value = compact_text(filters.get(key), 30)
+            if value:
+                conditions.append(f"substr(CASE WHEN n.published_at<>'' THEN n.published_at ELSE n.updated_at END, 1, 10) {operator} ?")
+                params.append(value[:10])
+        if query:
+            conditions.append("(lower(n.title) LIKE ? OR lower(n.summary) LIKE ? OR lower(s.label) LIKE ?)")
+            needle = f"%{query.casefold()}%"
+            params.extend([needle, needle, needle])
+        if filters.get("unread"):
+            conditions.append("rs.read_at IS NULL")
+        if filters.get("saved"):
+            conditions.append("COALESCE(rs.saved, 0)=1")
+        params.append(max(1, min(200, int(limit))))
+        with self.connect() as db:
+            rows = db.execute(
+                f"""
+                SELECT n.*, s.label AS source_label, s.source_kind AS source_kind, s.trust_tier AS trust_tier,
+                       rs.read_at, COALESCE(rs.saved, 0) AS saved, COALESCE(rs.note, '') AS note
+                FROM news_items n JOIN news_sources s ON s.key=n.source_key
+                LEFT JOIN news_read_state rs ON rs.news_item_id=n.id AND rs.owner_id=?
+                WHERE {' AND '.join(conditions)}
+                ORDER BY CASE WHEN n.published_at<>'' THEN n.published_at ELSE n.updated_at END DESC, n.id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+            return [self._news_item_from_row(row) for row in rows]
+
+    def get_news_item(self, item_id: int, owner_id: str = "local", *, include_body: bool = True, hydrate: bool = False) -> dict[str, Any]:
+        try:
+            normalized_id = int(item_id)
+        except (TypeError, ValueError) as error:
+            raise AtlasError("新闻 ID 无效") from error
+        if hydrate:
+            with self.connect() as db:
+                row = db.execute("SELECT n.*, s.label AS source_label, s.source_kind AS source_kind, s.trust_tier AS trust_tier, s.article_hosts_json, s.feed_url, s.domains_json AS source_domains_json, rs.read_at, COALESCE(rs.saved, 0) AS saved, COALESCE(rs.note, '') AS note FROM news_items n JOIN news_sources s ON s.key=n.source_key LEFT JOIN news_read_state rs ON rs.news_item_id=n.id AND rs.owner_id=? WHERE n.id=?", (self._learning_owner(owner_id), normalized_id)).fetchone()
+            if row is None:
+                raise NotFoundError("新闻不存在")
+            if row["content_status"] not in {"cached"}:
+                source = {"key": row["source_key"], "label": row["source_label"], "source_kind": row["source_kind"], "feed_url": row["feed_url"], "article_hosts": self._news_json(row["article_hosts_json"]), "domains": self._news_json(row["source_domains_json"]), "trust_tier": row["trust_tier"]}
+                try:
+                    body_html, body_text = fetch_article(source, row["source_url"])
+                except Exception as error:
+                    with self._lock, self.connect() as db:
+                        db.execute("UPDATE news_items SET content_status='unavailable', license_note=?, fetched_at=? WHERE id=?", (compact_text(str(error), 500), utc_now(), normalized_id))
+                else:
+                    with self._lock, self.connect() as db:
+                        db.execute("UPDATE news_items SET body_html=?, body_text=?, content_status='cached', content_sha256=?, fetched_at=?, license_note='' WHERE id=?", (body_html, body_text, hashlib.sha256(body_html.encode('utf-8')).hexdigest(), utc_now(), normalized_id))
+        with self.connect() as db:
+            row = db.execute("SELECT n.*, s.label AS source_label, s.source_kind AS source_kind, s.trust_tier AS trust_tier, rs.read_at, COALESCE(rs.saved, 0) AS saved, COALESCE(rs.note, '') AS note FROM news_items n JOIN news_sources s ON s.key=n.source_key LEFT JOIN news_read_state rs ON rs.news_item_id=n.id AND rs.owner_id=? WHERE n.id=?", (self._learning_owner(owner_id), normalized_id)).fetchone()
+            if row is None:
+                raise NotFoundError("新闻不存在")
+            return self._news_item_from_row(row, include_body=include_body)
+
+    def update_news_read_state(self, item_id: int, owner_id: str, *, read: bool | None = None, saved: bool | None = None, note: str | None = None) -> dict[str, Any]:
+        item = self.get_news_item(item_id, owner_id, include_body=False)
+        owner = self._learning_owner(owner_id)
+        now = utc_now()
+        with self._lock, self.connect() as db:
+            current = db.execute("SELECT * FROM news_read_state WHERE owner_id=? AND news_item_id=?", (owner, int(item["id"]))).fetchone()
+            read_at = (now if read else None) if read is not None else (current["read_at"] if current else None)
+            saved_value = (1 if saved else 0) if saved is not None else (int(current["saved"]) if current else 0)
+            note_value = compact_text(note, 2000) if note is not None else (current["note"] if current else "")
+            db.execute("INSERT INTO news_read_state(owner_id, news_item_id, read_at, saved, note, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(owner_id, news_item_id) DO UPDATE SET read_at=excluded.read_at, saved=excluded.saved, note=excluded.note, updated_at=excluded.updated_at", (owner, int(item["id"]), read_at, saved_value, note_value, now))
+        return self.get_news_item(item_id, owner_id, include_body=False)
+
+    def news_stats(self, owner_id: str = "local") -> dict[str, Any]:
+        owner = self._learning_owner(owner_id)
+        with self.connect() as db:
+            total = db.execute("SELECT COUNT(*) FROM news_items").fetchone()[0]
+            cached = db.execute("SELECT COUNT(*) FROM news_items WHERE content_status='cached'").fetchone()[0]
+            unread = db.execute("SELECT COUNT(*) FROM news_items n LEFT JOIN news_read_state rs ON rs.news_item_id=n.id AND rs.owner_id=? WHERE rs.read_at IS NULL", (owner,)).fetchone()[0]
+            saved = db.execute("SELECT COUNT(*) FROM news_read_state WHERE owner_id=? AND saved=1", (owner,)).fetchone()[0]
+            sources = db.execute("SELECT COUNT(*) FROM news_sources WHERE enabled=1").fetchone()[0]
+            runs = db.execute("SELECT COUNT(*) FROM news_fetch_runs WHERE started_at >= ?", ((datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),)).fetchone()[0]
+            return {"total": total, "cached": cached, "unread": unread, "saved": saved, "enabled_sources": sources, "runs_last_24h": runs}
+
+    def list_news_fetch_runs(self, limit: int = 30) -> list[dict[str, Any]]:
+        with self.connect() as db:
+            rows = db.execute("SELECT * FROM news_fetch_runs ORDER BY started_at DESC LIMIT ?", (max(1, min(100, int(limit))),)).fetchall()
+            return [dict(row) for row in rows]
+
+    def refresh_news(self, source_keys: list[str] | None = None, limit_per_source: int = 20) -> dict[str, Any]:
+        requested = {compact_text(value, 80).casefold() for value in (source_keys or []) if compact_text(value, 80)}
+        sources = [source for source in self.list_news_sources(True) if not requested or source["key"] in requested]
+        results: list[dict[str, Any]] = []
+        for source in sources:
+            run = self.start_news_fetch_run(source["key"], {"limit_per_source": max(1, min(50, int(limit_per_source)))})
+            try:
+                payload, headers = fetch_feed(source, etag=source.get("etag", ""), last_modified=source.get("last_modified", ""))
+                now = utc_now()
+                with self._lock, self.connect() as db:
+                    db.execute("UPDATE news_sources SET etag=?, last_modified=?, last_checked_at=?, last_success_at=?, last_error='', updated_at=? WHERE key=?", (headers.get("etag", ""), headers.get("last_modified", ""), now, now, now, source["key"]))
+                if headers.get("status") == "not_modified":
+                    results.append(self.finish_news_fetch_run(run["id"], "not_modified", {"fetched": 0}))
+                    continue
+                candidates = parse_feed(payload, type("Feed", (), source)())[: max(1, min(50, int(limit_per_source)))]
+                stored = self.record_news_items(run["id"], candidates)
+                results.append(self.finish_news_fetch_run(run["id"], "completed", {"fetched": len(candidates), **stored}))
+            except Exception as error:
+                message = compact_text(str(error) or error.__class__.__name__, 1000)
+                with self._lock, self.connect() as db:
+                    db.execute("UPDATE news_sources SET last_checked_at=?, last_error=?, updated_at=? WHERE key=?", (utc_now(), message, utc_now(), source["key"]))
+                results.append(self.finish_news_fetch_run(run["id"], "failed", {"failed": 1}, message))
+        return {"runs": results, "sources": self.list_news_sources(), "stats": self.news_stats()}
 
     def list_frontier_terms(self, limit: int = 80) -> list[dict[str, Any]]:
         safe_limit = max(1, min(200, int(limit)))
@@ -13395,6 +13824,8 @@ class AtlasStore:
                 "projects": db.execute("SELECT COUNT(*) FROM research_projects").fetchone()[0],
                 "frontier_candidates": db.execute("SELECT COUNT(*) FROM frontier_candidates").fetchone()[0],
                 "frontier_updates": db.execute("SELECT COUNT(*) FROM frontier_updates").fetchone()[0],
+                "news_items": db.execute("SELECT COUNT(*) FROM news_items").fetchone()[0],
+                "news_cached": db.execute("SELECT COUNT(*) FROM news_items WHERE content_status='cached'").fetchone()[0],
                 "frontier_terms": db.execute("SELECT COUNT(*) FROM frontier_term_candidates").fetchone()[0],
                 "frontier_signals": db.execute(
                     "SELECT COUNT(*) FROM frontier_signals WHERE status='published'"
@@ -16112,6 +16543,8 @@ class AtlasStore:
                 "projects": catalog_counts["projects"],
                 "frontier_candidates": catalog_counts["frontier_candidates"],
                 "frontier_updates": catalog_counts["frontier_updates"],
+                "news_items": catalog_counts["news_items"],
+                "news_cached": catalog_counts["news_cached"],
                 "frontier_terms": catalog_counts["frontier_terms"],
                 "frontier_signals": catalog_counts["frontier_signals"],
                 "knowledge_reviewed_entities": catalog_counts["knowledge_reviewed_entities"],
@@ -16736,6 +17169,8 @@ class AtlasHandler(SimpleHTTPRequestHandler):
             # platform-wide operations through Paperfield's account proxy.
             if parsed.path == "/api/private/backups" or parsed.path.startswith("/api/private/backups/"):
                 self.require_local_editor()
+            if parsed.path.startswith("/api/news"):
+                self.require_private_origin()
             if parsed.path == "/api/health":
                 provided_proxy_token = compact_text(self.headers.get("X-Atlas-Proxy-Token"), 500)
                 self.send_json(
@@ -17031,6 +17466,43 @@ class AtlasHandler(SimpleHTTPRequestHandler):
                 state = self.store.frontier_update_source_state()
                 self.send_json({"items": items, "total": state["candidate_count"], "source": state})
                 return
+            if parsed.path == "/api/news":
+                self.require_private_origin()
+                filters = {
+                    "domain": (params.get("domain") or [""])[0],
+                    "topic": (params.get("topic") or [""])[0],
+                    "article_type": (params.get("article_type") or params.get("articleType") or [""])[0],
+                    "source": (params.get("source") or [""])[0],
+                    "importance": (params.get("importance") or [""])[0],
+                    "from": (params.get("from") or [""])[0],
+                    "to": (params.get("to") or [""])[0],
+                    "q": (params.get("q") or params.get("query") or [""])[0],
+                    "unread": compact_text((params.get("unread") or [""])[0], 10).casefold() in {"1", "true", "yes"},
+                    "saved": compact_text((params.get("saved") or [""])[0], 10).casefold() in {"1", "true", "yes"},
+                }
+                owner = self.request_owner_id()
+                items = self.store.list_news_items(owner, filters, self._limit(params, 50))
+                self.send_json({"items": items, "total": len(items), "stats": self.store.news_stats(owner)})
+                return
+            if parsed.path == "/api/news/sources":
+                self.require_private_origin()
+                self.send_json({"items": self.store.list_news_sources(), "total": len(self.store.list_news_sources())})
+                return
+            if parsed.path == "/api/news/runs":
+                self.require_private_origin()
+                items = self.store.list_news_fetch_runs(self._limit(params, 30))
+                self.send_json({"items": items, "total": len(items)})
+                return
+            if parsed.path == "/api/news/stats":
+                self.require_private_origin()
+                self.send_json(self.store.news_stats(self.request_owner_id()))
+                return
+            news_match = re.fullmatch(r"/api/news/(\d+)", parsed.path)
+            if news_match:
+                self.require_private_origin()
+                hydrate = compact_text((params.get("hydrate") or ["1"])[0], 10).casefold() not in {"0", "false", "no"}
+                self.send_json(self.store.get_news_item(int(news_match.group(1)), self.request_owner_id(), hydrate=hydrate))
+                return
             if parsed.path == "/api/frontier/sources":
                 self.send_json(
                     {
@@ -17216,6 +17688,8 @@ class AtlasHandler(SimpleHTTPRequestHandler):
         try:
             if parsed.path.startswith("/api/private/"):
                 self.require_private_origin()
+            if parsed.path.startswith("/api/news"):
+                self.require_private_origin()
             if parsed.path.startswith("/api/editor/") or parsed.path in {"/api/papers/context", "/api/projects/context"}:
                 self.require_local_editor()
             if re.fullmatch(r"/api/papers/\d+/flowloom-context", parsed.path):
@@ -17290,6 +17764,23 @@ class AtlasHandler(SimpleHTTPRequestHandler):
                 return
             if parsed.path == "/api/projects/context":
                 self.send_json(self.store.upsert_project(self.read_json()), HTTPStatus.CREATED)
+                return
+            if parsed.path == "/api/news/refresh":
+                payload = self.read_json()
+                keys = payload.get("sourceKeys") or payload.get("source_keys") or []
+                if not isinstance(keys, list):
+                    raise AtlasError("新闻来源必须是数组")
+                self.send_json(self.store.refresh_news(keys, payload.get("limitPerSource", 20)))
+                return
+            news_state_match = re.fullmatch(r"/api/news/(\d+)/(read|save)", parsed.path)
+            if news_state_match:
+                payload = self.read_json()
+                action = news_state_match.group(2)
+                if action == "read":
+                    result = self.store.update_news_read_state(int(news_state_match.group(1)), self.request_owner_id(), read=bool(payload.get("read", True)), note=payload.get("note"))
+                else:
+                    result = self.store.update_news_read_state(int(news_state_match.group(1)), self.request_owner_id(), saved=bool(payload.get("saved", True)), note=payload.get("note"))
+                self.send_json(result)
                 return
             if parsed.path == "/api/analysis-requests":
                 task, reused = self.store.create_analysis_request(self.read_json(), self.request_owner_id())
