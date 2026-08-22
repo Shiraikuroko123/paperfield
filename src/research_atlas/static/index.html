@@ -267,13 +267,14 @@
           <div>
             <p class="view-context" id="newsAsOf">最近一次读取 --</p>
             <h1 id="newsTitle">AI 前沿新闻</h1>
-            <p>聚焦具身智能、大模型与交叉领域的发布、研究机构动态、公司与融资消息。正文优先在 Atlas 内阅读，并保留来源与抓取状态。</p>
+            <p>官方实验室、GitHub release/commit 与研究机构动态优先；二手新闻只作为标注清晰的补充。正文优先在 Atlas 内阅读，并保留来源与抓取状态。</p>
           </div>
           <div class="news-header-actions">
             <span class="state-label" id="newsStatus" role="status">尚未刷新</span>
             <button class="button button-primary" id="newsRefresh" type="button">刷新新闻</button>
           </div>
         </header>
+        <p class="news-monitor-status" id="newsMonitorStatus" role="status">官方源监控尚未启动。</p>
 
         <div class="news-fact-strip" aria-label="新闻状态">
           <div><span>新闻条目</span><strong id="newsTotalCount">0</strong></div>
@@ -288,7 +289,7 @@
             <select id="newsDomainFilter" name="domain"><option value="">全部领域</option><option value="embodied">具身智能</option><option value="llm">大模型</option><option value="cross">交叉</option></select>
           </label>
           <label class="field-label" for="newsTypeFilter">类型
-            <select id="newsTypeFilter" name="articleType"><option value="">全部类型</option><option value="model_release">模型发布</option><option value="dataset_release">数据集/基准</option><option value="project_release">项目发布</option><option value="company">公司/团队</option><option value="funding">融资</option><option value="acquisition">收购</option><option value="research">研究动态</option><option value="policy">政策与安全</option><option value="event">活动</option></select>
+            <select id="newsTypeFilter" name="articleType"><option value="">全部类型</option><option value="code_release">代码/架构发布</option><option value="code_change">代码变更</option><option value="model_release">模型发布</option><option value="dataset_release">数据集/基准</option><option value="project_release">项目发布</option><option value="company">公司/团队</option><option value="funding">融资</option><option value="acquisition">收购</option><option value="research">研究动态</option><option value="policy">政策与安全</option><option value="event">活动</option></select>
           </label>
           <label class="field-label" for="newsImportanceFilter">重要程度
             <select id="newsImportanceFilter" name="importance"><option value="">全部</option><option value="critical">关键</option><option value="major">重要</option><option value="notable">值得关注</option><option value="routine">常规</option></select>

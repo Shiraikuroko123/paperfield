@@ -36,11 +36,16 @@ class NewsSource:
 
 DEFAULT_NEWS_SOURCES = (
     NewsSource("openai", "OpenAI News", "official_lab", "https://openai.com/news/rss.xml", ("openai.com",), ("llm",)),
+    NewsSource("codex_releases", "OpenAI Codex GitHub Releases", "github_release", "https://github.com/openai/codex/releases.atom", ("github.com",), ("llm",)),
+    NewsSource("codex_commits", "OpenAI Codex GitHub Commits", "github_commit", "https://github.com/openai/codex/commits/main.atom", ("github.com",), ("llm",)),
     NewsSource("deepmind", "Google DeepMind", "official_lab", "https://deepmind.google/blog/rss.xml", ("deepmind.google",), ("embodied", "llm")),
     NewsSource("huggingface", "Hugging Face Blog", "company", "https://huggingface.co/blog/feed.xml", ("huggingface.co",), ("llm",)),
+    NewsSource("lerobot_releases", "Hugging Face LeRobot GitHub Releases", "github_release", "https://github.com/huggingface/lerobot/releases.atom", ("github.com",), ("embodied", "llm")),
     NewsSource("microsoft_research", "Microsoft Research", "research_org", "https://www.microsoft.com/en-us/research/feed/", ("microsoft.com",), ("embodied", "llm")),
     NewsSource("bair", "Berkeley AI Research", "research_org", "https://bair.berkeley.edu/blog/feed.xml", ("bair.berkeley.edu", "berkeley.edu"), ("embodied", "llm")),
     NewsSource("google_research", "Google Research", "research_org", "https://research.google/blog/rss/", ("research.google",), ("embodied", "llm")),
+    NewsSource("groot_releases", "NVIDIA Isaac GR00T GitHub Releases", "github_release", "https://github.com/NVIDIA/Isaac-GR00T/releases.atom", ("github.com",), ("embodied", "llm")),
+    NewsSource("openpi_releases", "Physical Intelligence openpi GitHub Releases", "github_release", "https://github.com/Physical-Intelligence/openpi/releases.atom", ("github.com",), ("embodied", "llm")),
     NewsSource("techcrunch_ai", "TechCrunch AI", "newsroom", "https://techcrunch.com/category/artificial-intelligence/feed/", ("techcrunch.com",), ("embodied", "llm"), "secondary"),
     NewsSource("ieee_robotics", "IEEE Spectrum Robotics", "newsroom", "https://spectrum.ieee.org/feeds/topic/robotics", ("spectrum.ieee.org",), ("embodied",), "secondary"),
 )
@@ -149,11 +154,12 @@ def _unique(values: list[str], maximum: int = 30) -> list[str]:
 EMBODIED_TERMS = (
     "embodied ai", "physical ai", "robot", "robotics", "manipulation", "humanoid", "vla",
     "vision-language-action", "world model", "locomotion", "navigation", "tactile", "sim-to-real",
-    "diffusion policy", "robot learning", "dexterous", "foundation model for robotics",
+    "diffusion policy", "robot learning", "dexterous", "foundation model for robotics", "robot foundation model",
 )
 LLM_TERMS = (
     "large language model", "llm", "language model", "multimodal", "vision-language model", "vlm",
-    "reasoning model", "agent", "tool use", "foundation model", "transformer", "inference",
+    "reasoning model", "agent", "tool use", "foundation model", "transformer", "inference", "language models",
+    "anthropic", "claude", "openai", "chatgpt", "gpt-", "gemini", "llama", "mistral", "qwen", "deepseek",
 )
 
 
@@ -169,7 +175,7 @@ def _contains(text: str, term: str) -> bool:
 def classify_item(title: str, summary: str, source: NewsSource) -> tuple[list[str], list[str], str, str]:
     text = f"{title} {summary}"
     domains = [domain for domain, terms in (("embodied", EMBODIED_TERMS), ("llm", LLM_TERMS)) if any(_contains(text, term) for term in terms)]
-    if not domains:
+    if not domains and source.trust_tier != "secondary":
         domains = list(source.domains)
     if len(domains) > 1:
         domains = ["cross", *domains]
@@ -181,10 +187,16 @@ def classify_item(title: str, summary: str, source: NewsSource) -> tuple[list[st
         "multimodal": ("multimodal", "vision-language", "vlm"),
         "companies": ("company", "startup", "founded", "launches"),
         "funding": ("funding", "investment", "raises", "series a", "series b", "acquisition"),
+        "code": ("github", "commit", "release", "repository", "source code", "open source"),
+        "architecture": ("architecture", "harness", "runtime", "mcp", "orchestration", "tooling"),
     }
     topics = [topic for topic, terms in topic_terms.items() if any(_contains(text, term) for term in terms)]
     lower = text.casefold()
-    if any(word in lower for word in ("funding", "investment", "raises", "series a", "series b", "acquisition")):
+    if source.source_kind == "github_release":
+        article_type = "code_release"
+    elif source.source_kind == "github_commit":
+        article_type = "code_change"
+    elif any(word in lower for word in ("funding", "investment", "raises", "series a", "series b", "acquisition")):
         article_type = "funding" if "acquisition" not in lower else "acquisition"
     elif any(word in lower for word in ("dataset", "benchmark", "corpus")):
         article_type = "dataset_release"
@@ -198,7 +210,7 @@ def classify_item(title: str, summary: str, source: NewsSource) -> tuple[list[st
         article_type = "policy"
     else:
         article_type = "research"
-    importance = "major" if article_type in {"model_release", "dataset_release", "company", "funding", "acquisition"} else "notable" if source.trust_tier == "first_party" else "routine"
+    importance = "major" if article_type in {"model_release", "dataset_release", "code_release", "company", "funding", "acquisition"} else "notable" if source.trust_tier == "first_party" else "routine"
     return _unique(domains, 4), _unique(topics, 12), article_type, importance
 
 
@@ -231,6 +243,12 @@ def parse_feed(payload: bytes, source: NewsSource) -> list[dict[str, Any]]:
         author = _plain_text(_child_text(entry, {"author", "creator", "name"}), 240)
         raw_id = _plain_text(_child_text(entry, {"id", "guid"}), 2000) or source_url
         domains, topics, article_type, importance = classify_item(title, summary, source)
+        # Broad newsroom feeds are useful for context, but they must not turn
+        # Atlas into a generic AI news reader. Official and GitHub sources are
+        # scoped by their publisher; secondary sources require an explicit
+        # embodied/LLM match in the title or summary.
+        if source.trust_tier == "secondary" and not domains:
+            continue
         normalized = {"title": title, "summary": summary, "source_url": source_url, "published": published, "updated": updated}
         candidates.append({
             "source_key": source.key,

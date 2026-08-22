@@ -266,6 +266,13 @@ MAX_LEASE_SECONDS = 1800
 PAPERFIELD_SYNC_DEFAULT_INTERVAL_SECONDS = 15
 PAPERFIELD_SYNC_DEFAULT_MAX_PAGES = 12
 PAPERFIELD_SYNC_PAGE_LIMIT = 500
+# Official RSS/Atom and GitHub feeds are cheap conditional requests. General
+# sources run every five minutes; the small set of first-party code feeds is
+# checked every minute so a new release or harness commit becomes visible
+# quickly without polling every publisher at that cadence.
+NEWS_SYNC_DEFAULT_INTERVAL_SECONDS = 300
+NEWS_SYNC_DEFAULT_PRIORITY_INTERVAL_SECONDS = 60
+NEWS_SYNC_DEFAULT_LIMIT_PER_SOURCE = 20
 
 
 @functools.lru_cache(maxsize=2)
@@ -790,6 +797,7 @@ class AtlasStore:
         self.path = path.expanduser().resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._news_refresh_lock = threading.Lock()
         self._preflight_existing_schema()
         self.initialize()
 
@@ -3217,6 +3225,10 @@ class AtlasStore:
             # v16 is intentionally idempotent on already-migrated databases;
             # this also repairs databases created by an early phase-9 build.
             self._migrate_v15_to_v16(db)
+            # v17 owns the news source table. Re-run its idempotent DDL/upsert
+            # on every startup so newly configured official feeds appear in
+            # existing Atlas databases without a destructive reset.
+            self._migrate_v16_to_v17(db)
 
     @staticmethod
     def _stage_plan(sections: list[str]) -> list[tuple[str, str]]:
@@ -6429,7 +6441,11 @@ class AtlasStore:
                 FROM news_items n JOIN news_sources s ON s.key=n.source_key
                 LEFT JOIN news_read_state rs ON rs.news_item_id=n.id AND rs.owner_id=?
                 WHERE {' AND '.join(conditions)}
-                ORDER BY CASE WHEN n.published_at<>'' THEN n.published_at ELSE n.updated_at END DESC, n.id DESC
+                ORDER BY
+                    CASE WHEN s.trust_tier='first_party' THEN 0 ELSE 1 END,
+                    CASE WHEN s.source_kind IN ('github_release', 'github_commit') THEN 0 ELSE 1 END,
+                    CASE WHEN n.published_at<>'' THEN n.published_at ELSE n.updated_at END DESC,
+                    n.id DESC
                 LIMIT ?
                 """,
                 params,
@@ -6491,6 +6507,14 @@ class AtlasStore:
             return [dict(row) for row in rows]
 
     def refresh_news(self, source_keys: list[str] | None = None, limit_per_source: int = 20) -> dict[str, Any]:
+        if not self._news_refresh_lock.acquire(timeout=2.0):
+            raise ConflictError("新闻源正在刷新，请稍后重试")
+        try:
+            return self._refresh_news(source_keys, limit_per_source)
+        finally:
+            self._news_refresh_lock.release()
+
+    def _refresh_news(self, source_keys: list[str] | None = None, limit_per_source: int = 20) -> dict[str, Any]:
         requested = {compact_text(value, 80).casefold() for value in (source_keys or []) if compact_text(value, 80)}
         sources = [source for source in self.list_news_sources(True) if not requested or source["key"] in requested]
         results: list[dict[str, Any]] = []
@@ -16769,6 +16793,136 @@ class PaperfieldCatalogSynchronizer:
             self.thread.join(timeout=max(0.1, float(timeout)))
 
 
+class NewsSynchronizer:
+    """Continuously poll first-party research and code release feeds.
+
+    The synchronizer stores only feed metadata during polling. Full article
+    HTML is fetched lazily when a user opens an item, keeping the fast path
+    small and making source failures visible instead of hiding them behind a
+    long startup request.
+    """
+
+    def __init__(
+        self,
+        store: AtlasStore,
+        *,
+        interval_seconds: float = NEWS_SYNC_DEFAULT_INTERVAL_SECONDS,
+        priority_interval_seconds: float = NEWS_SYNC_DEFAULT_PRIORITY_INTERVAL_SECONDS,
+        limit_per_source: int = NEWS_SYNC_DEFAULT_LIMIT_PER_SOURCE,
+    ) -> None:
+        self.store = store
+        self.interval_seconds = max(60.0, min(86400.0, float(interval_seconds)))
+        self.priority_interval_seconds = max(60.0, min(self.interval_seconds, float(priority_interval_seconds)))
+        self.limit_per_source = max(1, min(50, int(limit_per_source)))
+        self.stop_event = threading.Event()
+        self.thread: threading.Thread | None = None
+        self._state_lock = threading.Lock()
+        self._state: dict[str, Any] = {
+            "enabled": True,
+            "interval_seconds": self.interval_seconds,
+            "priority_interval_seconds": self.priority_interval_seconds,
+            "limit_per_source": self.limit_per_source,
+            "running": False,
+            "last_started_at": "",
+            "last_finished_at": "",
+            "last_error": "",
+            "last_runs": [],
+            "last_scope": "",
+            "last_stats": {},
+        }
+
+    def refresh_once(self, source_keys: list[str] | None = None) -> dict[str, Any]:
+        started = utc_now()
+        with self._state_lock:
+            self._state.update(
+                {
+                    "running": True,
+                    "last_started_at": started,
+                    "last_error": "",
+                    "last_scope": "priority" if source_keys is not None else "all",
+                }
+            )
+        try:
+            result = self.store.refresh_news(source_keys=source_keys, limit_per_source=self.limit_per_source)
+            runs = [
+                {
+                    "source_key": item.get("source_key", ""),
+                    "status": item.get("status", ""),
+                    "fetched": int(item.get("fetched_count", 0) or 0),
+                    "accepted": int(item.get("accepted_count", 0) or 0),
+                    "new": int(item.get("new_count", 0) or 0),
+                    "failed": int(item.get("failed_count", 0) or 0),
+                    "error": compact_text(item.get("error_text"), 300),
+                }
+                for item in result.get("runs", [])
+            ]
+            with self._state_lock:
+                self._state.update(
+                    {
+                        "running": False,
+                        "last_finished_at": utc_now(),
+                        "last_runs": runs,
+                        "last_stats": result.get("stats") or {},
+                    }
+                )
+            return result
+        except Exception as error:
+            message = compact_text(str(error) or error.__class__.__name__, 1000)
+            with self._state_lock:
+                self._state.update(
+                    {
+                        "running": False,
+                        "last_finished_at": utc_now(),
+                        "last_error": message,
+                        "last_runs": [],
+                    }
+                )
+            raise
+
+    def _run(self) -> None:
+        first_pass = True
+        next_full_refresh = 0.0
+        while not self.stop_event.is_set():
+            source_keys: list[str] | None = None
+            now = time.monotonic()
+            if not first_pass and now < next_full_refresh:
+                priority_keys = [
+                    source["key"]
+                    for source in self.store.list_news_sources(True)
+                    if source.get("source_kind") in {"github_release", "github_commit"}
+                ]
+                source_keys = priority_keys or None
+            try:
+                self.refresh_once(source_keys)
+            except Exception:
+                # The source health rows carry per-feed failures. Keep the
+                # scheduler alive so the next conditional poll can recover.
+                pass
+            first_pass = False
+            if source_keys is None:
+                next_full_refresh = time.monotonic() + self.interval_seconds
+            wait_seconds = self.priority_interval_seconds if next_full_refresh > time.monotonic() else self.interval_seconds
+            if self.stop_event.wait(wait_seconds):
+                break
+
+    def start(self) -> "NewsSynchronizer":
+        if self.thread and self.thread.is_alive():
+            return self
+        self.stop_event.clear()
+        self.thread = threading.Thread(target=self._run, name="atlas-news-sync", daemon=True)
+        self.thread.start()
+        return self
+
+    def status(self) -> dict[str, Any]:
+        with self._state_lock:
+            return dict(self._state)
+
+    def stop(self, timeout: float = 5.0) -> None:
+        self.stop_event.set()
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=max(0.1, float(timeout)))
+
+
 class AtlasHandler(SimpleHTTPRequestHandler):
     server_version = f"ResearchAtlas/{APP_VERSION}"
     store: AtlasStore
@@ -16778,6 +16932,7 @@ class AtlasHandler(SimpleHTTPRequestHandler):
     worker_token = ""
     paperfield_sync_token = ""
     proxy_token = ""
+    news_synchronizer: NewsSynchronizer | None = None
     # Test/embedded-only compatibility switch. Production main() leaves this
     # disabled so forwarded identity and origin headers require a shared token.
     insecure_proxy_headers = False
@@ -17492,6 +17647,25 @@ class AtlasHandler(SimpleHTTPRequestHandler):
                 self.require_private_origin()
                 items = self.store.list_news_fetch_runs(self._limit(params, 30))
                 self.send_json({"items": items, "total": len(items)})
+                return
+            if parsed.path == "/api/news/monitor":
+                self.require_private_origin()
+                # The synchronizer belongs to the server instance so separate
+                # Atlas servers/tests cannot leak monitor state through a
+                # handler class attribute.
+                synchronizer = getattr(self.server, "news_synchronizer", None) or self.news_synchronizer
+                monitor = synchronizer.status() if synchronizer else {
+                    "enabled": False,
+                    "interval_seconds": 0,
+                    "limit_per_source": 0,
+                    "running": False,
+                    "last_started_at": "",
+                    "last_finished_at": "",
+                    "last_error": "",
+                    "last_runs": [],
+                    "last_stats": self.store.news_stats(self.request_owner_id()),
+                }
+                self.send_json(monitor)
                 return
             if parsed.path == "/api/news/stats":
                 self.require_private_origin()
@@ -18318,6 +18492,7 @@ def create_server(
     # The synchronizer is attached only when main() explicitly starts it;
     # create_server remains side-effect free for tests and embedding callers.
     server.paperfield_synchronizer = None  # type: ignore[attr-defined]
+    server.news_synchronizer = None  # type: ignore[attr-defined]
     return server
 
 
@@ -18366,6 +18541,36 @@ def main() -> None:
         )
     except ValueError:
         sync_max_pages = PAPERFIELD_SYNC_DEFAULT_MAX_PAGES
+    news_sync_enabled = os.environ.get("RESEARCH_ATLAS_NEWS_SYNC_ENABLED", "1").strip().casefold() in {
+        "1", "true", "yes", "on"
+    }
+    try:
+        news_sync_interval = float(
+            os.environ.get(
+                "RESEARCH_ATLAS_NEWS_SYNC_INTERVAL_SECONDS",
+                str(NEWS_SYNC_DEFAULT_INTERVAL_SECONDS),
+            )
+        )
+    except ValueError:
+        news_sync_interval = float(NEWS_SYNC_DEFAULT_INTERVAL_SECONDS)
+    try:
+        news_sync_priority_interval = float(
+            os.environ.get(
+                "RESEARCH_ATLAS_NEWS_SYNC_PRIORITY_INTERVAL_SECONDS",
+                str(NEWS_SYNC_DEFAULT_PRIORITY_INTERVAL_SECONDS),
+            )
+        )
+    except ValueError:
+        news_sync_priority_interval = float(NEWS_SYNC_DEFAULT_PRIORITY_INTERVAL_SECONDS)
+    try:
+        news_sync_limit = int(
+            os.environ.get(
+                "RESEARCH_ATLAS_NEWS_SYNC_LIMIT_PER_SOURCE",
+                str(NEWS_SYNC_DEFAULT_LIMIT_PER_SOURCE),
+            )
+        )
+    except ValueError:
+        news_sync_limit = NEWS_SYNC_DEFAULT_LIMIT_PER_SOURCE
     server = create_server(
         args.host,
         args.port,
@@ -18386,8 +18591,23 @@ def main() -> None:
             max_pages=sync_max_pages,
         ).start()
         server.paperfield_synchronizer = synchronizer  # type: ignore[attr-defined]
+    news_synchronizer = None
+    if news_sync_enabled:
+        news_synchronizer = NewsSynchronizer(
+            store,
+            interval_seconds=news_sync_interval,
+            priority_interval_seconds=news_sync_priority_interval,
+            limit_per_source=news_sync_limit,
+        ).start()
+        server.news_synchronizer = news_synchronizer  # type: ignore[attr-defined]
     print(f"Research Atlas is running at http://{args.host}:{args.port}")
     print(f"Atlas database: {store.path}")
+    if news_synchronizer:
+        print(
+            "Atlas official news monitor: code feeds every "
+            f"{int(news_synchronizer.priority_interval_seconds)} seconds, "
+            f"all feeds every {int(news_synchronizer.interval_seconds)} seconds"
+        )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -18395,6 +18615,8 @@ def main() -> None:
     finally:
         if synchronizer:
             synchronizer.stop()
+        if news_synchronizer:
+            news_synchronizer.stop()
         server.server_close()
 
 

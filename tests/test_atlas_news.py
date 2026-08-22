@@ -16,6 +16,15 @@ def demo_feed():
     </channel></rss>"""
 
 
+def secondary_demo_feed():
+    return b"""<?xml version=\"1.0\"?><rss version=\"2.0\"><channel>
+    <item><guid>relevant</guid><title>Robotics foundation model release</title>
+    <link>https://techcrunch.com/robotics-model</link><description>A new VLA policy for manipulation.</description></item>
+    <item><guid>irrelevant</guid><title>New data center financing</title>
+    <link>https://techcrunch.com/data-center</link><description>Infrastructure investment news.</description></item>
+    </channel></rss>"""
+
+
 class AtlasNewsTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -36,6 +45,44 @@ class AtlasNewsTests(unittest.TestCase):
         self.assertEqual(candidates[0]["source_url"], "https://deepmind.google/blog/demo-robot")
         self.assertIn("cross", candidates[0]["domains"])
         self.assertEqual(candidates[0]["related_paper_refs"], ["arxiv:2608.12345"])
+
+    def test_secondary_feeds_drop_items_without_focus_terms(self):
+        source = news.DEFAULT_NEWS_SOURCES[-2]
+        candidates = news.parse_feed(secondary_demo_feed(), source)
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["title"], "Robotics foundation model release")
+        self.assertIn("cross", candidates[0]["domains"])
+
+    def test_github_sources_label_code_and_architecture_changes(self):
+        release = next(item for item in news.DEFAULT_NEWS_SOURCES if item.key == "codex_releases")
+        commit = next(item for item in news.DEFAULT_NEWS_SOURCES if item.key == "codex_commits")
+        self.assertEqual(news.classify_item("v0.1.0", "", release)[2], "code_release")
+        domains, topics, article_type, _importance = news.classify_item("Add harness runtime MCP support", "", commit)
+        self.assertEqual(article_type, "code_change")
+        self.assertIn("architecture", topics)
+        self.assertIn("llm", domains)
+
+    def test_news_monitor_can_refresh_only_first_party_code_sources(self):
+        class FakeStore:
+            def __init__(self):
+                self.calls = []
+
+            def list_news_sources(self, enabled_only=True):
+                return [
+                    {"key": "codex_commits", "source_kind": "github_commit"},
+                    {"key": "openai", "source_kind": "official_lab"},
+                ]
+
+            def refresh_news(self, source_keys=None, limit_per_source=20):
+                self.calls.append((source_keys, limit_per_source))
+                return {"runs": [], "stats": {"total": 0}}
+
+        fake = FakeStore()
+        monitor = atlas.NewsSynchronizer(fake, interval_seconds=300, priority_interval_seconds=60)
+        monitor.refresh_once(["codex_commits"])
+        self.assertEqual(fake.calls, [(["codex_commits"], 20)])
+        self.assertEqual(monitor.status()["last_scope"], "priority")
+        self.assertEqual(monitor.status()["priority_interval_seconds"], 60.0)
 
     def test_sanitizer_removes_scripts_and_external_links(self):
         source = news.DEFAULT_NEWS_SOURCES[0]
