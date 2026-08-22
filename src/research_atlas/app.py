@@ -274,6 +274,7 @@ PAPERFIELD_SYNC_PAGE_LIMIT = 500
 NEWS_SYNC_DEFAULT_INTERVAL_SECONDS = 300
 NEWS_SYNC_DEFAULT_PRIORITY_INTERVAL_SECONDS = 60
 NEWS_SYNC_DEFAULT_LIMIT_PER_SOURCE = 30
+GITHUB_NEWS_CACHE_VERSION = "github_api:v2"
 
 
 @functools.lru_cache(maxsize=2)
@@ -6481,7 +6482,7 @@ class AtlasStore:
                 row = db.execute("SELECT n.*, s.label AS source_label, s.source_kind AS source_kind, s.trust_tier AS trust_tier, s.article_hosts_json, s.feed_url, s.domains_json AS source_domains_json, rs.read_at, COALESCE(rs.saved, 0) AS saved, COALESCE(rs.note, '') AS note FROM news_items n JOIN news_sources s ON s.key=n.source_key LEFT JOIN news_read_state rs ON rs.news_item_id=n.id AND rs.owner_id=? WHERE n.id=?", (self._learning_owner(owner_id), normalized_id)).fetchone()
             if row is None:
                 raise NotFoundError("新闻不存在")
-            github_api_cached = row["source_kind"] in {"github_release", "github_commit"} and str(row["license_note"] or "").startswith("github_api:")
+            github_api_cached = row["source_kind"] in {"github_release", "github_commit"} and str(row["license_note"] or "") == GITHUB_NEWS_CACHE_VERSION
             if row["content_status"] not in {"cached"} or (row["source_kind"] in {"github_release", "github_commit"} and not github_api_cached):
                 source = {"key": row["source_key"], "label": row["source_label"], "source_kind": row["source_kind"], "feed_url": row["feed_url"], "article_hosts": self._news_json(row["article_hosts_json"]), "domains": self._news_json(row["source_domains_json"]), "trust_tier": row["trust_tier"]}
                 try:
@@ -6497,7 +6498,7 @@ class AtlasStore:
                             db.execute("UPDATE news_items SET content_status=?, license_note=?, fetched_at=? WHERE id=?", (fallback_status, compact_text(str(error), 500), utc_now(), normalized_id))
                 else:
                     with self._lock, self.connect() as db:
-                        cache_note = "github_api:v1" if row["source_kind"] in {"github_release", "github_commit"} else ""
+                        cache_note = GITHUB_NEWS_CACHE_VERSION if row["source_kind"] in {"github_release", "github_commit"} else ""
                         db.execute("UPDATE news_items SET body_html=?, body_text=?, content_status='cached', content_sha256=?, fetched_at=?, license_note=? WHERE id=?", (body_html, body_text, hashlib.sha256(body_html.encode('utf-8')).hexdigest(), utc_now(), cache_note, normalized_id))
         with self.connect() as db:
             row = db.execute("SELECT n.*, s.label AS source_label, s.source_kind AS source_kind, s.trust_tier AS trust_tier, rs.read_at, COALESCE(rs.saved, 0) AS saved, COALESCE(rs.note, '') AS note FROM news_items n JOIN news_sources s ON s.key=n.source_key LEFT JOIN news_read_state rs ON rs.news_item_id=n.id AND rs.owner_id=? WHERE n.id=?", (self._learning_owner(owner_id), normalized_id)).fetchone()

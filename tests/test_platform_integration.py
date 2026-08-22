@@ -211,6 +211,20 @@ class ContractTests(unittest.TestCase):
         self.assertIn('id="analysisAllowExternal"', atlas_html)
         self.assertIn('id="analysisSubmit">加入队列</button>', atlas_html)
 
+    def test_news_and_frontier_update_details_keep_external_links_visible(self):
+        atlas_js = (ROOT / "src" / "research_atlas" / "static" / "app.js").read_text(encoding="utf-8")
+        atlas_html = (ROOT / "src" / "research_atlas" / "static" / "index.html").read_text(encoding="utf-8")
+        atlas_css = (ROOT / "src" / "research_atlas" / "static" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn('const sourceLink = item.source_url', atlas_js)
+        self.assertIn('news-reader-actions">${sourceLink}', atlas_js)
+        self.assertIn('这是 GitHub 提交记录', atlas_js)
+        self.assertIn('function openFrontierUpdateDetail(updateId', atlas_js)
+        self.assertIn('data-frontier-update-id="${escapeHtml(update.id)}"', atlas_js)
+        self.assertIn('打开官方原文 ↗', atlas_js)
+        self.assertIn('id="updateDetailDialog"', atlas_html)
+        self.assertIn('.update-detail-actions', atlas_css)
+
     def test_atlas_primary_paper_links_open_the_paperfield_reader(self):
         atlas_js = (ROOT / "src" / "research_atlas" / "static" / "app.js").read_text(encoding="utf-8")
         atlas_html = (ROOT / "src" / "research_atlas" / "static" / "index.html").read_text(encoding="utf-8")

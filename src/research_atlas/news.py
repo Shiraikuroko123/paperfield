@@ -478,9 +478,12 @@ def _fetch_github_article(source: NewsSource, url: str, *, timeout: int) -> tupl
         author = commit.get("author") if isinstance(commit.get("author"), dict) else {}
         author_name = html.escape(str(author.get("name") or data.get("author", {}).get("login") if isinstance(data.get("author"), dict) else ""), quote=False)
         sha = html.escape(str(data.get("sha") or ref)[:12], quote=False)
-        parts = [f"<p><strong>提交</strong> <code>{sha}</code></p>"]
+        parts = [
+            "<p><strong>GitHub 提交记录</strong>：这是一条代码仓库变更记录。提交作者是写入这次变更的人，变更文件是被修改、新增或删除的文件。</p>",
+            f"<p><strong>提交</strong> <code>{sha}</code></p>",
+        ]
         if author_name:
-            parts.append(f"<p><strong>作者</strong> {author_name}</p>")
+            parts.append(f"<p><strong>提交作者</strong> {author_name}</p>")
         if message:
             parts.append(_github_markdown_html(message))
         files = data.get("files") if isinstance(data.get("files"), list) else []

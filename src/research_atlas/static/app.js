@@ -1383,15 +1383,28 @@ function updateRowMarkup(update) {
   return `<article class="update-row" aria-labelledby="${titleId}">
     <div class="update-copy">
       <div class="row-topline"><span class="state-label is-primary">第一方动态</span><span>${escapeHtml(update.source_label || "来源待补充")}</span><span>${escapeHtml(displayDate(update.source_updated_at || update.published_at))}</span></div>
-      <h3 id="${titleId}">${escapeHtml(update.title || "标题待补充")}</h3>
+      <h3 id="${titleId}"><button class="update-title-action" type="button" data-frontier-update-id="${escapeHtml(update.id)}">${escapeHtml(update.title || "标题待补充")}</button></h3>
       <p class="update-summary">${escapeHtml(textSnippet(update.summary || "订阅源未提供摘要", 520))}</p>
       <div class="topic-list">${tags}</div>
       ${learningRelevanceMarkup(update, "update")}
       ${related ? `<p class="update-related">明确关联论文：${related}</p>` : ""}
       <p class="candidate-provenance">命中：${escapeHtml((update.matched_queries || []).join(" / ") || "查询标签缺失")} / source SHA ${escapeHtml(String(update.payload_sha256 || "").slice(0, 12))}</p>
     </div>
-    <div class="candidate-actions"><a class="button button-secondary" href="${escapeHtml(update.source_url)}" target="_blank" rel="noreferrer">打开官方原文</a></div>
+    <div class="candidate-actions"><button class="button button-primary" type="button" data-frontier-update-id="${escapeHtml(update.id)}">查看详情</button><a class="button button-secondary" href="${escapeHtml(update.source_url)}" target="_blank" rel="noreferrer">打开官方原文 ↗</a></div>
   </article>`;
+}
+
+function openFrontierUpdateDetail(updateId, trigger = null) {
+  const update = (state.data?.frontier_updates || []).find((item) => String(item.id) === String(updateId));
+  if (!update || !el("updateDetailDialog")) return;
+  const related = (update.related_paper_refs || []).map((reference) => `<a class="button button-secondary" href="${escapeHtml(paperfieldReferenceUrl(reference))}">在 Paperfield 精读 ${escapeHtml(reference)}</a>`).join("");
+  const sourceLink = update.source_url
+    ? `<a class="button button-primary" href="${escapeHtml(update.source_url)}" target="_blank" rel="noreferrer">打开官方原文 ↗</a>`
+    : "";
+  el("updateDetailTitle").textContent = update.title || "动态详情";
+  el("updateDetailSubtitle").textContent = `${update.source_label || "第一方来源"} / ${update.source_kind || "官方动态"} / ${displayDate(update.source_updated_at || update.published_at)}`;
+  el("updateDetailContent").innerHTML = `<div class="update-detail-boundary"><strong>这条动态是什么</strong><p>这是来自官方实验室、团队或项目源的发布记录，用来发现新项目、代码和研究线索；它不是 Atlas 已审阅的研究结论。</p></div><div class="update-detail-body">${proseMarkup(update.summary || "该订阅源没有提供可缓存的详细摘要，请打开官方原文查看完整内容。")}</div><div class="update-detail-meta"><span>来源 URL</span><code>${escapeHtml(update.source_url || "未提供")}</code><span>内容指纹</span><code>${escapeHtml(String(update.payload_sha256 || "").slice(0, 20) || "未记录")}</code></div><div class="update-detail-actions">${sourceLink}${related}</div>`;
+  openManagedDialog(el("updateDetailDialog"), trigger, () => el("updateDetailClose"));
 }
 
 function filteredSignals() {
@@ -1955,8 +1968,8 @@ const newsSourceKindLabels = {
   official_lab: "官方实验室",
   research_org: "研究机构",
   company: "官方团队",
-  github_release: "GitHub Release",
-  github_commit: "GitHub Commit",
+  github_release: "GitHub 版本发布",
+  github_commit: "GitHub 代码提交",
   newsroom: "媒体报道",
 };
 
@@ -2020,8 +2033,14 @@ function renderNewsReader() {
     ? `<div class="news-reader-body">${item.body_html}</div>`
     : `<div class="news-reader-fallback"><span class="state-label is-warning">${escapeHtml(newsContentStatusLabel(item.content_status))}</span><p>${escapeHtml(item.summary || item.dek || "来源未提供可阅读摘要。")}</p>${item.content_status !== "unavailable" ? `<button class="button button-secondary" type="button" data-news-hydrate="${escapeHtml(item.id)}">重新加载正文</button>` : ""}</div>`;
   const papers = (item.related_paper_refs || []).map((ref) => `<a class="button button-secondary" href="${escapeHtml(paperfieldReferenceUrl(ref))}">精读 ${escapeHtml(ref)}</a>`).join("");
+  const sourceLink = item.source_url ? `<a class="button button-primary news-source-link" href="${escapeHtml(item.source_url)}" target="_blank" rel="noreferrer">打开原文 ↗</a>` : "";
+  const githubExplainer = item.source_kind === "github_commit"
+    ? `<div class="news-reader-boundary"><strong>这是 GitHub 提交记录</strong><p>它记录了某个代码仓库的一次变更。作者是提交者，变更文件是这次提交影响的文件；它是工程动态，不等同于经过审阅的论文结论。</p></div>`
+    : item.source_kind === "github_release"
+      ? `<div class="news-reader-boundary"><strong>这是 GitHub 版本发布记录</strong><p>它记录了项目发布的新版本、说明和资产，适合用来追踪代码与模型工程进展。</p></div>`
+      : "";
   const cacheNote = item.license_note && !String(item.license_note).startsWith("github_api:") ? `<span>${escapeHtml(item.license_note)}</span>` : "";
-  target.innerHTML = `<header class="news-reader-header"><div><div class="row-topline"><span class="state-label ${item.importance === "major" || item.importance === "critical" ? "is-warning" : "is-primary"}">${escapeHtml(newsImportanceLabel(item.importance))}</span><span>${escapeHtml(newsTypeLabel(item.article_type))}</span><span>${escapeHtml((item.domains || []).map(newsDomainLabel).join(" / "))}</span></div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.source_label || item.source_key)} · ${escapeHtml(newsSourceKindLabel(item.source_kind))} · ${item.trust_tier === "first_party" ? "第一方" : "二手来源"}${item.author ? ` · ${escapeHtml(item.author)}` : ""} · ${escapeHtml(displayDate(item.published_at || item.updated_at))}</p></div><div class="news-reader-actions"><button class="button button-secondary" type="button" data-news-save="${escapeHtml(item.id)}">${item.saved ? "取消保存" : "保存"}</button><button class="button button-secondary" type="button" data-news-read="${escapeHtml(item.id)}">${item.read_at ? "标为未读" : "标为已读"}</button></div></header>${body}<footer class="news-provenance"><div><strong>来源与缓存</strong><span>${escapeHtml(item.source_url)}</span><span>${escapeHtml(newsContentStatusLabel(item.content_status))} · 抓取于 ${escapeHtml(displayDate(item.fetched_at))}</span>${item.content_sha256 ? `<span>内容 SHA-256 ${escapeHtml(String(item.content_sha256).slice(0, 20))}</span>` : ""}${cacheNote}</div>${papers ? `<div class="news-related-links"><strong>相关论文</strong>${papers}</div>` : ""}<a class="button button-secondary news-source-link" href="${escapeHtml(item.source_url)}" target="_blank" rel="noreferrer">打开原文 ↗</a></footer>`;
+  target.innerHTML = `<header class="news-reader-header"><div><div class="row-topline"><span class="state-label ${item.importance === "major" || item.importance === "critical" ? "is-warning" : "is-primary"}">${escapeHtml(newsImportanceLabel(item.importance))}</span><span>${escapeHtml(newsTypeLabel(item.article_type))}</span><span>${escapeHtml((item.domains || []).map(newsDomainLabel).join(" / "))}</span></div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.source_label || item.source_key)} · ${escapeHtml(newsSourceKindLabel(item.source_kind))} · ${item.trust_tier === "first_party" ? "第一方" : "二手来源"}${item.author ? ` · ${escapeHtml(item.author)}` : ""} · ${escapeHtml(displayDate(item.published_at || item.updated_at))}</p></div><div class="news-reader-actions">${sourceLink}<button class="button button-secondary" type="button" data-news-save="${escapeHtml(item.id)}">${item.saved ? "取消保存" : "保存"}</button><button class="button button-secondary" type="button" data-news-read="${escapeHtml(item.id)}">${item.read_at ? "标为未读" : "标为已读"}</button></div></header>${githubExplainer}${body}<footer class="news-provenance"><div><strong>来源与缓存</strong><span>${escapeHtml(item.source_url || "来源地址未提供")}</span><span>${escapeHtml(newsContentStatusLabel(item.content_status))} · 抓取于 ${escapeHtml(displayDate(item.fetched_at))}</span>${item.content_sha256 ? `<span>内容 SHA-256 ${escapeHtml(String(item.content_sha256).slice(0, 20))}</span>` : ""}${cacheNote}</div>${papers ? `<div class="news-related-links"><strong>相关论文</strong>${papers}</div>` : ""}${sourceLink ? sourceLink.replace("button-primary", "button-secondary") : ""}</footer>`;
 }
 
 function loadMoreNews() {
@@ -4725,7 +4744,7 @@ function bindEvents() {
   el("newsLoadMore")?.addEventListener("click", loadMoreNews);
 
   ["focusEditButton", "focusEditButtonMain"].forEach((id) => el(id).addEventListener("click", (event) => openFocusDialog(event.currentTarget)));
-  ["focusDialog", "researchViewDialog", "termDetailDialog", "knowledgeDialog", "signalDialog", "analysisDialog"].forEach((id) => bindDialogFocusRestore(el(id)));
+  ["focusDialog", "researchViewDialog", "termDetailDialog", "knowledgeDialog", "updateDetailDialog", "signalDialog", "analysisDialog"].forEach((id) => bindDialogFocusRestore(el(id)));
   el("focusClose").addEventListener("click", () => el("focusDialog").close());
   el("focusCancel").addEventListener("click", () => el("focusDialog").close());
   el("focusForm").addEventListener("submit", submitFocus);
@@ -4742,6 +4761,8 @@ function bindEvents() {
   el("termDetailCancel").addEventListener("click", () => el("termDetailDialog").close());
   el("knowledgeDialogClose").addEventListener("click", () => el("knowledgeDialog").close());
   el("knowledgeDialogCancel").addEventListener("click", () => el("knowledgeDialog").close());
+  el("updateDetailClose").addEventListener("click", () => el("updateDetailDialog").close());
+  el("updateDetailCancel").addEventListener("click", () => el("updateDetailDialog").close());
 
   document.querySelectorAll("[data-loop-tab]").forEach((button) => button.addEventListener("click", () => {
     state.loop.tab = button.dataset.loopTab;
@@ -4887,6 +4908,11 @@ function bindEvents() {
     const termDetailButton = event.target.closest("[data-term-detail-id]");
     if (termDetailButton) {
       void openTermDetail(termDetailButton.dataset.termDetailId, termDetailButton);
+      return;
+    }
+    const frontierUpdateButton = event.target.closest("[data-frontier-update-id]");
+    if (frontierUpdateButton) {
+      openFrontierUpdateDetail(frontierUpdateButton.dataset.frontierUpdateId, frontierUpdateButton);
       return;
     }
     const knowledgeButton = event.target.closest("[data-knowledge-id]");

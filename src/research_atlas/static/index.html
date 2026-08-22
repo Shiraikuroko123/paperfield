@@ -10,7 +10,7 @@
   <meta property="og:type" content="website">
   <title>Research Atlas</title>
   <link rel="canonical" href="/atlas/">
-  <link rel="stylesheet" href="styles.css?v=0.18.0">
+  <link rel="stylesheet" href="styles.css?v=0.18.1">
 </head>
 <body>
   <a class="skip-link" href="#mainContent">跳到主要内容</a>
@@ -844,6 +844,14 @@
     </form>
   </dialog>
 
+  <dialog class="analysis-dialog phase5-dialog" id="updateDetailDialog" aria-labelledby="updateDetailTitle" aria-describedby="updateDetailSubtitle">
+    <form method="dialog">
+      <header><div><p class="view-context">第一方动态详情</p><h2 id="updateDetailTitle">动态详情</h2><p id="updateDetailSubtitle"></p></div><button class="dialog-close" type="button" id="updateDetailClose" aria-label="关闭动态详情">关闭</button></header>
+      <div class="analysis-dialog-body" id="updateDetailContent"></div>
+      <footer><button class="button button-secondary" type="button" id="updateDetailCancel">关闭</button></footer>
+    </form>
+  </dialog>
+
   <dialog class="analysis-dialog signal-dialog" id="signalDialog" aria-labelledby="signalDialogTitle" aria-describedby="signalDialogSubtitle signalDialogNote">
     <form method="dialog" id="signalForm" novalidate>
       <header>
@@ -962,6 +970,6 @@
   </dialog>
 
   <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-  <script src="app.js?v=0.18.0" defer></script>
+  <script src="app.js?v=0.18.1" defer></script>
 </body>
 </html>
