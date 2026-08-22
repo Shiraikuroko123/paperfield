@@ -50,7 +50,7 @@ DEFAULT_DB_PATH = DEFAULT_LOCAL_DIR / "atlas.db"
 ANALYSIS_STAGE_SCHEMA = json.loads(
     (PACKAGE_DIR / "schemas" / "analysis-stage-complete.schema.json").read_text(encoding="utf-8")
 )
-APP_VERSION = "0.18.2"
+APP_VERSION = "0.18.3"
 SCHEMA_VERSION = 17
 SCHEMA_MIGRATION_SPECS = {
     8: ("phase5_private_research_loop", "phase5-v8-20260812"),
@@ -267,16 +267,16 @@ MAX_LEASE_SECONDS = 1800
 PAPERFIELD_SYNC_DEFAULT_INTERVAL_SECONDS = 15
 PAPERFIELD_SYNC_DEFAULT_MAX_PAGES = 12
 PAPERFIELD_SYNC_PAGE_LIMIT = 500
-# Official RSS/Atom and GitHub feeds are cheap conditional requests. General
-# sources run every five minutes; the small set of first-party code feeds is
-# checked every minute so a new release becomes visible quickly without
-# polling every publisher at that cadence. Commit streams are intentionally
-# excluded from the default monitor because they are too noisy for the news
-# workspace.
+# Official RSS/Atom sources are checked with conditional requests. The active
+# non-GitHub sources run every five minutes; GitHub feeds are retained only for
+# backwards-compatible parsing of old cached items.
 NEWS_SYNC_DEFAULT_INTERVAL_SECONDS = 300
 NEWS_SYNC_DEFAULT_PRIORITY_INTERVAL_SECONDS = 60
 NEWS_SYNC_DEFAULT_LIMIT_PER_SOURCE = 30
 GITHUB_NEWS_CACHE_VERSION = "github_api:v2"
+# GitHub feeds are retained only for backwards-compatible parsing of old
+# cached items. They are not part of Atlas's news workspace or refresh jobs.
+NEWS_EXCLUDED_SOURCE_KINDS = ("github_release", "github_commit")
 
 
 @functools.lru_cache(maxsize=2)
@@ -2501,11 +2501,12 @@ class AtlasStore:
                     json.dumps(item["domains"], ensure_ascii=False), item["trust_tier"], now, now,
                 ),
             )
-        # Keep the legacy commit source readable for old cached items, but do
-        # not fetch, count, or expose it as an active news source anymore.
+        # Keep GitHub sources readable for old cached items, but do not fetch,
+        # count, or expose them as active news sources anymore.
         db.execute(
-            "UPDATE news_sources SET enabled=0, last_error='', updated_at=? WHERE key='codex_commits'",
-            (now,),
+            "UPDATE news_sources SET enabled=0, last_error='', updated_at=? "
+            "WHERE source_kind IN (?, ?)",
+            (now, *NEWS_EXCLUDED_SOURCE_KINDS),
         )
 
     @staticmethod
@@ -6294,8 +6295,12 @@ class AtlasStore:
 
     def list_news_sources(self, enabled_only: bool = False) -> list[dict[str, Any]]:
         with self.connect() as db:
-            where = "WHERE enabled=1" if enabled_only else ""
-            rows = db.execute(f"SELECT * FROM news_sources {where} ORDER BY trust_tier, label").fetchall()
+            where = "WHERE enabled=1 AND source_kind NOT IN (?, ?)" if enabled_only else ""
+            params: tuple[Any, ...] = NEWS_EXCLUDED_SOURCE_KINDS if enabled_only else ()
+            rows = db.execute(
+                f"SELECT * FROM news_sources {where} ORDER BY trust_tier, label",
+                params,
+            ).fetchall()
             return [self._news_source_from_row(row) for row in rows]
 
     def get_news_source(self, source_key: str) -> dict[str, Any]:
@@ -6408,8 +6413,8 @@ class AtlasStore:
         owner = self._learning_owner(owner_id)
         # Disabled sources remain in the database for referential integrity,
         # but their cached items are no longer part of the active workspace.
-        conditions = ["s.enabled=1"]
-        params: list[Any] = [owner]
+        conditions = ["s.enabled=1", "s.source_kind NOT IN (?, ?)"]
+        params: list[Any] = [owner, *NEWS_EXCLUDED_SOURCE_KINDS]
         domain = compact_text(filters.get("domain"), 30).casefold()
         topic = compact_text(filters.get("topic"), 80).casefold()
         source = compact_text(filters.get("source"), 80).casefold()
@@ -6531,15 +6536,16 @@ class AtlasStore:
     def news_stats(self, owner_id: str = "local") -> dict[str, Any]:
         owner = self._learning_owner(owner_id)
         with self.connect() as db:
-            total = db.execute("SELECT COUNT(*) FROM news_items n JOIN news_sources s ON s.key=n.source_key WHERE s.enabled=1").fetchone()[0]
-            cached = db.execute("SELECT COUNT(*) FROM news_items n JOIN news_sources s ON s.key=n.source_key WHERE s.enabled=1 AND n.content_status='cached'").fetchone()[0]
-            unread = db.execute("SELECT COUNT(*) FROM news_items n JOIN news_sources s ON s.key=n.source_key LEFT JOIN news_read_state rs ON rs.news_item_id=n.id AND rs.owner_id=? WHERE s.enabled=1 AND rs.read_at IS NULL", (owner,)).fetchone()[0]
-            saved = db.execute("SELECT COUNT(*) FROM news_read_state rs JOIN news_items n ON n.id=rs.news_item_id JOIN news_sources s ON s.key=n.source_key WHERE rs.owner_id=? AND rs.saved=1 AND s.enabled=1", (owner,)).fetchone()[0]
-            sources = db.execute("SELECT COUNT(*) FROM news_sources WHERE enabled=1").fetchone()[0]
+            excluded = NEWS_EXCLUDED_SOURCE_KINDS
+            total = db.execute("SELECT COUNT(*) FROM news_items n JOIN news_sources s ON s.key=n.source_key WHERE s.enabled=1 AND s.source_kind NOT IN (?, ?)", excluded).fetchone()[0]
+            cached = db.execute("SELECT COUNT(*) FROM news_items n JOIN news_sources s ON s.key=n.source_key WHERE s.enabled=1 AND s.source_kind NOT IN (?, ?) AND n.content_status='cached'", excluded).fetchone()[0]
+            unread = db.execute("SELECT COUNT(*) FROM news_items n JOIN news_sources s ON s.key=n.source_key LEFT JOIN news_read_state rs ON rs.news_item_id=n.id AND rs.owner_id=? WHERE s.enabled=1 AND s.source_kind NOT IN (?, ?) AND rs.read_at IS NULL", (owner, *excluded)).fetchone()[0]
+            saved = db.execute("SELECT COUNT(*) FROM news_read_state rs JOIN news_items n ON n.id=rs.news_item_id JOIN news_sources s ON s.key=n.source_key WHERE rs.owner_id=? AND rs.saved=1 AND s.enabled=1 AND s.source_kind NOT IN (?, ?)", (owner, *excluded)).fetchone()[0]
+            sources = db.execute("SELECT COUNT(*) FROM news_sources WHERE enabled=1 AND source_kind NOT IN (?, ?)", excluded).fetchone()[0]
             runs = db.execute(
                 "SELECT COUNT(*) FROM news_fetch_runs r JOIN news_sources s ON s.key=r.source_key "
-                "WHERE s.enabled=1 AND r.started_at >= ?",
-                ((datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),),
+                "WHERE s.enabled=1 AND s.source_kind NOT IN (?, ?) AND r.started_at >= ?",
+                (*excluded, (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()),
             ).fetchone()[0]
             return {"total": total, "cached": cached, "unread": unread, "saved": saved, "enabled_sources": sources, "runs_last_24h": runs}
 
@@ -6547,8 +6553,9 @@ class AtlasStore:
         with self.connect() as db:
             rows = db.execute(
                 "SELECT r.* FROM news_fetch_runs r JOIN news_sources s ON s.key=r.source_key "
-                "WHERE s.enabled=1 ORDER BY r.started_at DESC LIMIT ?",
-                (max(1, min(100, int(limit))),),
+                "WHERE s.enabled=1 AND s.source_kind NOT IN (?, ?) "
+                "ORDER BY r.started_at DESC LIMIT ?",
+                (*NEWS_EXCLUDED_SOURCE_KINDS, max(1, min(100, int(limit)))),
             ).fetchall()
             return [dict(row) for row in rows]
 
@@ -16926,29 +16933,14 @@ class NewsSynchronizer:
             raise
 
     def _run(self) -> None:
-        first_pass = True
-        next_full_refresh = 0.0
         while not self.stop_event.is_set():
-            source_keys: list[str] | None = None
-            now = time.monotonic()
-            if not first_pass and now < next_full_refresh:
-                priority_keys = [
-                    source["key"]
-                    for source in self.store.list_news_sources(True)
-                    if source.get("source_kind") == "github_release"
-                ]
-                source_keys = priority_keys or None
             try:
-                self.refresh_once(source_keys)
+                self.refresh_once(None)
             except Exception:
                 # The source health rows carry per-feed failures. Keep the
                 # scheduler alive so the next conditional poll can recover.
                 pass
-            first_pass = False
-            if source_keys is None:
-                next_full_refresh = time.monotonic() + self.interval_seconds
-            wait_seconds = self.priority_interval_seconds if next_full_refresh > time.monotonic() else self.interval_seconds
-            if self.stop_event.wait(wait_seconds):
+            if self.stop_event.wait(self.interval_seconds):
                 break
 
     def start(self) -> "NewsSynchronizer":
@@ -18651,9 +18643,8 @@ def main() -> None:
     print(f"Atlas database: {store.path}")
     if news_synchronizer:
         print(
-            "Atlas official news monitor: code feeds every "
-            f"{int(news_synchronizer.priority_interval_seconds)} seconds, "
-            f"all feeds every {int(news_synchronizer.interval_seconds)} seconds"
+            "Atlas official news monitor: enabled non-GitHub sources every "
+            f"{int(news_synchronizer.interval_seconds)} seconds"
         )
     try:
         server.serve_forever()

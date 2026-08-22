@@ -38,11 +38,21 @@ class AtlasNewsTests(unittest.TestCase):
         with self.store.connect() as db:
             self.assertEqual(db.execute("SELECT value FROM app_metadata WHERE key='schema_version'").fetchone()[0], "17")
             self.assertEqual(db.execute("SELECT COUNT(*) FROM news_sources").fetchone()[0], len(news.DEFAULT_NEWS_SOURCES))
-            commit_source = db.execute("SELECT enabled FROM news_sources WHERE key='codex_commits'").fetchone()
-            self.assertIsNotNone(commit_source)
-            self.assertEqual(commit_source["enabled"], 0)
+            github_sources = db.execute(
+                "SELECT key, enabled FROM news_sources WHERE source_kind IN (?, ?)",
+                atlas.NEWS_EXCLUDED_SOURCE_KINDS,
+            ).fetchall()
+            self.assertTrue(github_sources)
+            self.assertTrue(all(row["enabled"] == 0 for row in github_sources))
         active_keys = {source["key"] for source in self.store.list_news_sources(True)}
-        self.assertNotIn("codex_commits", active_keys)
+        self.assertFalse(
+            active_keys
+            & {
+                source.key
+                for source in news.DEFAULT_NEWS_SOURCES
+                if source.source_kind in atlas.NEWS_EXCLUDED_SOURCE_KINDS
+            }
+        )
 
     def test_ieee_robotics_uses_current_official_rss_endpoint(self):
         source = self.store.get_news_source("ieee_robotics")
@@ -124,14 +134,13 @@ class AtlasNewsTests(unittest.TestCase):
         self.assertIn("src/runtime.rs", body_text)
         self.assertIn("+12 / -3", body_text)
 
-    def test_news_monitor_can_refresh_priority_release_sources(self):
+    def test_news_monitor_refreshes_enabled_non_github_sources(self):
         class FakeStore:
             def __init__(self):
                 self.calls = []
 
             def list_news_sources(self, enabled_only=True):
                 return [
-                    {"key": "codex_releases", "source_kind": "github_release"},
                     {"key": "openai", "source_kind": "official_lab"},
                 ]
 
@@ -141,10 +150,25 @@ class AtlasNewsTests(unittest.TestCase):
 
         fake = FakeStore()
         monitor = atlas.NewsSynchronizer(fake, interval_seconds=300, priority_interval_seconds=60)
-        monitor.refresh_once(["codex_releases"])
-        self.assertEqual(fake.calls, [(["codex_releases"], 30)])
-        self.assertEqual(monitor.status()["last_scope"], "priority")
+        monitor.refresh_once()
+        self.assertEqual(fake.calls, [(None, 30)])
+        self.assertEqual(monitor.status()["last_scope"], "all")
         self.assertEqual(monitor.status()["priority_interval_seconds"], 60.0)
+
+    def test_news_stats_excludes_github_items(self):
+        source = self.store.get_news_source("codex_releases")
+        run = self.store.start_news_fetch_run("codex_releases")
+        candidates = news.parse_feed(
+            b'''<?xml version="1.0"?><rss version="2.0"><channel>
+            <item><guid>github-release</guid><title>Robot release</title>
+            <link>https://github.com/example/robot/releases/tag/v1</link>
+            <description>robot release</description></item></channel></rss>''',
+            type("Feed", (), source)(),
+        )
+        self.store.record_news_items(run["id"], candidates)
+        self.store.finish_news_fetch_run(run["id"], "completed", {"fetched": 1, "accepted": 1})
+        self.assertEqual(self.store.news_stats()["total"], 0)
+        self.assertEqual(self.store.list_news_items("local", {}, 20), [])
 
     def test_sanitizer_removes_scripts_and_external_links(self):
         source = news.DEFAULT_NEWS_SOURCES[0]
