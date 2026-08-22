@@ -80,10 +80,16 @@ SETTINGS_PATH = Path(os.environ.get("PAPERFIELD_SETTINGS_PATH", DATA_DIR / "sett
 CONFIG_PATH = Path(os.environ.get("PAPERFIELD_CONFIG_PATH", CATALOG_DIR / "config.json")).expanduser().resolve()
 VENUES_PATH = Path(os.environ.get("PAPERFIELD_VENUES_PATH", CATALOG_DIR / "venues.json")).expanduser().resolve()
 INSTITUTIONS_PATH = Path(os.environ.get("PAPERFIELD_INSTITUTIONS_PATH", CATALOG_DIR / "institutions.json")).expanduser().resolve()
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.6"
 PAPERFIELD_ATLAS_SYNC_TOKEN = os.environ.get("PAPERFIELD_ATLAS_SYNC_TOKEN", "").strip()
 PAPERFIELD_ATLAS_PROXY_TOKEN = os.environ.get("PAPERFIELD_ATLAS_PROXY_TOKEN", "").strip()
 ATLAS_EDITOR_ROLES = {"beta", "editor"}
+ATLAS_REFRESH_CONTROL_PATHS = {
+    "/api/refresh/settings",
+    "/api/refresh/news",
+    "/api/refresh/frontier",
+    "/api/refresh/all",
+}
 USER_AGENT = "Paperfield/1.0 (local research client; contact: local-user)"
 MAX_PDF_BYTES = int(os.environ.get("PAPERFIELD_MAX_PDF_MB", "100")) * 1024 * 1024
 
@@ -7647,6 +7653,11 @@ class AppHandler(SimpleHTTPRequestHandler):
     def atlas_platform_backup_route(path: str) -> bool:
         return bool(re.fullmatch(r"/api/(?:private|editor)/backups(?:/.*)?", path))
 
+    @staticmethod
+    def atlas_refresh_control_allowed(path: str, method: str) -> bool:
+        """Allow model-free global refresh controls for trusted editors."""
+        return method == "POST" and path in ATLAS_REFRESH_CONTROL_PATHS
+
     def trusted_forwarded_proto(self) -> str:
         forwarded = compact_text(self.headers.get("X-Forwarded-Proto"))[:40].split(",", 1)[0].strip().lower()
         if forwarded in {"http", "https"}:
@@ -7674,6 +7685,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             and self.atlas_requires_private_access(atlas_path, self.command)
             and not self.atlas_standard_access_allowed(atlas_path, self.command)
             and not (atlas_path.startswith("/api/editor/") and self.host_editor_allowed())
+            and not (self.atlas_refresh_control_allowed(atlas_path, self.command) and self.host_editor_allowed())
         ):
             self.send_json({"error": "当前账户不能访问 Atlas 私有研究数据或写入接口"}, HTTPStatus.FORBIDDEN)
             return

@@ -7,11 +7,9 @@ The feed layer stores RSS/Atom metadata and keeps a provenance record for each
 source. Long `content:encoded`/description fields are cached as safe in-app
 HTML when available. Article pages are fetched only from the source's HTTPS
 host allowlist, sanitised into a small safe HTML vocabulary, and cached in
-`news_items`. GitHub release and commit pages use the allowlisted GitHub API so
-the reader receives release notes, commit metadata and changed files instead
-of repository navigation. A failed article fetch never becomes invented text:
-the reader keeps the feed summary, labels the limitation, and leaves a retry
-action plus the external source link.
+`news_items`. A failed article fetch never becomes invented text: the reader
+keeps the feed summary, labels the limitation, and leaves a retry action plus
+the external source link.
 
 The public read API is:
 
@@ -23,30 +21,32 @@ The public read API is:
 
 The default source set includes official lab/research feeds from OpenAI, Google
 DeepMind, Hugging Face, Microsoft Research, Berkeley AI Research and Google
-Research, plus first-party GitHub release/commit feeds for OpenAI Codex,
-Hugging Face LeRobot, NVIDIA Isaac GR00T and Physical Intelligence openpi.
-GitHub sources are classified as `code_release` or `code_change`, so a new
-release or harness/runtime commit is visible separately from a general blog
-post. Two secondary newsroom feeds are included for company and funding
+Research. Two secondary newsroom feeds are included for company and funding
 signals and are visibly labelled as secondary; broad secondary entries without
-an embodied/LLM match are discarded. Source metadata is seeded during schema
-migration v17 and reconciled at every startup without deleting cached articles.
+an embodied/LLM match are discarded. GitHub release and commit sources are
+disabled and excluded from source counts, refresh jobs, and the active news
+workspace. Source metadata is seeded during schema migration v17 and reconciled
+at every startup without deleting cached articles.
 The synchronizer keeps up to 30 entries per source by default; an explicit
 refresh accepts up to 50. The UI requests up to 200 matching items from the
 API but initially renders 24, with a load-more control and a bounded desktop
 list so a growing archive does not force a long page scroll.
 
-When Atlas runs through the unified launcher, an in-process monitor polls the
-allowlisted feeds using ETag/Last-Modified conditional requests. GitHub
-release/commit feeds are checked every minute by default, while the remaining
-official and secondary feeds are checked every five minutes. Set
-`RESEARCH_ATLAS_NEWS_SYNC_PRIORITY_INTERVAL_SECONDS` to a value between 60 and
-the general interval to change the code-feed cadence, and set
-`RESEARCH_ATLAS_NEWS_SYNC_INTERVAL_SECONDS` to a value between 60 and 86400 to
-change the general cadence. Set `RESEARCH_ATLAS_NEWS_SYNC_ENABLED=0` to disable
-automatic polling. The current monitor state and per-source run summary are
-available at `GET /api/news/monitor`; the UI displays the latest check and both
-polling cadences.
+When Atlas runs through the unified launcher, one in-process refresh controller
+polls the allowlisted feeds using ETag/Last-Modified conditional requests and
+runs the arXiv/official-update frontier scanner. Open **刷新设置** in either the
+frontier radar or news header to change both schedules, enable or disable either
+job, inspect last/next run times, or refresh both immediately. The persisted
+defaults are five minutes for news and six hours for the frontier scanner; the
+allowed ranges are 1 minute to 24 hours and 15 minutes to 7 days respectively.
+The controller is deterministic and does not invoke an AI model.
+
+The unified control API is `GET /api/refresh/status`,
+`GET/POST /api/refresh/settings`, and `POST /api/refresh/news`, `/frontier`, or
+`/all`.
+The existing `GET /api/news/monitor` endpoint still exposes per-source run
+details. `RESEARCH_ATLAS_NEWS_SYNC_ENABLED=0` remains a startup escape hatch for
+automatic news polling.
 
 The workspace is intentionally separate from the published frontier signal
 layer. A news item can link to an arXiv/DOI reference for Paperfield reading,

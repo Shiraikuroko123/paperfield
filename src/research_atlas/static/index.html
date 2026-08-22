@@ -10,7 +10,7 @@
   <meta property="og:type" content="website">
   <title>Research Atlas</title>
   <link rel="canonical" href="/atlas/">
-  <link rel="stylesheet" href="styles.css?v=0.18.3">
+  <link rel="stylesheet" href="styles.css?v=0.18.6">
 </head>
 <body>
   <a class="skip-link" href="#mainContent">跳到主要内容</a>
@@ -96,9 +96,13 @@
             <h1 id="radarTitle">前沿雷达</h1>
             <p>大模型与具身智能中的近期研究变化，按证据状态而不是热度组织。</p>
           </div>
-          <div class="scope-switch" id="scopeSwitch" role="tablist" aria-orientation="horizontal" aria-label="雷达范围">
-            <button class="is-active" id="scopeGlobalTab" type="button" role="tab" aria-selected="true" aria-controls="radarView" data-scope="global">全局前沿</button>
-            <button id="scopeReadingTab" type="button" role="tab" aria-selected="false" aria-controls="radarView" tabindex="-1" data-scope="my-reading">我的阅读与学习</button>
+          <div class="radar-header-actions">
+            <div class="scope-switch" id="scopeSwitch" role="tablist" aria-orientation="horizontal" aria-label="雷达范围">
+              <button class="is-active" id="scopeGlobalTab" type="button" role="tab" aria-selected="true" aria-controls="radarView" data-scope="global">全局前沿</button>
+              <button id="scopeReadingTab" type="button" role="tab" aria-selected="false" aria-controls="radarView" tabindex="-1" data-scope="my-reading">我的阅读与学习</button>
+            </div>
+            <button class="button button-primary" id="frontierRefresh" type="button">刷新前沿</button>
+            <button class="button button-secondary" id="refreshSettingsButton" type="button">刷新设置</button>
           </div>
         </header>
 
@@ -157,6 +161,7 @@
             </div>
           </form>
           <div class="source-diagnostic-strip" id="frontierSourceDiagnostics" aria-live="polite"></div>
+          <p class="frontier-refresh-status" id="frontierRefreshStatus" role="status" aria-live="polite"></p>
           <div class="frontier-ranked-list" id="frontierRankedList" aria-live="polite"></div>
           <div class="empty-state is-compact" id="frontierRankedEmpty" hidden>
             <strong>当前范围没有可排序信号</strong>
@@ -272,6 +277,7 @@
           <div class="news-header-actions">
             <span class="state-label" id="newsStatus" role="status">尚未刷新</span>
             <button class="button button-primary" id="newsRefresh" type="button">刷新新闻</button>
+            <button class="button button-secondary" id="newsRefreshSettingsButton" type="button">刷新设置</button>
           </div>
         </header>
         <p class="news-monitor-status" id="newsMonitorStatus" role="status">官方源监控尚未启动。</p>
@@ -969,7 +975,51 @@
     </form>
   </dialog>
 
+  <dialog class="analysis-dialog phase5-dialog refresh-settings-dialog" id="refreshSettingsDialog" aria-labelledby="refreshSettingsTitle" aria-describedby="refreshSettingsDescription">
+    <form method="dialog" id="refreshSettingsForm">
+      <header>
+        <div>
+          <p class="view-context">Atlas 数据刷新</p>
+          <h2 id="refreshSettingsTitle">刷新控制中心</h2>
+          <p id="refreshSettingsDescription">新闻和前沿雷达使用确定性的 RSS/Atom、arXiv、去重和排序流程，不依赖 AI 模型。</p>
+        </div>
+        <button class="dialog-close" type="button" id="refreshSettingsClose" aria-label="关闭刷新设置">关闭</button>
+      </header>
+      <div class="analysis-dialog-body">
+        <div class="form-grid form-grid-two">
+          <label class="field-label" for="newsRefreshIntervalMinutes">新闻自动刷新（分钟）
+            <input id="newsRefreshIntervalMinutes" name="newsIntervalMinutes" type="number" min="1" max="1440" step="1" inputmode="numeric" required>
+            <small>默认 5 分钟；仅检查已启用的非 GitHub 来源。</small>
+          </label>
+          <label class="field-label" for="frontierRefreshIntervalHours">前沿雷达自动刷新（小时）
+            <input id="frontierRefreshIntervalHours" name="frontierIntervalHours" type="number" min="0.25" max="168" step="0.25" inputmode="decimal" required>
+            <small>默认 6 小时；最低 15 分钟，避免 arXiv/RSS 限流。</small>
+          </label>
+        </div>
+        <label class="editor-check" for="newsRefreshEnabled"><input id="newsRefreshEnabled" type="checkbox"><span><strong>启用新闻自动刷新</strong><small>关闭后仍可点击“刷新新闻”手动获取。</small></span></label>
+        <label class="editor-check" for="frontierRefreshEnabled"><input id="frontierRefreshEnabled" type="checkbox"><span><strong>启用前沿雷达自动刷新</strong><small>关闭后仍可点击“刷新前沿”手动扫描。</small></span></label>
+        <div class="refresh-status-grid" id="refreshSettingsStatus" role="status" aria-live="polite"></div>
+        <details class="refresh-algorithm">
+          <summary>自动刷新如何工作（不使用 AI）</summary>
+          <ol>
+            <li><strong>定时触发：</strong>后台线程读取这里保存的周期；关闭浏览器后，只要 Atlas 服务仍在运行就会继续执行。</li>
+            <li><strong>增量获取：</strong>新闻读取已启用的 RSS/Atom，前沿雷达查询 arXiv 与官方动态；条件请求会复用 ETag 和 Last-Modified。</li>
+            <li><strong>规则过滤：</strong>按领域关键词、来源白名单和时间窗筛选，并用规范化链接、论文标识与内容哈希去重。</li>
+            <li><strong>确定性排序：</strong>根据新鲜度、查询交叉命中、来源与证据成熟度计算排序；相同输入会得到相同结果。</li>
+          </ol>
+          <p>这一链路不调用模型、不消耗模型额度。AI 只在你主动发起论文深度分析时使用。</p>
+        </details>
+      </div>
+      <p class="dialog-error" id="refreshSettingsError" role="alert" aria-live="assertive" hidden></p>
+      <footer>
+        <button class="button button-secondary" type="button" id="refreshAllButton">立即刷新全部</button>
+        <button class="button button-secondary" type="button" id="refreshSettingsCancel">取消</button>
+        <button class="button button-primary" type="submit" id="refreshSettingsSave">保存设置</button>
+      </footer>
+    </form>
+  </dialog>
+
   <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
-  <script src="app.js?v=0.18.3" defer></script>
+  <script src="app.js?v=0.18.6" defer></script>
 </body>
 </html>

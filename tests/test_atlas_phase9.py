@@ -308,6 +308,15 @@ class Phase9ProxyTests(unittest.TestCase):
 
     def test_privileged_account_roles_can_use_editor_through_trusted_proxy(self):
         public_origin = "https://mosaic-bok-confound.ngrok-free.dev"
+        local_status, local_payload = self.request(
+            "/api/editor/coverage",
+            owner="local",
+            role="local",
+            origin=public_origin,
+        )
+        self.assertEqual(local_status, 200)
+        self.assertIn("items", local_payload)
+
         for role in ("beta", "editor"):
             with self.subTest(role=role):
                 status, payload = self.request(
@@ -444,6 +453,9 @@ class Phase9PaperfieldAccessTests(unittest.TestCase):
         self.assertFalse(handler.atlas_standard_access_allowed("/api/private/bootstrap", "GET"))
         self.assertFalse(handler.atlas_standard_access_allowed("/api/private/export", "GET"))
         self.assertFalse(handler.atlas_standard_access_allowed("/api/analysis-requests", "POST"))
+        self.assertTrue(handler.atlas_refresh_control_allowed("/api/refresh/settings", "POST"))
+        self.assertTrue(handler.atlas_refresh_control_allowed("/api/refresh/frontier", "POST"))
+        self.assertFalse(handler.atlas_refresh_control_allowed("/api/refresh/settings", "GET"))
 
     def test_authenticated_proxy_injects_owner_and_isolates_learning_progress(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -456,6 +468,11 @@ class Phase9PaperfieldAccessTests(unittest.TestCase):
                 "http://127.0.0.1:8765/",
                 "http://127.0.0.1:8765/flowloom/",
                 proxy_token=self.PROXY_TOKEN,
+            )
+            atlas_server.refresh_coordinator = atlas.RefreshCoordinator(
+                atlas_store,
+                atlas.NewsSynchronizer(atlas_store, enabled=False),
+                atlas.FrontierSynchronizer(mock.Mock(), enabled=False),
             )
             atlas_thread = threading.Thread(target=atlas_server.serve_forever, daemon=True)
             atlas_thread.start()
@@ -553,6 +570,29 @@ class Phase9PaperfieldAccessTests(unittest.TestCase):
                     )
                     self.assertEqual(editor_status, 200)
                     self.assertIn("items", editor_payload)
+
+                    refresh_status, refresh_payload = json_request(
+                        curator,
+                        "/atlas/api/refresh/settings",
+                        payload={
+                            "news_interval_seconds": 600,
+                            "frontier_interval_seconds": 10800,
+                            "news_enabled": True,
+                            "frontier_enabled": True,
+                        },
+                        headers={"Origin": base},
+                    )
+                    self.assertEqual(refresh_status, 200)
+                    self.assertEqual(refresh_payload["settings"]["news_interval_seconds"], 600)
+
+                    with self.assertRaises(urllib.error.HTTPError) as blocked_refresh:
+                        json_request(
+                            bob,
+                            "/atlas/api/refresh/settings",
+                            payload={"news_interval_seconds": 60},
+                            headers={"Origin": base},
+                        )
+                    self.assertEqual(blocked_refresh.exception.code, 403)
 
                     with self.assertRaises(urllib.error.HTTPError) as spoofed_role:
                         json_request(

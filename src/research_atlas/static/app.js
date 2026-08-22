@@ -51,6 +51,11 @@ const state = {
     error: "",
     filters: { domain: "", topic: "", articleType: "", source: "", importance: "", from: "", to: "", unread: false, saved: false, q: "" },
   },
+  refresh: {
+    status: null,
+    loading: false,
+    fingerprint: "",
+  },
   knowledge: {
     method: [],
     problem: [],
@@ -189,6 +194,13 @@ function displayDate(value) {
   const date = new Date(value.length === 10 ? `${value}T00:00:00` : value);
   if (Number.isNaN(date.valueOf())) return value;
   return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "short", day: "numeric" }).format(date);
+}
+
+function displayDateTime(value) {
+  if (!value) return "时间未知";
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return String(value);
+  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
 function textSnippet(value, maximum = 420) {
@@ -1949,6 +1961,161 @@ async function loadFrontierRadar() {
   }
 }
 
+function refreshIntervalLabel(seconds, kind = "") {
+  const value = Number(seconds || 0);
+  if (!value) return "未设置";
+  if (kind === "frontier" || value >= 3600) {
+    const hours = value / 3600;
+    return `${Number.isInteger(hours) ? hours : hours.toFixed(2).replace(/0+$/, "")} 小时`;
+  }
+  const minutes = value / 60;
+  return `${Number.isInteger(minutes) ? minutes : minutes.toFixed(1)} 分钟`;
+}
+
+function refreshStateLabel(value) {
+  if (!value) return "尚未运行";
+  if (value.running) return "正在刷新";
+  if (value.last_error) return `失败：${textSnippet(value.last_error, 120)}`;
+  if (value.last_finished_at) return `上次完成 ${displayDateTime(value.last_finished_at)}`;
+  return "等待首次刷新";
+}
+
+function renderRefreshStatus() {
+  const status = state.refresh.status;
+  const target = el("refreshSettingsStatus");
+  const radarTarget = el("frontierRefreshStatus");
+  if (!status) return;
+  const settings = status.settings || {};
+  const news = status.news || {};
+  const frontier = status.frontier || {};
+  const card = (label, value, kind) => `<div class="refresh-status-card"><strong>${label}</strong><span>${value.enabled ? "自动刷新已启用" : "自动刷新已关闭"} · ${refreshStateLabel(value)}</span><small>周期 ${refreshIntervalLabel(value.interval_seconds, kind)}${value.next_run_at ? ` · 下次 ${escapeHtml(displayDateTime(value.next_run_at))}` : ""}</small></div>`;
+  if (target) target.innerHTML = `${card("新闻", news, "news")}${card("前沿雷达", frontier, "frontier")}<p class="term-action-note">自动刷新算法不调用 AI：来源请求 → 条件请求与时间窗 → 去重入库 → 确定性排序。AI 只用于你主动请求的论文深度分析。</p>`;
+  if (radarTarget) {
+    const frontierText = frontier.running
+      ? "前沿扫描正在运行，完成后页面会自动更新。"
+      : frontier.last_error
+        ? `前沿扫描失败：${frontier.last_error}`
+        : `前沿自动刷新${settings.frontier_enabled ? "已启用" : "已关闭"}，周期 ${refreshIntervalLabel(settings.frontier_interval_seconds, "frontier")}。`;
+    radarTarget.textContent = `${frontierText}${frontier.next_run_at ? ` 下次 ${displayDateTime(frontier.next_run_at)}。` : ""}`;
+  }
+  const newsMonitor = el("newsMonitorStatus");
+  if (newsMonitor && news) {
+    newsMonitor.textContent = news.running
+      ? "新闻源正在刷新。"
+      : `新闻自动刷新${settings.news_enabled ? "已启用" : "已关闭"}，周期 ${refreshIntervalLabel(settings.news_interval_seconds, "news")}。${news.next_run_at ? ` 下次 ${displayDateTime(news.next_run_at)}。` : ""}`;
+  }
+}
+
+async function loadRefreshStatus() {
+  try {
+    const status = await api("/api/refresh/status");
+    const fingerprint = JSON.stringify({
+      news: status.news?.last_finished_at,
+      frontier: status.frontier?.last_finished_at,
+      errors: [status.news?.last_error, status.frontier?.last_error],
+    });
+    const previous = state.refresh.status;
+    state.refresh.status = status;
+    state.refresh.fingerprint = fingerprint;
+    renderRefreshStatus();
+    return { status, changed: Boolean(previous && previousFingerprintValue(previous) !== fingerprint) };
+  } catch (error) {
+    state.refresh.status = { settings: {}, news: { enabled: false }, frontier: { enabled: false }, error: error.message };
+    renderRefreshStatus();
+    return { status: state.refresh.status, changed: false };
+  }
+}
+
+function previousFingerprintValue(status) {
+  return JSON.stringify({
+    news: status.news?.last_finished_at,
+    frontier: status.frontier?.last_finished_at,
+    errors: [status.news?.last_error, status.frontier?.last_error],
+  });
+}
+
+function fillRefreshSettings(status) {
+  const settings = status?.settings || {};
+  el("newsRefreshIntervalMinutes").value = Math.max(1, Math.round(Number(settings.news_interval_seconds || 300) / 60));
+  el("frontierRefreshIntervalHours").value = (Number(settings.frontier_interval_seconds || 21600) / 3600).toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+  el("newsRefreshEnabled").checked = settings.news_enabled !== false;
+  el("frontierRefreshEnabled").checked = settings.frontier_enabled !== false;
+}
+
+async function openRefreshSettings(trigger = null) {
+  const dialog = el("refreshSettingsDialog");
+  if (!dialog) return;
+  const result = await loadRefreshStatus();
+  fillRefreshSettings(result.status);
+  el("refreshSettingsError").hidden = true;
+  openManagedDialog(dialog, trigger, el("newsRefreshIntervalMinutes"));
+}
+
+async function saveRefreshSettings(event) {
+  event.preventDefault();
+  const errorTarget = el("refreshSettingsError");
+  errorTarget.hidden = true;
+  const button = el("refreshSettingsSave");
+  button.disabled = true;
+  try {
+    const newsMinutes = Number(el("newsRefreshIntervalMinutes").value);
+    const frontierHours = Number(el("frontierRefreshIntervalHours").value);
+    if (!Number.isFinite(newsMinutes) || !Number.isFinite(frontierHours)) throw new Error("刷新周期必须是数字");
+    if (newsMinutes < 1 || newsMinutes > 1440) throw new Error("新闻周期必须在 1 到 1440 分钟之间");
+    if (frontierHours < 0.25 || frontierHours > 168) throw new Error("前沿周期必须在 0.25 到 168 小时之间");
+    const status = await api("/api/refresh/settings", {
+      method: "POST",
+      body: JSON.stringify({
+        news_interval_seconds: Math.round(newsMinutes * 60),
+        frontier_interval_seconds: Math.round(frontierHours * 3600),
+        news_enabled: el("newsRefreshEnabled").checked,
+        frontier_enabled: el("frontierRefreshEnabled").checked,
+      }),
+    });
+    state.refresh.status = status;
+    renderRefreshStatus();
+    el("refreshSettingsDialog").close();
+    toast("刷新设置已保存");
+  } catch (error) {
+    errorTarget.hidden = false;
+    errorTarget.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function refreshFrontier() {
+  const button = el("frontierRefresh");
+  button.disabled = true;
+  if (el("frontierRefreshStatus")) el("frontierRefreshStatus").textContent = "前沿扫描请求已发送，正在读取 arXiv 和官方动态...";
+  try {
+    await api("/api/refresh/frontier", { method: "POST", body: "{}" });
+    await Promise.all([loadRefreshStatus(), loadFrontierRadar(), loadBootstrap()]);
+    toast("前沿雷达刷新完成");
+  } catch (error) {
+    toast(error.message, true);
+    await loadRefreshStatus();
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function refreshAllSources() {
+  const button = el("refreshAllButton");
+  button.disabled = true;
+  try {
+    await api("/api/refresh/all", { method: "POST", body: "{}" });
+    await Promise.all([loadRefreshStatus(), loadFrontierRadar(), loadNews({ keepSelection: false }), loadBootstrap()]);
+    toast("新闻和前沿雷达刷新完成");
+  } catch (error) {
+    el("refreshSettingsError").hidden = false;
+    el("refreshSettingsError").textContent = error.message;
+    await loadRefreshStatus();
+  } finally {
+    button.disabled = false;
+  }
+}
+
 const newsTypeLabels = {
   code_release: "代码/架构发布",
   code_change: "代码变更",
@@ -2090,6 +2257,7 @@ function renderNews() {
       monitorTarget.textContent = `启用的非 GitHub 来源每 ${fullMinutes} 分钟检查，最近完成 ${count} 个来源。`;
     }
   }
+  if (state.refresh.status?.news) renderRefreshStatus();
   renderNewsSourceOptions();
   renderNewsSourceHealth();
   renderNewsReader();
@@ -2172,8 +2340,8 @@ async function refreshNews() {
   el("newsStatus").className = "state-label is-primary";
   el("newsStatus").textContent = "刷新中";
   try {
-    await api("/api/news/refresh", { method: "POST", body: JSON.stringify({ limitPerSource: 50 }) });
-    await loadNews({ keepSelection: false });
+    await api("/api/refresh/news", { method: "POST", body: "{}" });
+    await Promise.all([loadNews({ keepSelection: false }), loadRefreshStatus(), loadBootstrap()]);
     toast("新闻源刷新完成");
   } catch (error) {
     state.news.error = error.message;
@@ -4717,6 +4885,9 @@ function bindEvents() {
     state.frontier.filters = { domain: "", source: "", maturity: "", from: "", to: "" };
     void loadFrontierRadar();
   });
+  el("frontierRefresh").addEventListener("click", () => void refreshFrontier());
+  el("refreshSettingsButton").addEventListener("click", (event) => void openRefreshSettings(event.currentTarget));
+  el("newsRefreshSettingsButton").addEventListener("click", (event) => void openRefreshSettings(event.currentTarget));
   el("newsFilterForm").addEventListener("submit", (event) => {
     event.preventDefault();
     state.news.filters = {
@@ -4742,7 +4913,7 @@ function bindEvents() {
   el("newsLoadMore")?.addEventListener("click", loadMoreNews);
 
   ["focusEditButton", "focusEditButtonMain"].forEach((id) => el(id).addEventListener("click", (event) => openFocusDialog(event.currentTarget)));
-  ["focusDialog", "researchViewDialog", "termDetailDialog", "knowledgeDialog", "updateDetailDialog", "signalDialog", "analysisDialog"].forEach((id) => bindDialogFocusRestore(el(id)));
+  ["focusDialog", "researchViewDialog", "termDetailDialog", "knowledgeDialog", "updateDetailDialog", "signalDialog", "analysisDialog", "refreshSettingsDialog"].forEach((id) => bindDialogFocusRestore(el(id)));
   el("focusClose").addEventListener("click", () => el("focusDialog").close());
   el("focusCancel").addEventListener("click", () => el("focusDialog").close());
   el("focusForm").addEventListener("submit", submitFocus);
@@ -4761,6 +4932,10 @@ function bindEvents() {
   el("knowledgeDialogCancel").addEventListener("click", () => el("knowledgeDialog").close());
   el("updateDetailClose").addEventListener("click", () => el("updateDetailDialog").close());
   el("updateDetailCancel").addEventListener("click", () => el("updateDetailDialog").close());
+  el("refreshSettingsClose").addEventListener("click", () => el("refreshSettingsDialog").close());
+  el("refreshSettingsCancel").addEventListener("click", () => el("refreshSettingsDialog").close());
+  el("refreshSettingsForm").addEventListener("submit", saveRefreshSettings);
+  el("refreshAllButton").addEventListener("click", () => void refreshAllSources());
 
   document.querySelectorAll("[data-loop-tab]").forEach((button) => button.addEventListener("click", () => {
     state.loop.tab = button.dataset.loopTab;
@@ -5118,7 +5293,8 @@ async function refreshOperationalState() {
   if (state.refreshInFlight || document.hidden || el("analysisDialog").open) return;
   state.refreshInFlight = true;
   try {
-    const [config, data] = await Promise.all([api("/api/config"), fetchBootstrapData()]);
+    const previousRefreshStatus = state.refresh.status;
+    const [config, data, refreshState] = await Promise.all([api("/api/config"), fetchBootstrapData(), loadRefreshStatus()]);
     const dataFingerprint = JSON.stringify(data);
     if (dataFingerprint !== state.dataFingerprint) {
       state.data = data;
@@ -5126,6 +5302,14 @@ async function refreshOperationalState() {
       state.dataFingerprint = dataFingerprint;
       renderAll();
       void loadFrontierRadar();
+    }
+    if (refreshState.changed) {
+      if (previousRefreshStatus?.frontier?.last_finished_at !== refreshState.status.frontier?.last_finished_at) {
+        void loadFrontierRadar();
+      }
+      if (previousRefreshStatus?.news?.last_finished_at !== refreshState.status.news?.last_finished_at) {
+        void loadNews();
+      }
     }
     applyRuntimeConfig(config);
     if (state.activeView === "dossier" && state.currentPaper) {
@@ -5144,7 +5328,7 @@ async function init() {
   bridgeQueryContext();
   bindEvents();
   try {
-    const [config] = await Promise.all([api("/api/config"), loadBootstrap()]);
+    const [config] = await Promise.all([api("/api/config"), loadBootstrap(), loadRefreshStatus()]);
     applyRuntimeConfig(config);
     await Promise.all([loadFrontierRadar(), loadKnowledgeViews(), loadCurriculum()]);
     await loadNews();

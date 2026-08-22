@@ -50,7 +50,7 @@ DEFAULT_DB_PATH = DEFAULT_LOCAL_DIR / "atlas.db"
 ANALYSIS_STAGE_SCHEMA = json.loads(
     (PACKAGE_DIR / "schemas" / "analysis-stage-complete.schema.json").read_text(encoding="utf-8")
 )
-APP_VERSION = "0.18.3"
+APP_VERSION = "0.18.6"
 SCHEMA_VERSION = 17
 SCHEMA_MIGRATION_SPECS = {
     8: ("phase5_private_research_loop", "phase5-v8-20260812"),
@@ -117,7 +117,7 @@ CONTENT_SOURCE_KINDS = {
 CONFIDENCE_LEVELS = {"high", "medium", "low", "unknown"}
 EVIDENCE_DIRECTIONS = {"supports", "contradicts", "qualifies"}
 MATERIAL_AUTHORIZATION_MODES = {"none", "public_pdf_local", "public_pdf_external"}
-EDITOR_ACCOUNT_ROLES = {"beta", "editor"}
+EDITOR_ACCOUNT_ROLES = {"local", "beta", "editor"}
 MATERIAL_STATUS = {
     "unavailable",
     "awaiting_authorization",
@@ -277,6 +277,53 @@ GITHUB_NEWS_CACHE_VERSION = "github_api:v2"
 # GitHub feeds are retained only for backwards-compatible parsing of old
 # cached items. They are not part of Atlas's news workspace or refresh jobs.
 NEWS_EXCLUDED_SOURCE_KINDS = ("github_release", "github_commit")
+
+# News and frontier scans share one persisted, server-wide refresh policy. The
+# frontier floor is intentionally longer than the news floor because an arXiv
+# scan fans out to multiple API/RSS requests and is subject to rate limits.
+REFRESH_SETTINGS_METADATA_KEY = "refresh_settings:v1"
+FRONTIER_SYNC_DEFAULT_INTERVAL_SECONDS = 6 * 60 * 60
+FRONTIER_SYNC_DEFAULT_LIMIT_PER_QUERY = 25
+FRONTIER_SYNC_DEFAULT_DAYS_BACK = 14
+FRONTIER_SYNC_DEFAULT_TIMEOUT_SECONDS = 45
+FRONTIER_SYNC_DEFAULT_OFFICIAL_LIMIT = 12
+REFRESH_DEFAULT_SETTINGS = {
+    "news_interval_seconds": NEWS_SYNC_DEFAULT_INTERVAL_SECONDS,
+    "frontier_interval_seconds": FRONTIER_SYNC_DEFAULT_INTERVAL_SECONDS,
+    "news_enabled": True,
+    "frontier_enabled": True,
+}
+REFRESH_INTERVAL_LIMITS = {
+    "news_interval_seconds": (60, 86400),
+    "frontier_interval_seconds": (900, 604800),
+}
+
+
+def _refresh_seconds(value: Any, key: str) -> int:
+    default = int(REFRESH_DEFAULT_SETTINGS[key])
+    minimum, maximum = REFRESH_INTERVAL_LIMITS[key]
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+def normalize_refresh_settings(payload: Any) -> dict[str, Any]:
+    raw = payload if isinstance(payload, dict) else {}
+    result = {
+        "news_interval_seconds": _refresh_seconds(
+            raw.get("news_interval_seconds", raw.get("newsIntervalSeconds", REFRESH_DEFAULT_SETTINGS["news_interval_seconds"])),
+            "news_interval_seconds",
+        ),
+        "frontier_interval_seconds": _refresh_seconds(
+            raw.get("frontier_interval_seconds", raw.get("frontierIntervalSeconds", REFRESH_DEFAULT_SETTINGS["frontier_interval_seconds"])),
+            "frontier_interval_seconds",
+        ),
+        "news_enabled": bool(raw.get("news_enabled", raw.get("newsEnabled", REFRESH_DEFAULT_SETTINGS["news_enabled"]))),
+        "frontier_enabled": bool(raw.get("frontier_enabled", raw.get("frontierEnabled", REFRESH_DEFAULT_SETTINGS["frontier_enabled"]))),
+    }
+    return result
 
 
 @functools.lru_cache(maxsize=2)
@@ -833,6 +880,47 @@ class AtlasStore:
     def close(self) -> None:
         """Release any store-owned resources; request connections are scoped."""
         return None
+
+    def get_refresh_settings(self) -> dict[str, Any]:
+        """Read the global refresh policy, seeding defaults on first use."""
+        with self._lock, self.connect() as db:
+            row = db.execute(
+                "SELECT value FROM app_metadata WHERE key=?",
+                (REFRESH_SETTINGS_METADATA_KEY,),
+            ).fetchone()
+            if row is None:
+                settings = normalize_refresh_settings(REFRESH_DEFAULT_SETTINGS)
+                db.execute(
+                    "INSERT INTO app_metadata(key, value) VALUES(?, ?)",
+                    (REFRESH_SETTINGS_METADATA_KEY, json.dumps(settings, ensure_ascii=False, sort_keys=True)),
+                )
+                return settings
+            try:
+                payload = json.loads(row["value"] or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                payload = {}
+            settings = normalize_refresh_settings(payload)
+            normalized = json.dumps(settings, ensure_ascii=False, sort_keys=True)
+            if row["value"] != normalized:
+                db.execute(
+                    "UPDATE app_metadata SET value=? WHERE key=?",
+                    (normalized, REFRESH_SETTINGS_METADATA_KEY),
+                )
+            return settings
+
+    def update_refresh_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Validate and persist the global refresh policy without a schema migration."""
+        settings = normalize_refresh_settings(payload)
+        with self._lock, self.connect() as db:
+            db.execute(
+                "INSERT INTO app_metadata(key, value) VALUES(?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (
+                    REFRESH_SETTINGS_METADATA_KEY,
+                    json.dumps(settings, ensure_ascii=False, sort_keys=True),
+                ),
+            )
+        return settings
 
     @staticmethod
     def _migration_rows_are_valid(rows: list[sqlite3.Row], current: int) -> None:
@@ -16862,16 +16950,20 @@ class NewsSynchronizer:
         interval_seconds: float = NEWS_SYNC_DEFAULT_INTERVAL_SECONDS,
         priority_interval_seconds: float = NEWS_SYNC_DEFAULT_PRIORITY_INTERVAL_SECONDS,
         limit_per_source: int = NEWS_SYNC_DEFAULT_LIMIT_PER_SOURCE,
+        enabled: bool = True,
+        operation_lock: threading.RLock | None = None,
     ) -> None:
         self.store = store
         self.interval_seconds = max(60.0, min(86400.0, float(interval_seconds)))
         self.priority_interval_seconds = max(60.0, min(self.interval_seconds, float(priority_interval_seconds)))
         self.limit_per_source = max(1, min(50, int(limit_per_source)))
         self.stop_event = threading.Event()
+        self.policy_event = threading.Event()
         self.thread: threading.Thread | None = None
         self._state_lock = threading.Lock()
+        self._operation_lock = operation_lock or threading.RLock()
         self._state: dict[str, Any] = {
-            "enabled": True,
+            "enabled": bool(enabled),
             "interval_seconds": self.interval_seconds,
             "priority_interval_seconds": self.priority_interval_seconds,
             "limit_per_source": self.limit_per_source,
@@ -16882,9 +16974,18 @@ class NewsSynchronizer:
             "last_runs": [],
             "last_scope": "",
             "last_stats": {},
+            "next_run_at": "",
         }
 
     def refresh_once(self, source_keys: list[str] | None = None) -> dict[str, Any]:
+        if not self._operation_lock.acquire(timeout=2.0):
+            raise ConflictError("新闻或前沿数据正在刷新，请稍后重试")
+        try:
+            return self._refresh_once_unlocked(source_keys)
+        finally:
+            self._operation_lock.release()
+
+    def _refresh_once_unlocked(self, source_keys: list[str] | None = None) -> dict[str, Any]:
         started = utc_now()
         with self._state_lock:
             self._state.update(
@@ -16892,6 +16993,7 @@ class NewsSynchronizer:
                     "running": True,
                     "last_started_at": started,
                     "last_error": "",
+                    "next_run_at": "",
                     "last_scope": "priority" if source_keys is not None else "all",
                 }
             )
@@ -16934,19 +17036,36 @@ class NewsSynchronizer:
 
     def _run(self) -> None:
         while not self.stop_event.is_set():
+            if not self.status().get("enabled", True):
+                self.policy_event.wait(1.0)
+                self.policy_event.clear()
+                continue
+            delay = self.interval_seconds
             try:
                 self.refresh_once(None)
+            except ConflictError:
+                # News and frontier share one lock. A simultaneous startup or
+                # manual refresh should retry shortly, not consume a full
+                # configured interval.
+                delay = 5.0
             except Exception:
                 # The source health rows carry per-feed failures. Keep the
                 # scheduler alive so the next conditional poll can recover.
                 pass
-            if self.stop_event.wait(self.interval_seconds):
+            with self._state_lock:
+                self._state["next_run_at"] = (
+                    datetime.now(timezone.utc) + timedelta(seconds=delay)
+                ).isoformat()
+            self.policy_event.wait(delay)
+            self.policy_event.clear()
+            if self.stop_event.is_set():
                 break
 
     def start(self) -> "NewsSynchronizer":
         if self.thread and self.thread.is_alive():
             return self
         self.stop_event.clear()
+        self.policy_event.clear()
         self.thread = threading.Thread(target=self._run, name="atlas-news-sync", daemon=True)
         self.thread.start()
         return self
@@ -16955,10 +17074,231 @@ class NewsSynchronizer:
         with self._state_lock:
             return dict(self._state)
 
+    def update_policy(self, *, interval_seconds: float | None = None, enabled: bool | None = None) -> None:
+        changed = False
+        with self._state_lock:
+            if interval_seconds is not None:
+                normalized_interval = max(60.0, min(86400.0, float(interval_seconds)))
+                changed = changed or normalized_interval != self.interval_seconds
+                self.interval_seconds = normalized_interval
+                self._state["interval_seconds"] = normalized_interval
+            if enabled is not None and bool(enabled) != self._state["enabled"]:
+                self._state["enabled"] = bool(enabled)
+                changed = True
+            if changed:
+                self._state["next_run_at"] = ""
+        if changed:
+            self.policy_event.set()
+
     def stop(self, timeout: float = 5.0) -> None:
         self.stop_event.set()
+        self.policy_event.set()
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=max(0.1, float(timeout)))
+
+
+class FrontierSynchronizer:
+    """Run the deterministic arXiv and first-party frontier scanner in-process."""
+
+    def __init__(
+        self,
+        scanner: Any,
+        *,
+        interval_seconds: float = FRONTIER_SYNC_DEFAULT_INTERVAL_SECONDS,
+        enabled: bool = True,
+        operation_lock: threading.RLock | None = None,
+    ) -> None:
+        self.scanner = scanner
+        self.interval_seconds = max(900.0, min(604800.0, float(interval_seconds)))
+        self.stop_event = threading.Event()
+        self.policy_event = threading.Event()
+        self.thread: threading.Thread | None = None
+        self._state_lock = threading.Lock()
+        self._operation_lock = operation_lock or threading.RLock()
+        self._state: dict[str, Any] = {
+            "enabled": bool(enabled),
+            "interval_seconds": self.interval_seconds,
+            "running": False,
+            "last_started_at": "",
+            "last_finished_at": "",
+            "last_error": "",
+            "last_runs": [],
+            "last_stats": {},
+            "next_run_at": "",
+        }
+
+    @staticmethod
+    def _run_summary(run: Any) -> dict[str, Any]:
+        if not isinstance(run, dict):
+            return {"status": "completed", "result": compact_text(str(run), 300)}
+        return {
+            "source": compact_text(run.get("source_name"), 80),
+            "status": compact_text(run.get("status"), 30),
+            "fetched": int(run.get("fetched_count", 0) or 0),
+            "accepted": int(run.get("accepted_count", 0) or 0),
+            "new": int(run.get("new_count", 0) or 0),
+            "updated": int(run.get("updated_count", 0) or 0),
+            "error": compact_text(run.get("error_text"), 500),
+            "finished_at": compact_text(run.get("finished_at"), 80),
+        }
+
+    def refresh_once(self) -> dict[str, Any]:
+        if not self._operation_lock.acquire(timeout=2.0):
+            raise ConflictError("新闻或前沿数据正在刷新，请稍后重试")
+        started = utc_now()
+        with self._state_lock:
+            self._state.update({"running": True, "last_started_at": started, "last_error": "", "next_run_at": ""})
+        try:
+            papers = self.scanner.scan_once()
+            official = self.scanner.scan_official_updates_once()
+            runs = [self._run_summary(papers), self._run_summary(official)]
+            result = {"papers": papers, "official_updates": official, "runs": runs}
+            with self._state_lock:
+                self._state.update(
+                    {
+                        "running": False,
+                        "last_finished_at": utc_now(),
+                        "last_runs": runs,
+                        "last_stats": {
+                            "papers": runs[0],
+                            "official_updates": runs[1],
+                            "term_candidates": papers.get("term_candidates", {}) if isinstance(papers, dict) else {},
+                        },
+                    }
+                )
+            return result
+        except Exception as error:
+            message = compact_text(str(error) or error.__class__.__name__, 2000)
+            with self._state_lock:
+                self._state.update({"running": False, "last_finished_at": utc_now(), "last_error": message})
+            raise
+        finally:
+            self._operation_lock.release()
+
+    def _run(self) -> None:
+        while not self.stop_event.is_set():
+            if not self.status().get("enabled", True):
+                self.policy_event.wait(1.0)
+                self.policy_event.clear()
+                continue
+            delay = self.interval_seconds
+            try:
+                self.refresh_once()
+            except ConflictError:
+                delay = 5.0
+            except Exception:
+                # A failed source is represented in status; keep the scheduler
+                # alive so transient API or RSS failures recover next cycle.
+                pass
+            with self._state_lock:
+                self._state["next_run_at"] = (
+                    datetime.now(timezone.utc) + timedelta(seconds=delay)
+                ).isoformat()
+            self.policy_event.wait(delay)
+            self.policy_event.clear()
+            if self.stop_event.is_set():
+                break
+
+    def start(self) -> "FrontierSynchronizer":
+        if self.thread and self.thread.is_alive():
+            return self
+        self.stop_event.clear()
+        self.policy_event.clear()
+        self.thread = threading.Thread(target=self._run, name="atlas-frontier-sync", daemon=True)
+        self.thread.start()
+        return self
+
+    def status(self) -> dict[str, Any]:
+        with self._state_lock:
+            return dict(self._state)
+
+    def update_policy(self, *, interval_seconds: float | None = None, enabled: bool | None = None) -> None:
+        changed = False
+        with self._state_lock:
+            if interval_seconds is not None:
+                normalized_interval = max(900.0, min(604800.0, float(interval_seconds)))
+                changed = changed or normalized_interval != self.interval_seconds
+                self.interval_seconds = normalized_interval
+                self._state["interval_seconds"] = normalized_interval
+            if enabled is not None and bool(enabled) != self._state["enabled"]:
+                self._state["enabled"] = bool(enabled)
+                changed = True
+            if changed:
+                self._state["next_run_at"] = ""
+        if changed:
+            self.policy_event.set()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        self.stop_event.set()
+        self.policy_event.set()
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=max(0.1, float(timeout)))
+
+
+class RefreshCoordinator:
+    """One control plane for news/frontier policies and explicit refreshes."""
+
+    def __init__(self, store: AtlasStore, news: NewsSynchronizer, frontier: FrontierSynchronizer) -> None:
+        self.store = store
+        self.news = news
+        self.frontier = frontier
+
+    def status(self) -> dict[str, Any]:
+        settings = self.store.get_refresh_settings()
+        news = self.news.status()
+        frontier = self.frontier.status()
+        finished = [news.get("last_finished_at"), frontier.get("last_finished_at")]
+        return {
+            "settings": settings,
+            "news": news,
+            "frontier": frontier,
+            "last_finished_at": max((value for value in finished if value), default=""),
+            "algorithm": {
+                "ai_required": False,
+                "steps": [
+                    "定时触发 RSS/Atom 与 arXiv 请求",
+                    "使用 ETag/Last-Modified、时间窗和来源白名单去重",
+                    "写入 SQLite 并按新鲜度、交叉命中和证据成熟度确定性排序",
+                ],
+            },
+        }
+
+    def apply_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        settings = self.store.update_refresh_settings(payload)
+        self.news.update_policy(
+            interval_seconds=settings["news_interval_seconds"],
+            enabled=settings["news_enabled"],
+        )
+        self.frontier.update_policy(
+            interval_seconds=settings["frontier_interval_seconds"],
+            enabled=settings["frontier_enabled"],
+        )
+        return self.status()
+
+    def refresh(self, kind: str) -> dict[str, Any]:
+        normalized = compact_text(kind, 30).casefold()
+        if normalized == "news":
+            return {"kind": "news", "result": self.news.refresh_once(None), "status": self.status()}
+        if normalized == "frontier":
+            return {"kind": "frontier", "result": self.frontier.refresh_once(), "status": self.status()}
+        if normalized == "all":
+            return {
+                "kind": "all",
+                "result": {
+                    "news": self.news.refresh_once(None),
+                    "frontier": self.frontier.refresh_once(),
+                },
+                "status": self.status(),
+            }
+        raise AtlasError("刷新类型必须是 news、frontier 或 all")
+
+    def start(self) -> None:
+        self.news.start()
+        self.frontier.start()
+
+    def stop(self) -> None:
+        self.news.stop()
+        self.frontier.stop()
 
 
 class AtlasHandler(SimpleHTTPRequestHandler):
@@ -16971,6 +17311,8 @@ class AtlasHandler(SimpleHTTPRequestHandler):
     paperfield_sync_token = ""
     proxy_token = ""
     news_synchronizer: NewsSynchronizer | None = None
+    frontier_synchronizer: FrontierSynchronizer | None = None
+    refresh_coordinator: RefreshCoordinator | None = None
     # Test/embedded-only compatibility switch. Production main() leaves this
     # disabled so forwarded identity and origin headers require a shared token.
     insecure_proxy_headers = False
@@ -17394,6 +17736,26 @@ class AtlasHandler(SimpleHTTPRequestHandler):
                         **self.worker_runtime_status(),
                     }
                 )
+                return
+            if parsed.path == "/api/refresh/status":
+                self.require_private_origin()
+                coordinator = getattr(self.server, "refresh_coordinator", None) or self.refresh_coordinator
+                if coordinator:
+                    self.send_json(coordinator.status())
+                else:
+                    self.send_json(
+                        {
+                            "settings": self.store.get_refresh_settings(),
+                            "news": {"enabled": False, "running": False},
+                            "frontier": {"enabled": False, "running": False},
+                            "last_finished_at": "",
+                            "algorithm": {"ai_required": False, "steps": []},
+                        }
+                    )
+                return
+            if parsed.path == "/api/refresh/settings":
+                self.require_private_origin()
+                self.send_json(self.store.get_refresh_settings())
                 return
             if parsed.path == "/api/bootstrap":
                 self.send_json(self.store.bootstrap())
@@ -17983,7 +18345,26 @@ class AtlasHandler(SimpleHTTPRequestHandler):
                 keys = payload.get("sourceKeys") or payload.get("source_keys") or []
                 if not isinstance(keys, list):
                     raise AtlasError("新闻来源必须是数组")
-                self.send_json(self.store.refresh_news(keys, payload.get("limitPerSource", 20)))
+                synchronizer = getattr(self.server, "news_synchronizer", None) or self.news_synchronizer
+                self.send_json(
+                    synchronizer.refresh_once(keys or None)
+                    if synchronizer
+                    else self.store.refresh_news(keys, payload.get("limitPerSource", 20))
+                )
+                return
+            if parsed.path == "/api/refresh/settings":
+                self.require_local_editor()
+                coordinator = getattr(self.server, "refresh_coordinator", None) or self.refresh_coordinator
+                if coordinator is None:
+                    raise ServiceUnavailableError("Atlas refresh controller is not running")
+                self.send_json(coordinator.apply_settings(self.read_json()))
+                return
+            if parsed.path in {"/api/refresh/news", "/api/refresh/frontier", "/api/refresh/all"}:
+                self.require_private_origin()
+                coordinator = getattr(self.server, "refresh_coordinator", None) or self.refresh_coordinator
+                if coordinator is None:
+                    raise ServiceUnavailableError("Atlas refresh controller is not running")
+                self.send_json(coordinator.refresh(parsed.path.rsplit("/", 1)[-1]))
                 return
             news_state_match = re.fullmatch(r"/api/news/(\d+)/(read|save)", parsed.path)
             if news_state_match:
@@ -18532,6 +18913,8 @@ def create_server(
     # create_server remains side-effect free for tests and embedding callers.
     server.paperfield_synchronizer = None  # type: ignore[attr-defined]
     server.news_synchronizer = None  # type: ignore[attr-defined]
+    server.frontier_synchronizer = None  # type: ignore[attr-defined]
+    server.refresh_coordinator = None  # type: ignore[attr-defined]
     return server
 
 
@@ -18580,18 +18963,13 @@ def main() -> None:
         )
     except ValueError:
         sync_max_pages = PAPERFIELD_SYNC_DEFAULT_MAX_PAGES
-    news_sync_enabled = os.environ.get("RESEARCH_ATLAS_NEWS_SYNC_ENABLED", "1").strip().casefold() in {
-        "1", "true", "yes", "on"
-    }
-    try:
-        news_sync_interval = float(
-            os.environ.get(
-                "RESEARCH_ATLAS_NEWS_SYNC_INTERVAL_SECONDS",
-                str(NEWS_SYNC_DEFAULT_INTERVAL_SECONDS),
-            )
-        )
-    except ValueError:
-        news_sync_interval = float(NEWS_SYNC_DEFAULT_INTERVAL_SECONDS)
+    # Refresh policy is persisted in Atlas so the UI can change it without a
+    # process restart. The environment switch remains a startup escape hatch.
+    refresh_settings = store.get_refresh_settings()
+    news_sync_enabled = refresh_settings["news_enabled"] and os.environ.get(
+        "RESEARCH_ATLAS_NEWS_SYNC_ENABLED", "1"
+    ).strip().casefold() in {"1", "true", "yes", "on"}
+    news_sync_interval = float(refresh_settings["news_interval_seconds"])
     try:
         news_sync_priority_interval = float(
             os.environ.get(
@@ -18610,6 +18988,48 @@ def main() -> None:
         )
     except ValueError:
         news_sync_limit = NEWS_SYNC_DEFAULT_LIMIT_PER_SOURCE
+    try:
+        from . import scanner as scanner_module
+    except ImportError:
+        import scanner as scanner_module
+
+    def env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+        try:
+            value = int(os.environ.get(name, str(default)))
+        except ValueError:
+            value = default
+        return max(minimum, min(maximum, value))
+
+    scanner_config = scanner_module.ScannerConfig(
+        database=store.path,
+        query_specs=scanner_module._selected_specs(
+            os.environ.get("RESEARCH_ATLAS_ARXIV_DOMAINS", "embodied,llm")
+        ),
+        days_back=env_int("RESEARCH_ATLAS_SCAN_DAYS_BACK", FRONTIER_SYNC_DEFAULT_DAYS_BACK, 1, 60),
+        max_results=env_int(
+            "RESEARCH_ATLAS_ARXIV_MAX_RESULTS_PER_DOMAIN",
+            FRONTIER_SYNC_DEFAULT_LIMIT_PER_QUERY,
+            1,
+            100,
+        ),
+        timeout_seconds=env_int(
+            "RESEARCH_ATLAS_SOURCE_TIMEOUT_SECONDS",
+            FRONTIER_SYNC_DEFAULT_TIMEOUT_SECONDS,
+            5,
+            180,
+        ),
+        request_delay_seconds=3.1,
+        interval_seconds=refresh_settings["frontier_interval_seconds"],
+        official_feeds=scanner_module._selected_official_feeds(
+            os.environ.get("RESEARCH_ATLAS_OFFICIAL_FEEDS", "all")
+        ),
+        official_max_results=env_int(
+            "RESEARCH_ATLAS_OFFICIAL_MAX_RESULTS_PER_SOURCE",
+            FRONTIER_SYNC_DEFAULT_OFFICIAL_LIMIT,
+            1,
+            50,
+        ),
+    )
     server = create_server(
         args.host,
         args.port,
@@ -18630,22 +19050,33 @@ def main() -> None:
             max_pages=sync_max_pages,
         ).start()
         server.paperfield_synchronizer = synchronizer  # type: ignore[attr-defined]
-    news_synchronizer = None
-    if news_sync_enabled:
-        news_synchronizer = NewsSynchronizer(
-            store,
-            interval_seconds=news_sync_interval,
-            priority_interval_seconds=news_sync_priority_interval,
-            limit_per_source=news_sync_limit,
-        ).start()
-        server.news_synchronizer = news_synchronizer  # type: ignore[attr-defined]
+    operation_lock = threading.RLock()
+    news_synchronizer = NewsSynchronizer(
+        store,
+        interval_seconds=news_sync_interval,
+        priority_interval_seconds=news_sync_priority_interval,
+        limit_per_source=news_sync_limit,
+        enabled=news_sync_enabled,
+        operation_lock=operation_lock,
+    )
+    frontier_synchronizer = FrontierSynchronizer(
+        scanner_module.FrontierScanner(scanner_config, store=store),
+        interval_seconds=refresh_settings["frontier_interval_seconds"],
+        enabled=refresh_settings["frontier_enabled"],
+        operation_lock=operation_lock,
+    )
+    refresh_coordinator = RefreshCoordinator(store, news_synchronizer, frontier_synchronizer)
+    server.news_synchronizer = news_synchronizer  # type: ignore[attr-defined]
+    server.frontier_synchronizer = frontier_synchronizer  # type: ignore[attr-defined]
+    server.refresh_coordinator = refresh_coordinator  # type: ignore[attr-defined]
+    refresh_coordinator.start()
     print(f"Research Atlas is running at http://{args.host}:{args.port}")
     print(f"Atlas database: {store.path}")
-    if news_synchronizer:
-        print(
-            "Atlas official news monitor: enabled non-GitHub sources every "
-            f"{int(news_synchronizer.interval_seconds)} seconds"
-        )
+    print(
+        "Atlas refresh controller: news every "
+        f"{int(news_synchronizer.interval_seconds)} seconds; frontier every "
+        f"{int(frontier_synchronizer.interval_seconds)} seconds"
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -18653,8 +19084,7 @@ def main() -> None:
     finally:
         if synchronizer:
             synchronizer.stop()
-        if news_synchronizer:
-            news_synchronizer.stop()
+        refresh_coordinator.stop()
         server.server_close()
 
 

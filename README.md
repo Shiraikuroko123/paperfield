@@ -122,6 +122,8 @@ python -m pip install -r deploy\requirements.txt
 
 只需打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)。首次运行会初始化本地数据库和缓存，之后可以在页面中手动刷新，或由后台按设定周期更新。再次执行 `run-platform.cmd` 会复用已健康的服务，不会启动重复进程；停止整个平台使用 `stop-platform.cmd`。`.cmd` 包装器负责设置 `ExecutionPolicy Bypass`，无需修改系统级 PowerShell 执行策略。
 
+Atlas 的“前沿雷达”和“新闻”页顶部都可打开同一个“刷新设置”控制中心。新闻默认每 5 分钟刷新，前沿雷达默认每 6 小时刷新；可分别启停、修改周期、查看上次/下次运行时间，或立即刷新全部。自动链路只使用 RSS/Atom、arXiv、条件请求、时间窗、去重和确定性排序，不调用 AI，也不消耗模型额度。
+
 常用命令：
 
 ```powershell
